@@ -309,6 +309,7 @@ uninvited beside your search results is a way to clear your history by accident.
 | `/settings` | types `settings:` for you |
 | `/config` | open `~/.config/omarchy/oxy.json` in your editor |
 | `/stats` | extensions loaded, answers cached, `when` checks and how many pass |
+| `/logs` | open the event log in your editor |
 
 An extension file may also carry an `actions` block, and those join this list:
 each is namespaced by the extension's id, so two extensions can both offer
@@ -497,6 +498,33 @@ keystroke. `/config` opens it.
 | `maxRows` | `9` | rows shown, and what PageUp/PageDown jump by |
 | `cardWidth` | `620` | the card, in unscaled pixels |
 | `resetOnOpen` | `true` | `false` reopens on your last query |
+| `log` | `true` | one JSON event per line in `~/.local/state/omarchy/oxy-log.jsonl`, rotated at 1MB. `false` stops writing |
+
+## The event log
+
+Every keystroke, provider answer, timeout, stale drop and launch lands as one
+JSON line in `~/.local/state/omarchy/oxy-log.jsonl`. `/logs` opens it.
+
+The format is built to be analyzed, not just read: every event carries `ts`
+(epoch ms), `sid` (one shell session), `ev` (what happened) and, where a query
+is involved, `ep` — the query epoch that ties a `prov.start` to its
+`prov.done`, `prov.timeout`, or `drop`. Hand the file to an agent and ask what
+misbehaved; it can tell a slow extension (`prov.done` with a big `ms`) from a
+dead one (`prov.timeout`, `prov.fail`), a daemon writing garbage (`sock.bad`)
+from a daemon that is not there (`prov.start` `via:sock` followed by a
+fallback), and an empty answer that was real from one that was a timeout hidden
+behind stale rows (`prov.stale`).
+
+```json
+{"ts":1758631234551,"sid":"mf2xk9","ev":"query","ep":41,"q":"file:report","s":"file"}
+{"ts":1758631234589,"sid":"mf2xk9","ev":"prov.start","ep":41,"via":"proc","cmd":"oxy-search-files 'report'","id":"files"}
+{"ts":1758631234702,"sid":"mf2xk9","ev":"prov.done","ep":41,"via":"proc","rows":8,"ms":113,"id":"files"}
+```
+
+It costs almost nothing: lines are buffered and appended once per 400ms tick,
+and the file can never grow past 2MB including its `.old` rotation. It records
+what you typed — that is the point of it — and it never leaves the machine.
+Set `"log": false` in `oxy.json` to turn it off.
 
 A quicklink is found two ways, because people reach for both: type part of its
 title or tag and it appears among everything else, or type its keyword and the

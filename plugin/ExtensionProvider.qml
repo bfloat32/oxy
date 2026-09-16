@@ -62,7 +62,20 @@ Item {
   // key failed rather than answered, so the stale rows stay.
   property string staleShownKey: ""
 
+  // When the current run began, so its answer carries a duration into the log.
+  property double inflightStart: 0
+  property double availStart: 0
+
   readonly property string id: ext ? ext.id : ""
+
+  // Every provider event carries its extension id, so the launcher-side helper
+  // never has to remember it.
+  function plog(ev, fields) {
+    if (!prov.launcher) return
+    var f = fields || {}
+    f.id = prov.id
+    prov.launcher.log(ev, f)
+  }
 
   function claims(query) {
     if (!ext) return false
@@ -95,6 +108,7 @@ Item {
         prov.recheckQuery = q
         availability.command = prov.launcher ? prov.launcher.shellArgv(ext.when)
           : ["bash", "-lc", ext.when]
+        prov.availStart = Date.now()
         availability.running = true
       }
       return emit(q, [])
@@ -132,6 +146,7 @@ Item {
       prov.liveCommand = command
       prov.liveEpoch = q.epoch
       emit(q, prov.build(hit))
+      plog("prov.done", { ep: q.epoch, via: "cache", ms: 0, rows: hit.length })
       prov.armRefresh()
       return
     }
@@ -144,7 +159,10 @@ Item {
     // Which key's stale rows are on screen, so a failed run can tell an empty
     // answer that replaces them from an empty answer that replaces nothing.
     prov.staleShownKey = stale ? key : ""
-    if (stale) emit(q, prov.build(stale))
+    if (stale) {
+      emit(q, prov.build(stale))
+      plog("prov.done", { ep: q.epoch, via: "stale", ms: 0, rows: stale.length })
+    }
 
     // Start connecting now rather than when the debounce fires, so the socket
     // is usually up by the time there is something to send down it.
@@ -187,6 +205,11 @@ Item {
     prov.refreshing = false
     prov.inflightCommand = prov.pendingCommand
     prov.inflightKey = prov.pendingKey
+    prov.inflightStart = Date.now()
+    plog("prov.start", { ep: prov.inflightEpoch,
+      via: ext.socket !== "" && pipe.connected ? "sock" : "proc",
+      cmd: prov.launcher ? prov.launcher.clip(prov.inflightCommand, 240)
+        : prov.inflightCommand.slice(0, 240) })
 
     // Taken now, because a keystroke that arrives between the query and this
     // call has already overwritten them, and a socket extension would have been
@@ -261,7 +284,11 @@ Item {
     // a skeleton forever, while the same query pasted in one go was fine.
     prov.launcher.markWaiting(prov.id, false)
 
-    if (prov.inflightEpoch !== prov.launcher.epoch) return
+    if (prov.inflightEpoch !== prov.launcher.epoch) {
+      plog("prov.drop", { at: "finish", ep: prov.inflightEpoch,
+        ms: Date.now() - prov.inflightStart })
+      return
+    }
 
     var parsed = Extensions.parseRows(text)
 
@@ -274,9 +301,13 @@ Item {
     if (parsed.length === 0
         && (wasRefresh
             || (prov.staleShownKey !== "" && prov.staleShownKey === prov.inflightKey))) {
+      plog("prov.stale", { ep: prov.inflightEpoch, refresh: wasRefresh,
+        ms: Date.now() - prov.inflightStart })
       return prov.armRefresh()
     }
 
+    plog("prov.done", { ep: prov.inflightEpoch, via: "proc", refresh: wasRefresh,
+      rows: parsed.length, ms: Date.now() - prov.inflightStart })
     prov.deliver(parsed)
   }
 
@@ -355,21 +386,32 @@ Item {
       payload = JSON.parse(text)
     } catch (e) {
       // A daemon that writes garbage should not take the launcher down with it.
+      plog("sock.bad", { head: prov.launcher ? prov.launcher.clip(text, 120) : text.slice(0, 120) })
       return
     }
     if (!payload || typeof payload !== "object") return
     if (!Array.isArray(payload.rows)) return
 
     var epoch = Number(payload.epoch)
-    if (!isFinite(epoch) || epoch !== prov.launcher.epoch) return
+    if (!isFinite(epoch) || epoch !== prov.launcher.epoch) {
+      plog("prov.drop", { at: "push", got: isFinite(epoch) ? epoch : -1,
+        ep: prov.launcher.epoch })
+      return
+    }
 
     killer.stop()
 
     var wasRefresh = prov.refreshing
     prov.refreshing = false
-    if (wasRefresh && payload.rows.length === 0) return prov.armRefresh()
+    if (wasRefresh && payload.rows.length === 0) {
+      plog("prov.stale", { ep: epoch, refresh: true, via: "sock",
+        ms: Date.now() - prov.inflightStart })
+      return prov.armRefresh()
+    }
 
     prov.inflightEpoch = epoch
+    plog("prov.done", { ep: epoch, via: "sock", refresh: wasRefresh,
+      rows: payload.rows.length, ms: Date.now() - prov.inflightStart })
     prov.deliver(payload.rows)
   }
 
@@ -396,6 +438,7 @@ Item {
 
     availability.command = prov.launcher ? prov.launcher.shellArgv(ext.when)
       : ["bash", "-lc", ext.when]
+    prov.availStart = Date.now()
     availability.running = true
   }
 
@@ -414,6 +457,8 @@ Item {
       prov.available = code === 0
       prov.checked = true
       Availability.put(ext ? ext.when : "", prov.available, Date.now())
+      plog("avail", { ok: prov.available, recheck: prov.recheckQuery !== null,
+        ms: Date.now() - prov.availStart })
 
       var replay = prov.recheckQuery
       prov.recheckQuery = null
@@ -444,6 +489,8 @@ Item {
   Timer {
     id: killer
     onTriggered: {
+      plog("prov.timeout", { ep: prov.inflightEpoch, ms: ext ? ext.timeoutMs : 0,
+        via: process.running ? "proc" : "sock", refresh: prov.refreshing })
       if (process.running) {
         process.running = false
         // finish() still runs, off the collector, and reads `refreshing` there
@@ -506,7 +553,14 @@ Item {
     }
     // onExited and onStreamFinished have no guaranteed order, so the payload is
     // read above and this only ever restarts.
-    onExited: if (prov.pendingEpoch >= 0) Qt.callLater(prov.start)
+    onExited: function (code) {
+      // A nonzero exit whose answer arrives anyway is not a failure worth a
+      // line — scripts that warn on stderr exit fine. One that exits badly AND
+      // says nothing is the case that used to pass for "no results".
+      if (code !== 0) plog("prov.fail", { ep: prov.inflightEpoch, code: code,
+        ms: Date.now() - prov.inflightStart })
+      if (prov.pendingEpoch >= 0) Qt.callLater(prov.start)
+    }
   }
 
   // A long-running program answers over a unix socket instead of being started

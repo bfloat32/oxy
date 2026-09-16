@@ -483,3 +483,13 @@ against the stub it writes: a bare keyword answers with its hint row, a typed
 word comes back as the title of exactly one row, and that row has an `exec` so
 Enter does something. They are there to be edited, not admired. As you replace
 the body of the script, replace them with what your extension promises instead.
+
+## Seeing what yours did
+
+The launcher writes one JSON event per line to
+`~/.local/state/omarchy/oxy-log.jsonl`. Your extension's runs appear there as
+`prov.start` / `prov.done` with its id, the epoch it answered for, the row
+count and the milliseconds it took — plus `prov.timeout`, `prov.fail`,
+`prov.drop` and `prov.stale` for the ways it can go wrong without telling you.
+A malformed file lands as `ext.bad` with the path. `/logs` in the launcher
+opens the file. Set `"log": false` in `oxy.json` to turn the whole thing off.

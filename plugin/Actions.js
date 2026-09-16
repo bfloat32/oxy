@@ -46,6 +46,11 @@ var ACTIONS = [
     effect: "stats",
     confirm: "" },
 
+  { id: "logs", title: "Open Event Log", subtitle: "Launcher", glyph: "",
+    keywords: ["log", "logs", "events", "diagnostics", "debug", "trace"],
+    exec: "omarchy-launch-editor ~/.local/state/omarchy/oxy-log.jsonl",
+    confirm: "" },
+
   { id: "config", title: "Edit oxy.json", subtitle: "Launcher", glyph: "",
     keywords: ["config", "json", "edit", "file"],
     exec: "omarchy-launch-editor ~/.config/omarchy/oxy.json",

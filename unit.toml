@@ -28,4 +28,5 @@ touches = [
   "keeps:file:~/.local/state/omarchy/oxy-emoji-recent",
   "keeps:file:~/.local/state/omarchy/oxy-spotify.json",
   "keeps:file:~/.local/state/omarchy/oxy-repo",
+  "keeps:file:~/.local/state/omarchy/oxy-log.jsonl",
 ]

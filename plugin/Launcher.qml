@@ -37,6 +37,7 @@ Item {
   property var manifest: null
 
   property bool opened: false
+  property double openedAt: 0
   property string queryText: ""
   property int selectedIndex: 0
   property bool cursorMoved: false
@@ -188,10 +189,25 @@ Item {
           if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(parts[i])) out.push(parts[i])
         }
         if (out.length > 0) root.loginEnv = out
+        root.log("env", { vars: out.length, ms: Date.now() - root.envT0 })
       }
     }
-    Component.onCompleted: running = true
+    Component.onCompleted: {
+      root.envT0 = Date.now()
+      running = true
+    }
   }
+  property double envT0: 0
+
+  // The diagnostic stream, off only if the config says so. See Logger.qml for
+  // what one line looks like and why it is built the way it is.
+  Logger {
+    id: logger
+    enabled: root.config.log !== false
+  }
+
+  function log(ev, fields) { logger.log(ev, fields) }
+  function clip(value, max) { return logger.clip(value, max) }
 
   // `?` on its own is help. `?dogs` stays a web search, because the sigil is
   // worth more as the shorthand people already use than as a help key, and a
@@ -465,7 +481,9 @@ Item {
     pinScreen()
     scanExtensions()
     readClipboard()
+    root.openedAt = Date.now()
     root.opened = true
+    root.log("open", { q: root.clip(wanted, 120), ep: root.epoch })
     if (wanted !== "") root.queryText = wanted
     else if (root.config.resetOnOpen !== false) root.queryText = ""
     root.pendingActivate = ""
@@ -486,6 +504,10 @@ Item {
   }
 
   function close() {
+    if (root.opened) {
+      root.log("close", { ms: Date.now() - root.openedAt, ep: root.epoch })
+      logger.flush()
+    }
     root.opened = false
     calc.cancel()
     // Both of these outlived the window. `followUpTimer` repeats four times at
@@ -597,6 +619,7 @@ Item {
 
     root.queryText = text
     var query = Query.parse(text, ++root.epoch, root.knownKeywords)
+    root.log("query", { ep: query.epoch, q: root.clip(text, 240), s: query.scope })
 
     // Copied rather than mutated: a provider that answers on the spot writes
     // into this one, and `busy` only notices `waiting` when the object it holds
@@ -639,7 +662,11 @@ Item {
   // Every result carries the epoch it was asked for. A slow extension finishing
   // two keystrokes late is dropped here, which is the whole staleness story.
   function putRaw(providerId, epoch, producedRows) {
-    if (epoch !== root.epoch) return
+    if (epoch !== root.epoch) {
+      root.log("drop", { id: providerId, got: epoch, ep: root.epoch,
+        rows: producedRows ? producedRows.length : 0 })
+      return
+    }
     var next = root.buckets
     next[providerId] = { epoch: epoch, rows: producedRows }
     root.buckets = next
@@ -682,6 +709,7 @@ Item {
   }
 
   function rebuild() {
+    var t0 = Date.now()
     var query = Query.parse(root.queryText, root.epoch, root.knownKeywords)
     var merged = Rank.merge(root.buckets, query.scope, 60)
     if (root.config.frecency !== false && root.frecencyLoaded) {
@@ -711,6 +739,7 @@ Item {
         var target = root.pendingActivate
         root.pendingActivate = ""
         activate(root.rows[index])
+        root.log("rebuild", { ep: root.epoch, ms: Date.now() - t0, rows: merged.length })
         return
       }
     }
@@ -718,6 +747,8 @@ Item {
     // An Enter that arrived while the list was still catching up. Fired once
     // nothing is still being asked, against the row that is there now rather
     // than the one that was there then.
+
+    root.log("rebuild", { ep: root.epoch, ms: Date.now() - t0, rows: merged.length })
   }
 
   function resetSelection() {
@@ -1161,6 +1192,7 @@ Item {
       return root.setInput("/" + action.id + " ")
     }
     root.pendingAction = null
+    root.log("action", { id: String(action.id || ""), ep: root.epoch })
 
     switch (action.effect) {
     case "clear.recents":
@@ -1572,6 +1604,8 @@ Item {
     root.commitPreview()
     root.remember(row)
     root.rememberQuery(root.queryText)
+    root.log("act", { ep: root.epoch, id: root.clip(row.id, 120),
+      src: String(row.providerId || ""), t: root.clip(row.title, 120) })
 
     // A row that changes the launcher rather than leaving it stays open, and
     // runs before anything closes: clearing your history and having the window
@@ -2012,19 +2046,33 @@ Item {
   // that could only ever error.
   function loadExtensions() {
     if (extensionLoader.running) return
+    root.extLoadT0 = Date.now()
+    // A file jq cannot read emits a sentinel instead of nothing: a malformed
+    // extension failing silently is the one bug a user cannot see, so the bad
+    // file's name lands in the log rather than vanishing with jq's stderr.
     extensionLoader.command = root.shellArgv(
       "shopt -s nullglob; for f in " + Util.shellQuote(root.extensionsDir) + "/*.json; do " +
       "[[ $f == *.cases.json ]] && continue; " +
-      "jq -c --arg src \"$f\" '. + {__source: $src}' \"$f\" 2>/dev/null; done")
+      "jq -c --arg src \"$f\" '. + {__source: $src}' \"$f\" 2>/dev/null || " +
+      "printf '{\"__bad\":true,\"__source\":\"%s\"}\\n' \"$f\"; done")
     extensionLoader.running = true
   }
+  property double extLoadT0: 0
 
   function applyExtensions(text) {
     var parsed = Extensions.parseRows(text)
     var loaded = []
     for (var i = 0; i < parsed.length; i++) {
-      var ext = Extensions.normalize(parsed[i], parsed[i].__source)
-      if (!ext) continue
+      var raw = parsed[i]
+      if (raw && raw.__bad === true) {
+        root.log("ext.bad", { f: String(raw.__source || ""), why: "json" })
+        continue
+      }
+      var ext = Extensions.normalize(raw, raw.__source)
+      if (!ext) {
+        root.log("ext.bad", { f: String(raw.__source || ""), why: "normalize" })
+        continue
+      }
       if (!Settings.extensionEnabled(root.config, ext.id)) continue
 
       // Read off the raw object rather than out of normalize. Both of these
@@ -2046,6 +2094,7 @@ Item {
       loaded.push(ext)
     }
     root.extensions = loaded
+    root.log("ext.load", { n: loaded.length, ms: Date.now() - root.extLoadT0 })
 
     // The list of keywords is only as good as what has loaded. Extensions
     // arrive after the first paint, so a `?` already on screen has to redraw.
@@ -2163,7 +2212,10 @@ Item {
     }
   }
 
-  Component.onCompleted: root.scanExtensions()
+  Component.onCompleted: {
+    root.log("sess", { v: String(root.manifest && root.manifest.version || "?") })
+    root.scanExtensions()
+  }
 
   // ------------------------------------------------------------ window
 

@@ -96,7 +96,17 @@ var DEFAULTS = {
 
   // Clear the box between summons. Off means a re-summon reopens on the last
   // query, which suits a workflow of refining one search over several visits.
-  resetOnOpen: true
+  resetOnOpen: true,
+
+  // One JSON event per line in ~/.local/state/omarchy/oxy-log.jsonl: what was
+  // typed, which provider answered, how long it took, what was dropped as
+  // stale, what timed out, what was launched. Rotated into a single .old at
+  // 1MB, so it never holds more than a couple of sessions of history.
+  //
+  // It exists to be read later: hand the file to anything that can reason over
+  // JSONL and ask what went wrong. `false` stops writing; the file already
+  // there is left alone.
+  log: true
 }
 
 function merge(text) {

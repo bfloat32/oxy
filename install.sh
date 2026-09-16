@@ -224,6 +224,27 @@ if ((UNINSTALL)); then
     -type l \( -lname "$INSTALL_DIR/*" -o -lname "$SELF_DIR/*" \) 2>/dev/null)
   ((stray > 0)) && ok "$stray stale links removed"
 
+  # A link that landed where a real file already was moved that file aside as
+  # `name.before-oxy`. The link is gone now; the file it displaced comes back,
+  # so an uninstall leaves the machine as it was rather than as
+  # install-then-uninstall left it. Only when nothing else has taken the
+  # place since — a real file or link the user made there wins, and its backup
+  # stays beside it for recovery by hand.
+  #
+  # The timestamped `.before-oxy.<ts>` snapshots are deliberately not restored:
+  # those are pre-edit copies of files oxy still owns at this point (shell.json
+  # among them), and putting one back would re-register a plugin whose files
+  # this uninstall just removed. They stay listed below for inspection.
+  restored=0
+  while IFS= read -r backup; do
+    base="${backup%.before-oxy}"
+    if [[ ! -e $base && ! -L $base ]]; then
+      mv "$backup" "$base" 2>/dev/null && ((++restored))
+    fi
+  done < <(find "$PLUGINS_DIR" "$BIN_DIR" "$HYPR_MODULES" "$CONFIG_HOME/omarchy" \
+    -name '*.before-oxy' -type f ! -name '*.before-oxy.*' 2>/dev/null)
+  ((restored > 0)) && ok "$restored backed-up file(s) restored"
+
   # Deliberately not `omarchy plugin disable`: that deletes the layout entry,
   # taking its position and settings with it, so a later install would not come
   # back where it was. The stale entry renders nothing while the files are
@@ -430,11 +451,15 @@ install_body() {
   # ------------------------------------------------------------ dependencies
 
   step "Dependencies"
-  # What the core extensions cannot answer without. busctl comes with systemd
-  # and the rest of the 'needs' list is already on any Omarchy install.
+  # What the core extensions cannot answer without. `busctl` is in unit.toml's
+  # needs and `cal` backs the calendar keyword, so both are checked here
+  # rather than trusted to be present: on any real Omarchy install they are,
+  # and on a stripped-down box the keyword that breaks gets named at install
+  # time instead of discovered at use time.
   declare -A PKG_FOR=(
     [qalc]=libqalculate [jq]=jq [curl]=curl [fd]=fd
     [mpv]=mpv [python3]=python [git]=git [wl-copy]=wl-clipboard
+    [busctl]=systemd [cal]=util-linux
   )
   missing_cmds=() missing_pkgs=()
   for cmd in "${!PKG_FOR[@]}"; do

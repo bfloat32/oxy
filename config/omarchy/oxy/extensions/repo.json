@@ -10,6 +10,7 @@
   "subtitle": "Local Repo",
   "glyph": "\uf1d3",
   "search": "oxy-repo {query} {branch}",
+  "filters": ["branch"],
   "when": "command -v git >/dev/null && command -v fd >/dev/null",
   "minChars": 0,
   "debounceMs": 60,

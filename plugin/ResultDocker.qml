@@ -86,6 +86,12 @@ Item {
     return Math.max(1, Math.min(wanted, Math.floor((room + view.gutter) / (view.tileHeight + view.gutter))))
   }
 
+  // The cursor stops where the grid does: tiles beyond this count are neither
+  // drawn nor scrolled to, so a selection past it would describe a tile that
+  // is not on screen.
+  readonly property int selectableCount: Math.min(
+    view.launcher.rows.length, view.tileRows * view.columns)
+
   implicitHeight: view.launcher.rows.length === 0
     ? 0
     : view.statHeight + view.gutter

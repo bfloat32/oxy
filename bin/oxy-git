@@ -39,7 +39,7 @@ command -v git >/dev/null 2>&1 || exit 0
 # `git:o` cost 227ms on every keystroke. `--resolve` is the same matching with
 # no git calls at all, and it is shared with `branch:` and `stash:` so all three
 # read a query the same way.
-IFS=$'\t' read -r repo needle < <(oxy-repo --resolve "$query" 2>/dev/null)
+IFS=$'\x1f' read -r repo needle < <(oxy-repo --resolve "$query" 2>/dev/null)
 [[ -n ${repo:-} && -e $repo/.git ]] || exit 0
 needle="${needle,,}"
 

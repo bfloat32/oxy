@@ -146,6 +146,17 @@ while IFS= read -r line; do
   quoted=$(printf '%q' "$ssid")
   if [[ -z $security ]]; then lock="Open"; else lock="$security"; fi
 
+  # The network's name is attacker-controlled text: it is a string a nearby
+  # access point chooses, and it goes into commands the row will run through a
+  # shell. `quoted` is not enough — it protects the nmcli argument, while the
+  # notification text below interpolates the raw SSID into a double-quoted
+  # command, so an SSID like `Cafe"; touch /tmp/pwned; #` closed the quote and
+  # ran its own syntax. Every appearance in a generated command goes through
+  # `printf %q`, which makes the whole sentence one safely-parsed word.
+  note_off=$(printf '%q' "Disconnected from $ssid")
+  note_on=$(printf '%q' "Connected to $ssid")
+  note_bad=$(printf '%q' "Could not connect to $ssid")
+
   # 2.4 is one crowded band and 5 and 6 are two quiet ones, which is the whole
   # reason two access points with the same name behave differently. The number
   # of megahertz is not the point, so it never reaches the screen.
@@ -176,7 +187,7 @@ while IFS= read -r line; do
 
   if [[ $in_use == "*" ]]; then
     down="out=\$(nmcli connection down id $quoted 2>&1)"
-    down+=" && omarchy-notification-send \"Disconnected from $ssid\""
+    down+=" && omarchy-notification-send $note_off"
     down+=" || omarchy-notification-send -u normal \"Disconnect failed\" \"\$out\""
     emit "$ssid" "$ssid" "Connected" "$lock" "${signal}%" "Disconnect" "$down" \
       "$(jq -cn --arg pw "$copy_password" --arg panel "$panel" '[
@@ -189,8 +200,8 @@ while IFS= read -r line; do
 
   elif [[ -n ${saved[$ssid]:-} ]]; then
     up="out=\$(nmcli connection up id $quoted 2>&1)"
-    up+=" && omarchy-notification-send \"Connected to $ssid\""
-    up+=" || omarchy-notification-send -u normal \"Could not connect to $ssid\" \"\$out\""
+    up+=" && omarchy-notification-send $note_on"
+    up+=" || omarchy-notification-send -u normal $note_bad \"\$out\""
     emit "$ssid" "$ssid" "Saved" "$lock" "${signal}%" "Connect" "$up" \
       "$(jq -cn --arg q "$quoted" --arg panel "$panel" '[
            { title: "Forget Network", exec: ("nmcli connection delete id " + $q) },
@@ -201,8 +212,8 @@ while IFS= read -r line; do
   elif [[ $lock == "Open" ]]; then
     # Nothing to prompt for, so this one connects from the row.
     join="out=\$(nmcli device wifi connect $quoted 2>&1)"
-    join+=" && omarchy-notification-send \"Connected to $ssid\""
-    join+=" || omarchy-notification-send -u normal \"Could not connect to $ssid\" \"\$out\""
+    join+=" && omarchy-notification-send $note_on"
+    join+=" || omarchy-notification-send -u normal $note_bad \"\$out\""
     emit "$ssid" "$ssid" "Open network" "$lock" "${signal}%" "Connect" "$join" \
       "$(jq -cn --arg panel "$panel" '[
            { title: "Open Network Panel", exec: $panel }

@@ -33,6 +33,21 @@ def band(hour):
     return EVENING
 
 
+def delta_text(offset):
+    """'5h30 ahead', '9h30 behind', 'same time' — the difference as it is.
+
+    Floor division ate the halves before: `int(total_seconds() // 3600)`
+    turned India's +5:30 into '5h ahead' and rounded a negative half-hour a
+    full hour past itself, so -9:30 read '10h behind'. Minutes are part of
+    the answer for a third of the world's population."""
+    total = int(offset.total_seconds())
+    if total == 0:
+        return "same time"
+    hours, minutes = divmod(abs(total) // 60, 60)
+    tail = f"{minutes:02d}" if minutes else ""
+    return f"{hours}h{tail} {'ahead' if total > 0 else 'behind'}"
+
+
 def main():
     names = [n for n in os.environ.get("OXY_NAMES", "").split("\n") if n]
     zones = [z for z in os.environ.get("OXY_ZONES", "").split("\n") if z]
@@ -74,14 +89,19 @@ def main():
                 "day": there.strftime("%a") if there.date() != moment.date() else "",
             })
 
-        offset = there.utcoffset() - datetime.now(home_tz).utcoffset()
-        hours = int(offset.total_seconds() // 3600)
+        # The offset as it is now, not as it is at the end of the window: the
+        # old code read `there` after the loop, which was 23 hours from now —
+        # wrong across a DST transition inside the window, and wrong for the
+        # label in its own right. Each cell above carries its own clock, so a
+        # transition inside the window is already drawn where it lands.
+        there_now = now.astimezone(tz)
+        offset = there_now.utcoffset() - datetime.now(home_tz).utcoffset()
+
         people.append({
             "name": who,
             "zone": zone,
             "city": zone.split("/")[-1].replace("_", " "),
-            "delta": "same time" if hours == 0
-                     else f"{abs(hours)}h {'ahead' if hours > 0 else 'behind'}",
+            "delta": delta_text(offset),
             "cells": cells,
         })
 

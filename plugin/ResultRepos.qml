@@ -66,6 +66,10 @@ Column {
   readonly property int shownRows: Math.min(view.wantedRows,
     Math.min(view.launcher.maxRows, view.roomForRows))
 
+  // The cursor stops here: the view draws no further than this and does not
+  // scroll, so a selection past it would describe a row nobody can see.
+  readonly property int selectableCount: view.shownRows
+
   // No implicitHeight binding here on purpose. A Column writes its own
   // implicitHeight from C++, which silently overwrites a QML binding on the
   // same property, and the height then stops tracking the row count. The row

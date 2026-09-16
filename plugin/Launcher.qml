@@ -429,6 +429,12 @@ Item {
   onRowsChanged: {
     root.measureChips()
     root.dropPreviewIfGone()
+    // Rows arriving with the selection already where it was — the first
+    // theme landing on index 0 — change nothing about selectedIndex, so the
+    // preview hook below never fired and the first theme drew unpreviewed
+    // until the cursor moved away and back. Rows landing IS a reason to look
+    // at whatever is selected now.
+    root.previewSelection()
   }
 
   readonly property string activeView: {
@@ -1915,7 +1921,19 @@ Item {
   function move(delta) {
     if (root.rows.length === 0) return
     root.cursorMoved = true
-    root.selectedIndex = Math.max(0, Math.min(root.rows.length - 1, root.selectedIndex + delta))
+    // Some views draw fewer rows than they are handed — `repos` fits what the
+    // card has room for, `docker` a grid of tiles — without scrolling to the
+    // rest. Selection must stop where the drawing does, or Down walks the
+    // cursor onto a row the card is not showing while the footer describes it.
+    // Views that scroll or draw everything expose no limit and are bounded by
+    // the rows themselves.
+    var limit = root.rows.length - 1
+    if (resultsArea.item
+        && resultsArea.item.selectableCount !== undefined
+        && resultsArea.item.selectableCount >= 0) {
+      limit = Math.min(limit, resultsArea.item.selectableCount - 1)
+    }
+    root.selectedIndex = Math.max(0, Math.min(limit, root.selectedIndex + delta))
     root.selectedKey = root.rows[root.selectedIndex].key
   }
 

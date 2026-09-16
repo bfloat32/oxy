@@ -77,6 +77,15 @@ Item {
     prov.launcher.log(ev, f)
   }
 
+  // A `when` that hangs — a probe waiting on the network, a command that
+  // reads stdin — would hold the extension in "checking" for the life of the
+  // shell. `timeout` turns a wedged probe into a plain "not available" after
+  // eight seconds, which is the honest reading of a check that cannot finish.
+  function whenArgv(check) {
+    return ["timeout", "8s"].concat(
+      prov.launcher ? prov.launcher.shellArgv(check) : ["bash", "-lc", check])
+  }
+
   function claims(query) {
     if (!ext) return false
     return Query.routesTo(query, ext.keyword, ext.aliases)
@@ -106,8 +115,7 @@ Item {
       if (ext.when !== "" && claims(q) && !availability.running
           && Availability.get(ext.when, Date.now()) === null) {
         prov.recheckQuery = q
-        availability.command = prov.launcher ? prov.launcher.shellArgv(ext.when)
-          : ["bash", "-lc", ext.when]
+        availability.command = prov.whenArgv(ext.when)
         prov.availStart = Date.now()
         availability.running = true
       }
@@ -190,6 +198,16 @@ Item {
     if (process.running) process.running = false
   }
 
+  // Set while a process run's stdout has not been fully delivered, and the
+  // deferred restart a killed run leaves behind. The exit and the stream
+  // finish have no guaranteed order; starting the next query before the old
+  // stream's text arrived let that text be delivered under the NEW query's
+  // epoch — a stale answer wearing the current question's name, and a busy
+  // indicator that vanished while the new run was still going. Restarting only
+  // after the collector has spoken closes the window in both orderings.
+  property bool streamDone: true
+  property bool restartAfterStream: false
+
   function emit(q, rows) {
     if (!prov.launcher) return
     prov.launcher.put(prov.id, q, rows)
@@ -247,6 +265,10 @@ Item {
     process.command = prov.launcher ? prov.launcher.shellArgv(prov.inflightCommand)
       : ["bash", "-lc", prov.inflightCommand]
     process.running = true
+    // This run's stdout has not been delivered yet — the collector turns the
+    // flag back on. Every launch path goes through here (start, the refresher),
+    // so the flag is never stale about which stream is still owed.
+    prov.streamDone = false
     killer.interval = ext.timeoutMs
     killer.restart()
     return true
@@ -282,7 +304,18 @@ Item {
     // path that keeps the answer meant a run whose epoch had moved on left the
     // flag raised for good: `stash:flows` typed one character at a time sat on
     // a skeleton forever, while the same query pasted in one go was fine.
-    prov.launcher.markWaiting(prov.id, false)
+    //
+    // But a newer query may already be pending its turn: this finish belongs
+    // to the run it came from, and clearing the flag now would drop the
+    // spinner while that pending query has not even started yet.
+    if (prov.pendingEpoch < 0) prov.launcher.markWaiting(prov.id, false)
+
+    // Whatever else happened, the restart a killed run deferred to this
+    // moment is owed now that the stream has spoken.
+    if (prov.restartAfterStream) {
+      prov.restartAfterStream = false
+      if (prov.pendingEpoch >= 0) Qt.callLater(prov.start)
+    }
 
     if (prov.inflightEpoch !== prov.launcher.epoch) {
       plog("prov.drop", { at: "finish", ep: prov.inflightEpoch,
@@ -436,8 +469,7 @@ Item {
       return
     }
 
-    availability.command = prov.launcher ? prov.launcher.shellArgv(ext.when)
-      : ["bash", "-lc", ext.when]
+    availability.command = prov.whenArgv(ext.when)
     prov.availStart = Date.now()
     availability.running = true
   }
@@ -549,7 +581,13 @@ Item {
     id: process
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: prov.finish(text)
+      // The flag first, then the payload: finish() may schedule the restart
+      // that was waiting on this moment, and that restart must see a stream
+      // that has already spoken.
+      onStreamFinished: {
+        prov.streamDone = true
+        prov.finish(text)
+      }
     }
     // onExited and onStreamFinished have no guaranteed order, so the payload is
     // read above and this only ever restarts.
@@ -559,7 +597,13 @@ Item {
       // says nothing is the case that used to pass for "no results".
       if (code !== 0) plog("prov.fail", { ep: prov.inflightEpoch, code: code,
         ms: Date.now() - prov.inflightStart })
-      if (prov.pendingEpoch >= 0) Qt.callLater(prov.start)
+      if (prov.pendingEpoch >= 0) {
+        // Only restart once the old stream has delivered. Starting before it
+        // did would overwrite inflightEpoch, and the old text would then pass
+        // the epoch check in finish() as if it answered the new question.
+        if (prov.streamDone) Qt.callLater(prov.start)
+        else prov.restartAfterStream = true
+      }
     }
   }
 

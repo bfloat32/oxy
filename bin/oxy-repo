@@ -10,7 +10,7 @@
 #   oxy-repo --paths     every discovered repo path, one per line
 #   oxy-repo --current   the one repo `git:` and `pr:` should answer for
 #   oxy-repo --slug [p]  owner/name for that repo, for handing to `gh`
-#   oxy-repo --resolve q  "which repo, and what is left over", as path TAB text
+#   oxy-repo --resolve q  "which repo, and what is left over", as path, unit-separator, then text
 #
 # Cost is the whole design here. Discovery walks the project roots once with fd
 # and is cached, because a keystroke must not pay for a filesystem walk. Name
@@ -61,11 +61,34 @@ collect_roots() {
 discover() {
   # --hidden because .git is hidden, --max-depth because a monorepo full of
   # vendored checkouts is not a list of your projects.
-  fd --hidden --type d --max-depth 6 --absolute-path \
+  local d gd out=()
+  # The trailing slash is stripped first: fd emits `.git/` with one on some
+  # platforms, and `${d%/.git}` cannot peel a slash-terminated name.
+  while IFS= read -r d; do
+    d="${d%/}"
+    out+=("${d%/.git}")
+  done < <(fd --hidden --type d --max-depth 6 --absolute-path \
     --exclude node_modules --exclude .cache --exclude vendor \
     --exclude target --exclude .venv \
-    '^\.git$' "${roots[@]}" 2>/dev/null |
-    sed 's:/\.git/\?$::'
+    '^\.git$' "${roots[@]}" 2>/dev/null)
+
+  # A worktree or submodule has a `.git` *file* pointing at the real git dir,
+  # and the search above never saw it: `git worktree add` somewhere under a
+  # discovered root produced a perfectly valid repository that `repo:` could
+  # not list. The file only counts when the gitdir it names still exists —
+  # a stale `.git` left behind by a deleted worktree is not a repo.
+  while IFS= read -r d; do
+    gd=$(sed -n 's/^gitdir: //p' "$d" 2>/dev/null)
+    [[ -n $gd ]] || continue
+    git_abs "$gd" || gd="${d%/.git}/$gd"
+    [[ -d $gd ]] && out+=("${d%/.git}")
+  done < <(fd --hidden --type f --max-depth 6 --absolute-path \
+    --exclude node_modules --exclude .cache --exclude vendor \
+    --exclude target --exclude .venv \
+    '^\.git$' "${roots[@]}" 2>/dev/null)
+
+  ((${#out[@]})) || return 0
+  printf '%s\n' "${out[@]}" | sort -u
 }
 
 repos=()
@@ -106,12 +129,18 @@ load_repos() {
 
 # The real git directory, which is a file rather than a directory inside a
 # worktree or a submodule.
+# A gitdir path is absolute when it starts with / or a drive letter (git on
+# Windows writes `C:/...`), relative otherwise.
+git_abs() {
+  [[ $1 == /* || $1 == [A-Za-z]:/* ]]
+}
+
 git_dir() {
   local repo="$1" line
   if [[ -f $repo/.git ]]; then
     read -r line <"$repo/.git" 2>/dev/null || return 1
     line="${line#gitdir: }"
-    [[ $line == /* ]] || line="$repo/$line"
+    git_abs "$line" || line="$repo/$line"
     printf '%s' "$line"
     return 0
   fi
@@ -253,12 +282,20 @@ if [[ $mode == "--paths" ]]; then
 fi
 
 up_to_repo() {
-  local d="$1"
+  local d="$1" prev=""
+  # A relative path never walks up: `does-not-exist` has no slash for `${d%/*}`
+  # to strip, so the loop below could not make progress and spun forever. Made
+  # absolute first, the walk always terminates — and an answer relative to the
+  # launcher's working directory is no worse than the question that asked for
+  # it.
+  [[ $d == /* || $d == [A-Za-z]:/* ]] || d="$PWD/$d"
   while [[ -n $d && $d != "/" ]]; do
     [[ -e $d/.git ]] && {
       printf '%s' "$d"
       return 0
     }
+    [[ $d == "$prev" ]] && return 1
+    prev="$d"
     d="${d%/*}"
   done
   return 1
@@ -392,7 +429,9 @@ if [[ $mode == "--resolve" ]]; then
 
   [[ -n $target ]] || target=$(current_repo) || exit 0
   [[ -n $target && -e $target/.git ]] || exit 0
-  printf '%s\t%s\n' "$target" "$leftover"
+  # Unit separator, not a tab: a repository directory whose name contains a
+  # tab is rare but valid, and the consumer splits on this exact byte.
+  printf '%s\x1f%s\n' "$target" "$leftover"
   exit 0
 fi
 
@@ -405,6 +444,144 @@ if [[ $mode == "--slug" ]]; then
   web=$(web_url "$remote") || exit 0
   slug=$(name_with_owner "$web") || exit 0
   printf '%s\n' "$slug"
+  exit 0
+fi
+
+# Per-repo state, cached against the index. `git status` and `git log -1` are
+# two forks per row and twelve rows was 250ms on every keystroke, which is why
+# the spinner never stopped. A repo's state cannot change without .git/index or
+# a ref moving, so the cache key is the newest mtime in .git and a hit costs one
+# stat instead of two processes.
+# A cache that outlives a change to how it is keyed will serve a wrong answer
+# forever. This number goes in the path, so bumping it retires every entry that
+# was written under the old scheme rather than hoping each key still means what
+# it used to. An empty answer cached during a broken run is exactly the fault
+# this prevents, and it cost two recordings before anybody looked.
+#
+# 3: `dirty` went from 0-or-1 to a count of changed files. A v2 entry saying
+# "1" would have been read as "one file changed" for as long as that repo's
+# index sat still, which can be months.
+#
+# 4: the line gained a `dirty_ts` field and untracked files began to count.
+# Both for the same reason: the stamp below cannot see the worktree — editing
+# a file or adding one moves nothing under .git — so a cached "clean" outlived
+# the change that made the repo dirty. v3 entries fail the field count read
+# and are recomputed, so nothing is migrated.
+CACHE_FORMAT=4
+
+# How old a cached dirty count may be before a background recompute is
+# spawned for it. The worktree is re-read without anybody waiting on it, so
+# this is the staleness of one frame, not a latency anybody pays for.
+DIRTY_RECHECK=3
+
+# The field separator inside a cache line, and it is not a tab on purpose.
+#
+# Tab is an IFS whitespace character, so `IFS=$'\t' read -r a b c` collapses a
+# run of tabs into one delimiter and loses every empty field. A repo with no
+# upstream writes two empty fields in the middle of its line, and reading that
+# back shifted `dirty` and `committed` off the end: the next run handed an empty
+# string to `jq --argjson` and the repo disappeared from the answer entirely.
+# It only ever happened on the second run, so it read as a caching problem
+# rather than as a separator problem, and a repo with no remote was simply
+# missing from `repo:` for as long as its index sat still.
+#
+# Unit separator is not whitespace and does not collapse. A v3 line written
+# with tabs fails the stamp comparison below and is recomputed, so nothing has
+# to be migrated.
+SEP=$'\x1f'
+
+cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/oxy"
+state_cache="$cache_root/v$CACHE_FORMAT/repo-state"
+mkdir -p "$state_cache" 2>/dev/null
+
+# One file per repo, keyed by a hash of its path. The loop below rewrites an
+# entry on every hit so its mtime says when it was last wanted, which was
+# always the intent; what was missing is anything that reads those mtimes. A
+# repo you deleted last year still had an entry, and every bump of CACHE_FORMAT
+# left the whole previous directory behind.
+#
+# Once per run, before the loop: this walks the directory and the loop does not.
+# 300 is far more repos than anybody has; it is a ceiling, not a working set.
+repo_stamp() {
+  local gitdir="$1" newest=0 f t
+  for f in "$gitdir/index" "$gitdir/HEAD" "$gitdir/refs" "$gitdir/packed-refs"; do
+    [[ -e $f ]] || continue
+    t=$(stat -c %Y "$f" 2>/dev/null) || continue
+    ((t > newest)) && newest=$t
+  done
+  printf '%s' "$newest"
+}
+
+# One place writes a state line, so the synchronous path and the background
+# refresher can never disagree about the format. Atomic (temp then rename)
+# because both writers run against the same entry. Fields, in order: stamp,
+# branch, upstream, ab, dirty, committed, dirty_ts.
+write_state() { # cache_key stamp branch upstream ab dirty committed dirty_ts
+  local tmp
+  tmp=$(mktemp "$1.XXXXXX" 2>/dev/null) || return 0
+  printf '%s\n' "$2$SEP$3$SEP$4$SEP$5$SEP$6$SEP$7$SEP$8" >"$tmp" 2>/dev/null &&
+    mv -f "$tmp" "$1" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  return 0
+}
+
+# Reads a repo's state. Sets branch, upstream, ab, dirty, committed — the same
+# fields the cache line stores, so there is exactly one reading of git's
+# answer and three callers of it (the sync path, the refresh mode, and the
+# mtime touch).
+read_state() { # repo gitdir
+  branch="" upstream="" ab="" dirty=0 committed=""
+  # porcelain v2 with --branch is one call for branch, upstream, ahead/behind
+  # and dirtiness. --no-optional-locks so a launcher reading in the background
+  # never writes to somebody's index.
+  while IFS= read -r line; do
+    case $line in
+    "# branch.head "*) branch="${line#\# branch.head }" ;;
+    "# branch.upstream "*) upstream="${line#\# branch.upstream }" ;;
+    "# branch.ab "*) ab="${line#\# branch.ab }" ;;
+    "#"*) ;;
+    # Counted, not flagged. "Dirty" is one bit and every uncommitted repo looks
+    # the same under it; the number is what tells a stray formatting change
+    # apart from the afternoon of work you walked away from. It costs nothing:
+    # these lines were already being read and thrown away.
+    #
+    # Untracked files count too — `--untracked-files=normal`, so a new
+    # directory reads as one entry rather than a walk of everything inside
+    # it. A repo whose only change is a new file is still dirty, and reading
+    # it as clean was a lie this cache told for as long as the index sat
+    # still.
+    ?*) dirty=$((dirty + 1)) ;;
+    esac
+  done < <(git -C "$1" --no-optional-locks status --porcelain=v2 --branch --untracked-files=normal 2>/dev/null)
+  committed=$(git -C "$1" --no-optional-locks log -1 --format=%ct 2>/dev/null)
+  return 0
+}
+
+# The background half of stale-while-revalidate: re-execute this script for
+# one repo with nobody waiting on the answer. The next keystroke reads the
+# refreshed line; this one is served from cache at full speed.
+refresh_state_async() { # repo
+  local self="$0"
+  [[ $self == /* ]] || self=$(command -v "$self" 2>/dev/null) || return 0
+  command -v setsid >/dev/null 2>&1 || return 0
+  setsid -f "$self" --refresh-state "$1" >/dev/null 2>&1 &
+  return 0
+}
+
+if [[ $mode == "--refresh-state" ]]; then
+  # One repo's state, recomputed with no caller waiting. A stamp that moved
+  # mid-run means the line on disk is already keyed to something newer; the
+  # write below is skipped then, because regressing it would only cost the
+  # next reader a recompute.
+  repo_arg="${2:-}"
+  [[ -n $repo_arg && -d $repo_arg ]] || exit 0
+  gitdir_arg=$(git_dir "$repo_arg") || exit 0
+  key_arg="$state_cache/$(printf '%s' "$repo_arg" | md5sum | cut -c1-16)"
+  stamp_arg=$(repo_stamp "$gitdir_arg")
+  read_state "$repo_arg" "$gitdir_arg"
+  [[ -n $branch ]] || branch=$(head_branch "$gitdir_arg") || branch="?"
+  [[ $branch == "(detached)" ]] && branch="detached"
+  [[ -n ${committed:-} ]] || committed=0
+  write_state "$key_arg" "$stamp_arg" "$branch" "$upstream" "$ab" "$dirty" "$committed" "$(date +%s)"
   exit 0
 fi
 
@@ -449,55 +626,13 @@ for repo in "${repos[@]}"; do
   fi
 
   touched=$(stat -c %Y "$gitdir/logs/HEAD" 2>/dev/null) || touched=0
-  ranked+=("$score	$touched	$repo	$gitdir")
+  # Unit separator for the same reason --resolve uses it: a repo path is data
+  # here, and a tab inside one must not split the line it rides in.
+  ranked+=("$score"$'\x1f'"$touched"$'\x1f'"$repo"$'\x1f'"$gitdir")
 done
 
 ((${#ranked[@]})) || exit 0
 
-# Per-repo state, cached against the index. `git status` and `git log -1` are
-# two forks per row and twelve rows was 250ms on every keystroke, which is why
-# the spinner never stopped. A repo's state cannot change without .git/index or
-# a ref moving, so the cache key is the newest mtime in .git and a hit costs one
-# stat instead of two processes.
-# A cache that outlives a change to how it is keyed will serve a wrong answer
-# forever. This number goes in the path, so bumping it retires every entry that
-# was written under the old scheme rather than hoping each key still means what
-# it used to. An empty answer cached during a broken run is exactly the fault
-# this prevents, and it cost two recordings before anybody looked.
-#
-# 3: `dirty` went from 0-or-1 to a count of changed files. A v2 entry saying
-# "1" would have been read as "one file changed" for as long as that repo's
-# index sat still, which can be months.
-CACHE_FORMAT=3
-
-# The field separator inside a cache line, and it is not a tab on purpose.
-#
-# Tab is an IFS whitespace character, so `IFS=$'\t' read -r a b c` collapses a
-# run of tabs into one delimiter and loses every empty field. A repo with no
-# upstream writes two empty fields in the middle of its line, and reading that
-# back shifted `dirty` and `committed` off the end: the next run handed an empty
-# string to `jq --argjson` and the repo disappeared from the answer entirely.
-# It only ever happened on the second run, so it read as a caching problem
-# rather than as a separator problem, and a repo with no remote was simply
-# missing from `repo:` for as long as its index sat still.
-#
-# Unit separator is not whitespace and does not collapse. A v3 line written
-# with tabs fails the stamp comparison below and is recomputed, so nothing has
-# to be migrated.
-SEP=$'\x1f'
-
-cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/oxy"
-state_cache="$cache_root/v$CACHE_FORMAT/repo-state"
-mkdir -p "$state_cache" 2>/dev/null
-
-# One file per repo, keyed by a hash of its path. The loop below rewrites an
-# entry on every hit so its mtime says when it was last wanted, which was
-# always the intent; what was missing is anything that reads those mtimes. A
-# repo you deleted last year still had an entry, and every bump of CACHE_FORMAT
-# left the whole previous directory behind.
-#
-# Once per run, before the loop: this walks the directory and the loop does not.
-# 300 is far more repos than anybody has; it is a ceiling, not a working set.
 CACHE_KEEP=300
 prune_state_cache() {
   # Every other format's copy of this cache, and only this cache: the same
@@ -522,17 +657,7 @@ prune_state_cache() {
 }
 prune_state_cache
 
-repo_stamp() {
-  local gitdir="$1" newest=0 f t
-  for f in "$gitdir/index" "$gitdir/HEAD" "$gitdir/refs" "$gitdir/packed-refs"; do
-    [[ -e $f ]] || continue
-    t=$(stat -c %Y "$f" 2>/dev/null) || continue
-    ((t > newest)) && newest=$t
-  done
-  printf '%s' "$newest"
-}
-
-while IFS=$'\t' read -r score touched repo gitdir; do
+while IFS=$'\x1f' read -r score touched repo gitdir; do
   [[ -n $repo ]] || continue
 
   branch="" upstream="" ab="" dirty=0
@@ -543,45 +668,24 @@ while IFS=$'\t' read -r score touched repo gitdir; do
   [[ -s $cache_key ]] && cached=$(<"$cache_key")
 
   if [[ ${cached%%"$SEP"*} == "$stamp" && -n $cached ]]; then
-    IFS=$SEP read -r _ branch upstream ab dirty committed <<<"$cached"
+    IFS=$SEP read -r _ branch upstream ab dirty committed dirty_ts <<<"$cached"
+    [[ $dirty_ts =~ ^[0-9]+$ ]] || dirty_ts=0
     # Rewritten so the file's mtime says when this answer was last wanted,
     # which is the only thing that keeps a cache of dead repos from growing.
-    printf '%s\n' "$stamp$SEP$branch$SEP$upstream$SEP$ab$SEP$dirty$SEP$committed" > "$cache_key"
-    repo_state_cached=1
+    # dirty_ts is passed through unchanged: refreshing it here would make
+    # every hit look fresh and the revalidate below would never fire.
+    write_state "$cache_key" "$stamp" "$branch" "$upstream" "$ab" "$dirty" "$committed" "$dirty_ts"
+    # The stamp only covers .git. The worktree can have moved under it —
+    # edited files, new files — so a dirty count older than DIRTY_RECHECK
+    # seconds is re-derived in the background rather than trusted or paid
+    # for here. One stale frame, then the truth.
+    ((now - dirty_ts > DIRTY_RECHECK)) && refresh_state_async "$repo"
   else
-    repo_state_cached=0
-  fi
-
-  if ((repo_state_cached == 0)); then
-  # porcelain v2 with --branch is one call for branch, upstream, ahead/behind
-  # and dirtiness. --no-optional-locks so a launcher reading in the background
-  # never writes to somebody's index.
-  while IFS= read -r line; do
-    case $line in
-    "# branch.head "*) branch="${line#\# branch.head }" ;;
-    "# branch.upstream "*) upstream="${line#\# branch.upstream }" ;;
-    "# branch.ab "*) ab="${line#\# branch.ab }" ;;
-    "#"*) ;;
-    # Counted, not flagged. "Dirty" is one bit and every uncommitted repo looks
-    # the same under it; the number is what tells a stray formatting change
-    # apart from the afternoon of work you walked away from. It costs nothing:
-    # these lines were already being read and thrown away.
-    #
-    # --untracked-files=no is unchanged and is the one thing this number does
-    # not see. Walking the worktree for untracked files is the expensive half of
-    # `git status`, and a repo whose only change is a new file still reads as
-    # clean here.
-    ?*) dirty=$((dirty + 1)) ;;
-    esac
-  done < <(git -C "$repo" --no-optional-locks status --porcelain=v2 --branch --untracked-files=no 2>/dev/null)
-
+    read_state "$repo" "$gitdir"
     [[ -n $branch ]] || branch=$(head_branch "$gitdir") || branch="?"
     [[ $branch == "(detached)" ]] && branch="detached"
-
-    committed=$(git -C "$repo" --no-optional-locks log -1 --format=%ct 2>/dev/null)
     [[ -n ${committed:-} ]] || committed=$touched
-
-    printf '%s\n' "$stamp$SEP$branch$SEP$upstream$SEP$ab$SEP$dirty$SEP$committed" > "$cache_key"
+    write_state "$cache_key" "$stamp" "$branch" "$upstream" "$ab" "$dirty" "$committed" "$(date +%s)"
   fi
 
   [[ -n $branch ]] || branch="?"
@@ -667,6 +771,6 @@ while IFS=$'\t' read -r score touched repo gitdir; do
                   query: ("gh:" + $slug) }] end)
         )
       }'
-done < <(printf '%s\n' "${ranked[@]}" | sort -t$'\t' -k1,1rn -k2,2rn | head -"$MAX_ROWS")
+done < <(printf '%s\n' "${ranked[@]}" | sort -t$'\x1f' -k1,1rn -k2,2rn | head -"$MAX_ROWS")
 
 exit 0

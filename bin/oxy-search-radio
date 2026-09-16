@@ -132,6 +132,18 @@ play() {
   local url="${1:-}" name="${2:-}" subtitle="${3:-}" art="${4:-}" homepage="${5:-}"
   [[ -z $url ]] && return 0
 
+  # One station at a time, and that rule is enforced across processes: two
+  # Enters on two stations inside a second used to run stop_current twice and
+  # start two mpvs, the second killing the first's socket on its way out. The
+  # lock is the run directory itself — mkdir is atomic — with a stale lock
+  # broken after a wait, because a wedged holder must not take the radio down
+  # with it.
+  local tries=0
+  while ! mkdir "$RUNDIR/.playlock" 2>/dev/null; do
+    ((++tries > 20)) && { rm -rf "$RUNDIR/.playlock" 2>/dev/null; continue; }
+    sleep 0.05
+  done
+
   # The volume the last station was left at, so changing station does not undo
   # turning it down.
   local volume=100
@@ -145,17 +157,28 @@ play() {
   # a stream, and the launcher re-queries within 900ms of the keypress: without
   # a state file to answer from, that first re-query would find nothing playing
   # and draw no player, which is exactly the moment the user is looking for one.
-  jq -cn --arg url "$url" --arg name "$name" --arg subtitle "$subtitle" \
-         --arg art "$art" --arg homepage "$homepage" --argjson volume "$volume" \
-         --argjson started "$(date +%s)" \
-    '{url: $url, name: $name, subtitle: $subtitle, art: $art,
-      homepage: $homepage, volume: $volume, started: $started}' >"$STATE"
+  #
+  # Through a temp file and a rename, because a re-query reading the state
+  # mid-write saw truncated JSON, drew no player for the station it had just
+  # picked, and looked like the keypress did nothing.
+  local tmp
+  tmp=$(mktemp "$RUNDIR/state.XXXXXX" 2>/dev/null) || tmp=""
+  if [[ -n $tmp ]]; then
+    jq -cn --arg url "$url" --arg name "$name" --arg subtitle "$subtitle" \
+           --arg art "$art" --arg homepage "$homepage" --argjson volume "$volume" \
+           --argjson started "$(date +%s)" \
+      '{url: $url, name: $name, subtitle: $subtitle, art: $art,
+        homepage: $homepage, volume: $volume, started: $started}' >"$tmp" 2>/dev/null &&
+      mv -f "$tmp" "$STATE" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  fi
 
   # --no-terminal because nothing is attached to this. The user's mpv config is
   # deliberately left alone: --no-config would also stop mpv-mpris loading, and
   # that is what puts this stream on the bus where `music:` can see it.
   setsid -f mpv --no-video --no-terminal \
     --volume="$volume" "$MARKER" -- "$url" >/dev/null 2>&1
+
+  rm -rf "$RUNDIR/.playlock" 2>/dev/null
 }
 
 ctl() {

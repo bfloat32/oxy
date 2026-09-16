@@ -29,21 +29,33 @@ if ((${#roots[@]} == 0)); then
 fi
 ((${#roots[@]} == 0)) && roots=("$HOME")
 
-args=(--ignore-case --type f --max-results 300 --follow)
+args=(--ignore-case --type f --max-results 300 --follow --fixed-strings)
 for e in "${EXT[@]}"; do args+=(--extension "$e"); done
 for skip in .git node_modules .cache .thumbnails; do args+=(--exclude "$skip"); done
 
 have_identify=0
 command -v identify >/dev/null && have_identify=1
 
+# A path as a file:// URL. The characters that make a URL mean something else
+# — %, #, ?, and a space — are percent-encoded, so a photo called `me #2?.jpg`
+# draws its own thumbnail instead of pointing at a path that does not exist.
+# / stays literal: encoding it is valid but unreadable.
+file_url() {
+  printf '%s' "$1" |
+    sed -e 's/%/%25/g' -e 's/#/%23/g' -e 's/?/%3F/g' \
+        -e 's/ /%20/g' -e 's/"/%22/g' -e $'s/\t/%09/g'
+}
+
 # Newest first: with pictures, recent is nearly always what you are after.
 fd "${args[@]}" -- "$query" "${roots[@]}" 2>/dev/null |
   while read -r path; do
-    printf '%s\t%s\n' "$(stat -c %Y "$path" 2>/dev/null || echo 0)" "$path"
+    # Unit separator, not a tab: a filename is data here, and a tab inside one
+    # must not split the line it rides in.
+    printf '%s\x1f%s\n' "$(stat -c %Y "$path" 2>/dev/null || echo 0)" "$path"
   done |
   sort -rn |
   head -60 |
-  while IFS=$'\t' read -r mtime path; do
+  while IFS=$'\x1f' read -r mtime path; do
     base=${path##*/}
     dir=${path%/*}
     dir=${dir/#$HOME/\~}
@@ -57,7 +69,7 @@ fd "${args[@]}" -- "$query" "${roots[@]}" 2>/dev/null |
     fi
 
     jq -cn --arg id "$path" --arg t "$base" --arg s "$dir" \
-      --arg art "file://$path" --arg d "$dimensions" --arg a "$human" \
+      --arg art "file://$(file_url "$path")" --arg d "$dimensions" --arg a "$human" \
       --arg e "xdg-open $(printf '%q' "$path")" \
       --arg copy "wl-copy < $(printf '%q' "$path")" \
       --arg reveal "nautilus --select $(printf '%q' "$path")" \

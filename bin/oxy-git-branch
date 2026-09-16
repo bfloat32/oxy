@@ -37,7 +37,7 @@ command -v git >/dev/null 2>&1 || exit 0
 
 # Which repo, and what is left over as a filter. One call, no git, shared with
 # `git:` and `stash:` so all three read a query the same way.
-IFS=$'\t' read -r repo needle < <(oxy-repo --resolve "$query" 2>/dev/null)
+IFS=$'\x1f' read -r repo needle < <(oxy-repo --resolve "$query" 2>/dev/null)
 [[ -n ${repo:-} && -e $repo/.git ]] || exit 0
 needle="${needle,,}"
 
@@ -120,8 +120,37 @@ prune_cache() {
 }
 
 # Line one is the stamp, line two is the header, the rest are branches.
+#
+# The dirty counts in the header are the one part of this answer the stamp
+# cannot vouch for: they read the worktree, and editing a file moves nothing
+# under .git. So the header carries its own age, and a hit older than
+# DIRTY_RECHECK seconds pays one `git status` — this script runs against one
+# repo, not a page of them, so the synchronous recheck is the whole cost —
+# before the answer is served. The branch list itself stays cached: refs
+# cannot move without the stamp moving.
+DIRTY_RECHECK=3
+
+count_state() {
+  staged=0 changed=0 conflicted=0 head=""
+  while IFS= read -r line; do
+    case $line in
+    "# branch.head "*) head="${line#\# branch.head }" ;;
+    "#"*) ;;
+    "u "*) conflicted=$((conflicted + 1)) ;;
+    "1 "* | "2 "*)
+      rest="${line#* }"
+      xy="${rest%% *}"
+      [[ ${xy:0:1} != "." ]] && staged=$((staged + 1))
+      [[ ${xy:1:1} != "." ]] && changed=$((changed + 1))
+      ;;
+    "? "*) changed=$((changed + 1)) ;;
+    esac
+  done < <(git -C "$repo" --no-optional-locks status --porcelain=v2 --branch 2>/dev/null)
+  [[ $head == "(detached)" ]] && head="detached"
+}
+
 collect() {
-  local names=() n trunk="" head="" staged=0 changed=0 conflicted=0 line rest xy
+  local names=() n trunk="" line
 
   mapfile -t names < <(git -C "$repo" --no-optional-locks for-each-ref \
     --format='%(refname:short)' refs/heads 2>/dev/null)
@@ -143,31 +172,23 @@ collect() {
     done
   fi
 
-  while IFS= read -r line; do
-    case $line in
-    "# branch.head "*) head="${line#\# branch.head }" ;;
-    "#"*) ;;
-    "u "*) conflicted=$((conflicted + 1)) ;;
-    "1 "* | "2 "*)
-      rest="${line#* }"
-      xy="${rest%% *}"
-      [[ ${xy:0:1} != "." ]] && staged=$((staged + 1))
-      [[ ${xy:1:1} != "." ]] && changed=$((changed + 1))
-      ;;
-    "? "*) changed=$((changed + 1)) ;;
-    esac
-  done < <(git -C "$repo" --no-optional-locks status --porcelain=v2 --branch 2>/dev/null)
-  [[ $head == "(detached)" ]] && head="detached"
+  count_state
 
   printf '%s\n' "$want"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$head" "$staged" "$changed" "$conflicted" "$trunk"
+  # The trailing field is the header's age, for the worktree recheck above.
+  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$head" "$staged" "$changed" "$conflicted" "$trunk" "$(date +%s)"
 
-  local fmt='%(HEAD)\t%(refname:short)\t%(upstream:short)\t%(upstream:track,nobracket)'
-  [[ -n $trunk ]] && fmt+="\t%(ahead-behind:refs/heads/$trunk)" || fmt+='\t'
-  fmt+='\t%(committerdate:unix)\t%(authorname)\t%(contents:subject)'
+  # Unit separator, not a tab: commit subjects and author names are data
+  # here, and a tab inside either must not split the line it rides in. A
+  # subject cannot carry a newline (git takes the first line), so lines
+  # stay newline-delimited.
+  local fmt='%(HEAD)'$'\x1f''%(refname:short)'$'\x1f''%(upstream:short)'$'\x1f''%(upstream:track,nobracket)'
+  [[ -n $trunk ]] && fmt+=$'\x1f'"%(ahead-behind:refs/heads/$trunk)" || fmt+=$'\x1f'
+  fmt+=$'\x1f''%(committerdate:unix)'$'\x1f''%(authorname)'$'\x1f''%(contents:subject)'
 
   git -C "$repo" --no-optional-locks for-each-ref --sort=-committerdate \
-    --format="$(printf '%b' "$fmt")" refs/heads 2>/dev/null
+    --format="$fmt" refs/heads 2>/dev/null
 }
 
 lines=()
@@ -183,7 +204,21 @@ if ((${#lines[@]} == 0)); then
 fi
 ((${#lines[@]} > 1)) || exit 0
 
-IFS=$'\t' read -r head staged changed conflicted trunk <<<"${lines[1]}"
+IFS=$'\t' read -r head staged changed conflicted trunk header_ts <<<"${lines[1]}"
+# The header's dirty counts read the worktree, which the stamp cannot see:
+# a hit older than DIRTY_RECHECK seconds re-derives them now — one `git
+# status`, one repo — and rewrites the cached header so the next keystroke
+# within the window is free again.
+if [[ ! $header_ts =~ ^[0-9]+$ ]] || ((now - header_ts > DIRTY_RECHECK)); then
+  cached_head="$head"
+  count_state
+  # A status call that says nothing does not erase the branch the cache
+  # already named; only the counts are being re-derived here.
+  [[ -n $head ]] || head="$cached_head"
+  lines[1]="$(printf '%s\t%s\t%s\t%s\t%s\t%s' \
+    "$head" "$staged" "$changed" "$conflicted" "$trunk" "$(date +%s)")"
+  printf '%s\n' "${lines[@]}" >"$cache_file" 2>/dev/null
+fi
 dirty=$((staged + changed + conflicted))
 
 # The rows, in the order somebody reads them: where you are now, then whatever
@@ -192,7 +227,7 @@ dirty=$((staged + changed + conflicted))
 rows=()
 for line in "${lines[@]:2}"; do
   [[ -n $line ]] || continue
-  IFS=$'\t' read -r marker ref upstream track ab ts author subject <<<"$line"
+  IFS=$'\x1f' read -r marker ref upstream track ab ts author subject <<<"$line"
   [[ -n ${ref:-} ]] || continue
   if [[ -n $needle ]]; then
     hay="${ref,,} ${subject,,}"
@@ -227,7 +262,7 @@ printf '%s\n' "${rows[@]}" | jq -Rn \
     if (t | test(word + " [0-9]+")) then
       (t | capture(word + " (?<n>[0-9]+)") | .n | tonumber) else 0 end;
 
-  [inputs | split("\t")] as $rows
+  [inputs | split("\u001f")] as $rows
   | $rows | to_entries | map(
       .key as $i | .value as $r
       | ($r[0] == "*") as $current

@@ -168,7 +168,13 @@ docker inspect --type container --format "$template" $ids 2>/dev/null | jq -c --
     | sort_by(.host)
     | map(. + { label: ("\(.host)" + (if .proto != "tcp" then "/" + .proto else "" end)),
                 web:   (.container | dbPort | not) })
-    | map(. + { url: (if .web then "http://\(.addr):\(.host)" else "\(.addr):\(.host)" end) })
+    # An IPv6 literal in a URL needs brackets: `http://::1:8080` is not an
+    # address anybody can parse, while `http://[::1]:8080` is. Only the URL
+    # is bracketed — the copyable host:port form reads the conventional way.
+    | map(. + { url: (if (.addr | test(":"))
+                      then (if .web then "http://[\(.addr)]:\(.host)" else "[\(.addr)]:\(.host)" end)
+                      else (if .web then "http://\(.addr):\(.host)" else "\(.addr):\(.host)" end)
+                      end) })
     | map(. + { exec: (if .web
                        then "omarchy-launch-browser " + (.url | @sh)
                        else "printf %s " + (.url | @sh) + " | wl-copy" end) });

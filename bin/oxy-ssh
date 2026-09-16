@@ -98,7 +98,7 @@ expand_includes() {
   done <"$file"
 }
 
-now_host=""
+now_hosts=()
 now_hostname=""
 now_user=""
 now_port=""
@@ -110,8 +110,10 @@ rank=90000
 emitted=0
 
 flush() {
-  [[ -n $now_host ]] || return 0
+  ((${#now_hosts[@]})) || return 0
 
+  local now_host
+  for now_host in "${now_hosts[@]}"; do
   local target port sub
   target="${now_hostname:-$now_host}"
   port="${now_port:-22}"
@@ -126,7 +128,7 @@ flush() {
   [[ $port != "22" ]] && sub="$sub:$port"
 
   if [[ -n $needle ]]; then
-    [[ "${now_host,,} ${sub,,}" == *"$needle"* ]] || return 0
+    [[ "${now_host,,} ${sub,,}" == *"$needle"* ]] || continue
   fi
 
   # ssh writes the port into the key only when it is not 22, so the lookup has
@@ -181,6 +183,7 @@ flush() {
 
   rank=$((rank - 100))
   emitted=$((emitted + 1))
+  done
 }
 
 while IFS= read -r entry; do
@@ -201,17 +204,21 @@ while IFS= read -r entry; do
     case "${key,,}" in
     host)
       flush
-      now_host=""
+      now_hosts=()
       now_hostname=""
       now_user=""
       now_port=""
       now_identity=""
       now_proxy=""
       now_file="$file"
-      # Only the first pattern of a Host line is a name you can type, and a
-      # pattern is a default block rather than a machine.
-      read -r first _ <<<"$value"
-      [[ $first == *[\*\?\!]* ]] || now_host="$first"
+      # Every name on a Host line is a machine you can type: `Host prod
+      # production` is two aliases for one block of settings, and keeping only
+      # the first hid the second behind a name nobody types. A pattern with a
+      # wildcard in it is a default block, not a machine.
+      read -r -a host_words <<<"$value"
+      for w in "${host_words[@]}"; do
+        [[ $w == *[\*\?\!]* ]] || now_hosts+=("$w")
+      done
       ;;
     hostname) now_hostname="$value" ;;
     user) now_user="$value" ;;

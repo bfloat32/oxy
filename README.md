@@ -12,18 +12,27 @@ one long list.
 
 ## Install
 
-On an Omarchy system, one line:
+On an Omarchy system, two ways in — the clone works with your usual git
+credentials even when the repo is private; the pipe needs a token in scope
+(`$GH_TOKEN`) while it is:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/bfloat32/oxy/main/install.sh | bash
+git clone --depth 1 https://github.com/bfloat32/oxy.git ~/.local/share/oxy
+~/.local/share/oxy/install.sh
 ```
 
-That clones to `~/.local/share/oxy`, links the plugin, the `oxy-*` commands, the
-extension definitions and the keybinding into place, installs whatever `pacman`
-has that the keywords need, and enables it. Everything it links is a symlink
-into the clone, so `git pull` in that directory updates all of it, and anything
-of yours already at a target path is moved aside with a `.before-oxy` suffix
-rather than overwritten. Running the same line again updates; running
+```bash
+curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+  https://raw.githubusercontent.com/bfloat32/oxy/main/install.sh | bash
+```
+
+Either way it clones to `~/.local/share/oxy` — or installs the checkout it was
+run from — then links the plugin, the `oxy-*` commands, the extension
+definitions and the keybinding into place, installs whatever `pacman` has that
+the keywords need, and enables it. Everything it links is a symlink into the
+clone, so `git pull` in that directory updates all of it, and anything of yours
+already at a target path is moved aside with a `.before-oxy` suffix rather than
+overwritten. Running the same command again updates; running
 `install.sh --uninstall` from the clone takes it back out and leaves your
 settings, pins and history.
 

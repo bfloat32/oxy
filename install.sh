@@ -1,7 +1,13 @@
 #!/bin/bash
 # Oxy installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/bfloat32/oxy/main/install.sh | bash
+#   git clone https://github.com/bfloat32/oxy.git ~/.local/share/oxy
+#   ~/.local/share/oxy/install.sh
+#
+# or, while the repo is public / with a token in scope:
+#
+#   curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+#     https://raw.githubusercontent.com/bfloat32/oxy/main/install.sh | bash
 #
 # Installs the launcher on an Omarchy system: clones the repo, links the plugin,
 # the helper commands, the extensions and the keybinding into place, and enables
@@ -56,7 +62,7 @@ for arg in "$@"; do
   --purge) UNINSTALL=1; PURGE=1 ;;
   --fresh | --reinstall) FRESH=1 ;;
   -h | --help)
-    sed -n '2,27p' "$0"
+    sed -n '2,32p' "$0"
     exit 0
     ;;
   *) echo "unknown argument: $arg" >&2; exit 1 ;;

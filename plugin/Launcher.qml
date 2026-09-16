@@ -472,7 +472,7 @@ Item {
   // ------------------------------------------------------------ lifecycle
 
   // `payloadJson` is how something outside asks for a particular screen rather
-  // than the opening one: `omarchy-shell shell summon bo.oxy '{"query":"bo:"}'`.
+  // than the opening one: `omarchy-shell shell summon oma.oxy '{"query":"bo:"}'`.
   // It exists because a few actions have to close this window to do their work,
   // and the only decent way to do that is to put the user back where they were.
   function open(payloadJson) {
@@ -595,7 +595,7 @@ Item {
     revertPreview()
     close()
     if (root.shell && typeof root.shell.hide === "function") {
-      root.shell.hide((root.manifest && root.manifest.id) || "bo.oxy")
+      root.shell.hide((root.manifest && root.manifest.id) || "oma.oxy")
     }
   }
 

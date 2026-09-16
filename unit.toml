@@ -1,11 +1,11 @@
 name     = "oxy"
 summary  = "A launcher with 41 keywords: repos, containers, processes, timezones, music, files and the web"
-version  = "0.6.0"
+version  = "0.7.0"
 category = "Productivity"
 tags     = ["launcher", "overlay", "quickshell"]
 author   = "bfloat32"
 kind     = "plugin"
-id       = "bo.oxy"
+id       = "oma.oxy"
 needs    = ["qalc", "jq", "curl", "fd", "busctl", "mpv", "python3"]
 keys     = ["SUPER+K", "SUPER+H"]
 

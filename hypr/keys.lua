@@ -14,7 +14,7 @@
 local preset = "balanced"
 
 local function open_oxy(key)
-  o.bind(key, "Oxy", "omarchy-shell shell toggle bo.oxy")
+  o.bind(key, "Oxy", "omarchy-shell shell toggle oma.oxy")
 end
 
 if preset == "additive" then

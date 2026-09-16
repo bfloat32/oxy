@@ -10,7 +10,7 @@
 # What goes where:
 #
 #   repo clone        ~/.local/share/oxy            (or beside this script)
-#   plugin            ~/.config/omarchy/plugins/bo.oxy      -> repo/plugin
+#   plugin            ~/.config/omarchy/plugins/oma.oxy     -> repo/plugin
 #   commands          ~/.local/bin/oxy-*                    -> repo/bin
 #   extensions        ~/.config/omarchy/oxy/extensions/*    -> repo/config/...
 #   keybinding        ~/.config/hypr/modules.d/oxy-keys.lua -> repo/hypr/keys.lua
@@ -30,7 +30,10 @@ set -uo pipefail
 REPO_URL="${OXY_REPO:-https://github.com/bfloat32/oxy.git}"
 BRANCH="${OXY_BRANCH:-main}"
 INSTALL_DIR="${OXY_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/oxy}"
-PLUGIN_ID="bo.oxy"
+PLUGIN_ID="oma.oxy"
+# What the plugin answered to before the rename. An existing install keeps
+# its layout place if the registration is renamed rather than re-added.
+OLD_PLUGIN_ID="bo.oxy"
 
 CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
 HYPR_DIR="$CONFIG_HOME/hypr"
@@ -229,7 +232,7 @@ if ((UNINSTALL)); then
   local_cfg="$CONFIG_HOME/omarchy/shell.json"
   cfg_state=9
   if [[ -f $local_cfg ]] && command -v python3 >/dev/null; then
-    python3 - "$local_cfg" "$PLUGIN_ID" <<'PY' 2>/dev/null
+    python3 - "$local_cfg" "$PLUGIN_ID" "$OLD_PLUGIN_ID" <<'PY' 2>/dev/null
 import json, sys
 try:
     plugins = json.load(open(sys.argv[1])).get("plugins") or []
@@ -237,7 +240,7 @@ except Exception:
     sys.exit(2)
 def name(e):
     return e.get("id") if isinstance(e, dict) else e
-sys.exit(0 if any(name(e) == sys.argv[2] for e in plugins) else 1)
+sys.exit(0 if any(name(e) in (sys.argv[2], sys.argv[3]) for e in plugins) else 1)
 PY
     cfg_state=$?
   fi
@@ -245,10 +248,10 @@ PY
     warn "could not read $local_cfg — $PLUGIN_ID may still be in its plugin list"
   elif ((cfg_state == 0)); then
     cp -p "$local_cfg" "$local_cfg.before-oxy.$(date +%s)"
-    BO_FORGET_ID="$PLUGIN_ID" BO_FORGET_CONFIG="$local_cfg" python3 - <<'PY' 2>/dev/null
+    OXY_FORGET_ID="$PLUGIN_ID $OLD_PLUGIN_ID" OXY_FORGET_CONFIG="$local_cfg" python3 - <<'PY' 2>/dev/null
 import json, os
-path = os.environ["BO_FORGET_CONFIG"]
-wanted = os.environ["BO_FORGET_ID"]
+path = os.environ["OXY_FORGET_CONFIG"]
+wanted = os.environ["OXY_FORGET_ID"].split()
 with open(path) as handle:
     config = json.load(handle)
 plugins = config.get("plugins")
@@ -256,7 +259,7 @@ if not isinstance(plugins, list):
     raise SystemExit(0)
 def name(e):
     return e.get("id") if isinstance(e, dict) else e
-kept = [e for e in plugins if name(e) != wanted]
+kept = [e for e in plugins if name(e) not in wanted]
 if len(kept) == len(plugins):
     raise SystemExit(0)
 config["plugins"] = kept
@@ -552,17 +555,81 @@ LUA
     omarchy-shell shell rescanPlugins >/dev/null 2>&1
     sleep 1
   }
+
+  # Adopt the old registration: the plugin used to answer to bo.oxy, and
+  # renaming its entries keeps its place in the layout where a fresh enable
+  # would land it at the default spot.
+  old_link="$PLUGINS_DIR/$OLD_PLUGIN_ID"
+  # Remove the old id's link when it is ours (points into this checkout) or
+  # dead (points at a location that no longer exists). A real file stays.
+  if [[ -L $old_link ]] &&
+    { [[ $(readlink "$old_link") == "$INSTALL_DIR"/* ]] || [[ ! -e $old_link ]]; }; then
+    rm -f "$old_link" && ok "removed the old $OLD_PLUGIN_ID link"
+  fi
+  local_cfg="$CONFIG_HOME/omarchy/shell.json"
+  if [[ -f $local_cfg ]] && grep -q "$OLD_PLUGIN_ID" "$local_cfg" &&
+    command -v python3 >/dev/null; then
+    cp -p "$local_cfg" "$local_cfg.before-oxy.$(date +%s)"
+    OXY_OLD_ID="$OLD_PLUGIN_ID" OXY_NEW_ID="$PLUGIN_ID" OXY_CFG="$local_cfg" \
+      python3 - <<'PY' 2>/dev/null &&
+import json, os
+path, old, new = os.environ["OXY_CFG"], os.environ["OXY_OLD_ID"], os.environ["OXY_NEW_ID"]
+try:
+    config = json.load(open(path))
+except Exception:
+    raise SystemExit(1)
+changed = False
+def fix(e):
+    global changed
+    if isinstance(e, dict):
+        if e.get("id") == old:
+            e["id"] = new
+            changed = True
+    elif e == old:
+        changed = True
+        return new
+    return e
+def name(e):
+    return e.get("id") if isinstance(e, dict) else e
+def dedupe(items):
+    global changed
+    # The old id may coexist with the new one if the new build was enabled
+    # once already; the first occurrence keeps the position.
+    seen, out = set(), []
+    for e in items:
+        if name(e) == new and new in seen:
+            changed = True
+            continue
+        seen.add(name(e))
+        out.append(e)
+    return out
+if isinstance(config.get("plugins"), list):
+    config["plugins"] = dedupe([fix(e) for e in config["plugins"]])
+layout = (config.get("bar") or {}).get("layout")
+if isinstance(layout, dict):
+    for section_name, section in layout.items():
+        if isinstance(section, list):
+            layout[section_name] = dedupe([fix(w) for w in section])
+if not changed:
+    raise SystemExit(1)
+with open(path, "w") as handle:
+    json.dump(config, handle, indent=2)
+    handle.write("\n")
+PY
+      ok "the old $OLD_PLUGIN_ID registration now answers to $PLUGIN_ID"
+  fi
+
   # `plugin enable` writes shell.json — the running shell needs reloadConfig to
   # see it, and a not-yet-running one picks it up on next start. So enable only
   # needs `omarchy`; the live reload needs `omarchy-shell`.
   if command -v omarchy >/dev/null; then
-    if python3 - "$PLUGIN_ID" <<'PY' 2>/dev/null
+    if OXY_CFG_PATH="$local_cfg" python3 - "$PLUGIN_ID" <<'PY' 2>/dev/null
 import json, os, sys
 # Skipping `plugin enable` is only safe when both halves are already right:
 # the layout keeps its place, and plugins[] is what makes the shell load it.
 # A layout entry without the list entry renders nothing.
 try:
-    config = json.load(open(os.path.expanduser("~/.config/omarchy/shell.json")))
+    config = json.load(open(os.environ["OXY_CFG_PATH"]))
 except Exception:
     sys.exit(1)
 layout = (config.get("bar") or {}).get("layout") or {}

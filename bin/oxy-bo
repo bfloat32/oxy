@@ -118,7 +118,7 @@ CACHE="$RUN_DIR/oxy-bo.json"
 CACHE_STATE="$RUN_DIR/oxy-bo.linked"
 LOG="$STATE_DIR/oxy-bo.log"
 SEEN="$RUN_DIR/oxy-bo.seen"
-PLUGIN_ID="bo.oxy"
+PLUGIN_ID="oma.oxy"
 
 command -v bo >/dev/null 2>&1 || exit 0
 
@@ -239,7 +239,7 @@ summon_back() {
 
   : >"$SEEN" 2>/dev/null
 
-  # `listPlugins` is not a readiness check: it names bo.oxy throughout the
+  # `listPlugins` is not a readiness check: it names oma.oxy throughout the
   # reload, so gating on it proved nothing. The summon is simply re-sent once a
   # second while the fact has not arrived, because one sent into the middle of a
   # reload is dropped with no error.

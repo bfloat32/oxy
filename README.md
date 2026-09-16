@@ -372,7 +372,7 @@ That summon is a public entry point. Any payload with a `query` key opens the
 launcher on that query:
 
 ```bash
-omarchy-shell shell summon bo.oxy '{"query":"bo:"}'
+omarchy-shell shell summon oma.oxy '{"query":"bo:"}'
 ```
 
 A payload that will not parse opens the launcher empty rather than not at all.

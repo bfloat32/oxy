@@ -136,10 +136,16 @@ Item {
     sourceComponent: AppLibraryFallback { omarchyPath: root.omarchyPath }
   }
 
-  // Extensions, loaded from ~/.config/omarchy/oxy/extensions/*.json.
+  // The same XDG spelling every oxy-* script uses, so a setting a script wrote
+  // to $XDG_CONFIG_HOME is the file this launcher reads back. Omarchy's own
+  // files stay wherever Omarchy put them; these are only for the files oxy owns.
+  readonly property string configHome: Quickshell.env("XDG_CONFIG_HOME") || Quickshell.env("HOME") + "/.config"
+  readonly property string stateHome: Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state"
+
+  // Extensions, loaded from <configHome>/omarchy/oxy/extensions/*.json.
   // A unit drops a file there through its config/ folder, so a new source of
   // results needs no QML and no rebuild.
-  readonly property string extensionsDir: Quickshell.env("HOME") + "/.config/omarchy/oxy/extensions"
+  readonly property string extensionsDir: configHome + "/omarchy/oxy/extensions"
   property var extensions: []
   property var extensionProviders: []
 
@@ -267,6 +273,8 @@ Item {
       out.push(root.extensions[i].keyword)
       var aliases = root.extensions[i].aliases || []
       for (var j = 0; j < aliases.length; j++) out.push(aliases[j])
+      var declared = root.extensions[i].filters || []
+      for (var f = 0; f < declared.length; f++) out.push(declared[f])
     }
 
     var links = root.config.quicklinks || []
@@ -2106,7 +2114,7 @@ Item {
 
   FileView {
     id: frecencyFile
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/oxy-frecency.json"
+    path: root.stateHome + "/omarchy/oxy-frecency.json"
     printErrors: false
     atomicWrites: true
     // Not watched: this file is written from here, and reacting to our own
@@ -2138,7 +2146,7 @@ Item {
   // their formatting the first time they searched for anything.
   FileView {
     id: stateFile
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/oxy-state.json"
+    path: root.stateHome + "/omarchy/oxy-state.json"
     printErrors: false
     atomicWrites: true
     // Not watched, for the reason the frecency file is not watched: this is the
@@ -2165,7 +2173,7 @@ Item {
 
   FileView {
     id: configFile
-    path: Quickshell.env("HOME") + "/.config/omarchy/oxy.json"
+    path: root.configHome + "/omarchy/oxy.json"
     watchChanges: true
     printErrors: false
     onLoaded: {

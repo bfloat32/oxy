@@ -717,7 +717,8 @@ themselves the first time a shimmed binary runs.
 | `subtitle` | the title | the fallback subtitle on every row it returns |
 | `glyph` | `""` | the fallback icon on every row it returns |
 | `accent` | `""` | one colour for this extension's rows, walked to something legible on the card |
-| `search` | required | the command. `{query}` is the shell-quoted search text, `{anything}` is another filter's value, so `music:blue year:1959` arrives as two arguments |
+| `search` | required | the command. `{query}` is the shell-quoted search text, `{anything}` is another declared filter's value, so `music:blue year:1959` arrives as two arguments |
+| `filters` | `[]` | extra filter names to parse out of the query, beyond the keyword and aliases. Undeclared, `year:1959` stays literal text — which is also what keeps `https://…` from being read as a filter |
 | `socket` | `""` | a unix socket to ask instead of running a command. The launcher wants one of `search` or `socket`; with neither, the extension is dropped rather than sitting in the keyword list doing nothing. `bo test` is stricter and fails a file with no `search`, so declare both |
 | `when` | `""` | a shell test, run **once** at load. An extension for software you do not have costs nothing |
 | `always` | `false` | answer unscoped queries too. Off, because a launcher that shells out to six services per keystroke is one nobody keeps |

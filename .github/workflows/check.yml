@@ -1,0 +1,47 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: bash syntax
+        run: |
+          failed=0
+          bash -n install.sh || { echo "syntax: install.sh"; failed=1; }
+          for f in bin/* tests/*.sh; do
+            head -1 "$f" | grep -q bash || continue
+            bash -n "$f" || { echo "syntax: $f"; failed=1; }
+          done
+          [ "$failed" = 0 ]
+
+      - name: extension JSON parses
+        run: |
+          python3 - <<'PY'
+          import glob, json, sys
+          bad = []
+          for path in glob.glob("config/**/*.json", recursive=True):
+              try:
+                  json.load(open(path, encoding="utf-8"))
+              except Exception as e:
+                  print(path, e)
+                  bad.append(path)
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: logic tests
+        run: node --test tests/logic.test.mjs
+
+      # The check files themselves name the word, so the scan skips the
+      # directories that hold them.
+      - name: no legacy name remains
+        run: |
+          if grep -ri "omacast" --exclude-dir=.git --exclude-dir=.github --exclude-dir=tests .; then
+            echo "found an omacast reference" && exit 1
+          fi

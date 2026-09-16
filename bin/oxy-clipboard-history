@@ -11,7 +11,7 @@
 set -uo pipefail
 
 query="${1:-}"
-HISTORY="$HOME/.local/state/omarchy/clipboard-history.json"
+HISTORY="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/clipboard-history.json"
 
 [[ -f $HISTORY ]] || exit 0
 

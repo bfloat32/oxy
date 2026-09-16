@@ -23,7 +23,7 @@ Item {
   id: logger
 
   property bool enabled: true
-  property string path: Quickshell.env("HOME") + "/.local/state/omarchy/oxy-log.jsonl"
+  property string path: (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omarchy/oxy-log.jsonl"
   property int maxBytes: 1048576
 
   // One id per shell lifetime. `open` and `close` events carry the per-summon

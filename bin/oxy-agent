@@ -631,12 +631,14 @@ class Run:
                 cmd += ["--resume", self.resume]
             return cmd
         if a["id"] == "codex":
+            # `-` reads the whole prompt from stdin: same reason claude gets a
+            # pipe — the instruction stays out of `ps`.
             return ["codex", "exec", "--sandbox", "workspace-write",
-                    "--skip-git-repo-check", "--color", "never",
-                    self.turn.text + "\n\n" + BRIEF]
+                    "--skip-git-repo-check", "--color", "never", "-"]
         if a["id"] == "gemini":
-            return ["gemini", "--approval-mode", "plan", "-p",
-                    self.turn.text + "\n\n" + BRIEF]
+            # No prompt argument at all: piped stdin is the prompt, and the
+            # instruction stays out of process listings the way claude's does.
+            return ["gemini", "--approval-mode", "plan"]
         return [a["bin"], self.turn.text]
 
     def start(self):
@@ -647,7 +649,7 @@ class Run:
             # story: an agent forks compilers and greps, and killing the one pid
             # it told us about leaves those running.
             start_new_session=True)
-        if self.agent["id"] == "claude":
+        if self.agent["id"] in ("claude", "codex", "gemini"):
             why = self.feed()
             if why:
                 # Half an instruction is not a smaller version of the
@@ -661,6 +663,14 @@ class Run:
             self.shut()
         os.set_blocking(self.proc.stdout.fileno(), False)
 
+    def instruction(self):
+        """What goes down stdin. Claude carries its briefing in argv
+        (--append-system-prompt); the others have no such flag, so it is part
+        of the prompt itself."""
+        if self.agent["id"] == "claude":
+            return self.turn.text
+        return self.turn.text + "\n\n" + BRIEF
+
     def feed(self):
         """The instruction down the pipe: all of it, or a reason it did not go.
 
@@ -670,7 +680,7 @@ class Run:
         already gone reports it to the `close` nobody was listening to, and a
         short write reports it by returning a smaller number. All three ended
         here as a run that looked completely normal."""
-        data = self.turn.text.encode("utf-8")
+        data = self.instruction().encode("utf-8")
         sent = 0
         try:
             fd = self.proc.stdin.fileno()

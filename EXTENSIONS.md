@@ -25,6 +25,12 @@ compiled, and no restart beyond the next time the launcher opens.
 the script as two arguments. It prints JSON: an array of rows, or one row per
 line.
 
+For `year:1959` to parse as a filter at all, the name has to be declared first
+— in `"filters": ["year"]`. A word the parser does not know stays literal text,
+which is what keeps `https://example.com` from being read as an `https` filter.
+Declared names reach the extension through both a `{name}` placeholder in
+`search` and the `filters` object in a socket payload.
+
 ## Fields
 
 | field | default | what it does |
@@ -33,6 +39,7 @@ line.
 | `search` | required | the command that answers. The launcher takes a `socket` instead, but `bo test` fails a file with no `search`, so declare both |
 | `keyword` | `id` | what you type before the colon |
 | `aliases` | `[]` | other keywords that reach it |
+| `filters` | `[]` | extra filter names to parse out of the query — undeclared, `year:1959` stays literal text and `{year}` substitutes empty |
 | `title` | `id` | the name in the `?` list, and the default `group` on every row |
 | `subtitle` | `title` | the second line on any row that does not set its own |
 | `glyph` | `""` | the icon on any row that does not set its own |

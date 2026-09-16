@@ -23,6 +23,12 @@
 // reach the script as two arguments. It prints JSON: either an array of rows,
 // or one row per line.
 //
+// For `year:1959` to parse as a filter the name has to be declared first, in
+// `"filters": ["year"]` — a word the parser does not know stays literal text,
+// which is also what keeps `https://example.com` from becoming an `https`
+// filter. Declared names are handed to the extension through extras(), both as
+// a {name} placeholder in `search` and in the socket payload's `filters`.
+//
 // An action may set `keepOpen: true` when all it does is change something the
 // launcher will show next. Without it an action closes the launcher, which is
 // right for anything that starts a program and wrong for anything that does not.
@@ -83,6 +89,10 @@ function normalize(raw, sourcePath) {
     // The keyword defaults to the id, so a minimal extension needs neither.
     keyword: String(ext.keyword || id).toLowerCase(),
     aliases: (ext.aliases || []).map(function (a) { return String(a).toLowerCase() }),
+    // Extra filter names this extension wants parsed out of the query, beyond
+    // its keyword and aliases. Undeclared, `year:1959` stays literal text and
+    // a {year} placeholder always substitutes empty.
+    filters: (ext.filters || []).map(function (f) { return String(f).toLowerCase() }),
     search: search,
     when: String(ext.when || ""),
     glyph: String(ext.glyph || ""),

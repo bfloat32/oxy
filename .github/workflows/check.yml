@@ -20,6 +20,7 @@ jobs:
         run: |
           failed=0
           bash -n install.sh || { echo "syntax: install.sh"; failed=1; }
+          bash -n install-rs.sh || { echo "syntax: install-rs.sh"; failed=1; }
           for f in bin/* tests/*.sh; do
             head -1 "$f" | grep -q bash || continue
             bash -n "$f" || { echo "syntax: $f"; failed=1; }
@@ -39,7 +40,7 @@ jobs:
 
       - name: shellcheck
         run: |
-          files="install.sh"
+          files="install.sh install-rs.sh"
           for f in bin/* tests/*.sh; do
             head -1 "$f" | grep -q bash && files="$files $f"
           done
@@ -48,7 +49,7 @@ jobs:
       - name: executable bits
         run: |
           # Scripts are exec'd by name; a lost +x is a broken keyword.
-          git ls-files -s bin install.sh tests/*.sh tests/cases.py \
+          git ls-files -s bin install.sh install-rs.sh tests/*.sh tests/cases.py \
             | awk '$1 != "100755" { print $4; bad=1 } END { exit bad }'
 
       - name: extension JSON and case shape
@@ -138,3 +139,19 @@ jobs:
       # reachable here so their cases run for real.
       - name: extension cases
         run: python3 tests/cases.py
+
+  # The Rust core — the daemon, the engine and the CLI. Same checks the branch
+  # is held to locally: the whole workspace, tests included.
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: core
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: cargo check
+        run: cargo check --workspace
+
+      - name: cargo test
+        run: cargo test --workspace

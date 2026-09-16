@@ -106,10 +106,15 @@ link_path() {
     [[ $(readlink "$dst") == "$src" ]] && return 0
     rm -f "$dst"
   elif [[ -e $dst ]]; then
-    mv "$dst" "$dst.before-oxy" && warn "$dst exists — moved to $dst.before-oxy"
+    if mv "$dst" "$dst.before-oxy" 2>/dev/null; then
+      warn "$dst exists — moved to $dst.before-oxy"
+    else
+      warn "$dst exists and could not be moved aside — link skipped"
+      return 1
+    fi
   fi
   mkdir -p "$(dirname "$dst")"
-  ln -sfn "$src" "$dst"
+  ln -sfn "$src" "$dst" 2>/dev/null || { warn "could not link $dst"; return 1; }
 }
 
 # The mirror image for --uninstall: only remove links that point into this
@@ -159,6 +164,11 @@ norm_url() {
 # run would trip over.
 fresh_clone() {
   local tmp="$INSTALL_DIR.tmp.$$"
+  # A clone killed mid-write leaves a sibling husk behind; ours are named so
+  # we can sweep them without touching anything else.
+  for stale in "$INSTALL_DIR".tmp.*; do
+    [[ -e $stale ]] && rm -rf "$stale"
+  done
   rm -rf "$tmp"
   if ! git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$tmp"; then
     rm -rf "$tmp"
@@ -175,24 +185,41 @@ fresh_clone() {
 if ((UNINSTALL)); then
   printf '\n%s %s\n' "$(cyan '::')" "$(bold 'Removing Oxy')"
 
-  # Unlinks must name the same source the install linked from: run from a
-  # checkout, that is the checkout, not the default clone path.
-  [[ -f $SELF_DIR/unit.toml && -f $SELF_DIR/plugin/manifest.json ]] && INSTALL_DIR="$SELF_DIR"
+  # Links may point at the piped clone or at this checkout — cover both
+  # spellings so an uninstall run from the repo still finds links a cloned
+  # install made, and vice versa.
+  sources=("$INSTALL_DIR")
+  if [[ -f $SELF_DIR/unit.toml && -f $SELF_DIR/plugin/manifest.json && $SELF_DIR != "$INSTALL_DIR" ]]; then
+    sources+=("$SELF_DIR")
+  fi
 
-  unlink_path "$INSTALL_DIR/plugin" "$PLUGINS_DIR/$PLUGIN_ID" && ok "plugin unlinked"
+  for src_dir in "${sources[@]}"; do
+    unlink_path "$src_dir/plugin" "$PLUGINS_DIR/$PLUGIN_ID" && ok "plugin unlinked"
 
-  for file in "$INSTALL_DIR"/bin/*; do
-    unlink_path "$file" "$BIN_DIR/$(basename "$file")" && ok "$(basename "$file") unlinked"
+    for file in "$src_dir"/bin/*; do
+      unlink_path "$file" "$BIN_DIR/$(basename "$file")" && ok "$(basename "$file") unlinked"
+    done
+
+    (cd "$src_dir/config" 2>/dev/null && find . -type f -printf '%P\n') | while read -r rel; do
+      unlink_path "$src_dir/config/$rel" "$CONFIG_HOME/$rel" && ok "config/$rel unlinked"
+    done
+
+    for file in "$src_dir"/hypr/*.lua; do
+      [[ -e $file ]] || continue
+      unlink_path "$file" "$HYPR_MODULES/oxy-$(basename "$file")" && ok "hypr/$(basename "$file") unlinked"
+    done
   done
 
-  (cd "$INSTALL_DIR/config" 2>/dev/null && find . -type f -printf '%P\n') | while read -r rel; do
-    unlink_path "$INSTALL_DIR/config/$rel" "$CONFIG_HOME/$rel" && ok "config/$rel unlinked"
-  done
-
-  for file in "$INSTALL_DIR"/hypr/*.lua; do
-    [[ -e $file ]] || continue
-    unlink_path "$file" "$HYPR_MODULES/oxy-$(basename "$file")" && ok "hypr/$(basename "$file") unlinked"
-  done
+  # The walks above ask each source what it owns, which finds nothing once the
+  # clone itself is gone — and the links it made are exactly what remains.
+  # The sweep removes any link pointing into either spelling whether the
+  # checkout is there or not, so a deleted clone still uninstalls clean.
+  stray=0
+  while IFS= read -r link; do
+    rm -f "$link" && ((++stray))
+  done < <(find "$PLUGINS_DIR" "$BIN_DIR" "$HYPR_MODULES" "$CONFIG_HOME/omarchy" \
+    -type l \( -lname "$INSTALL_DIR/*" -o -lname "$SELF_DIR/*" \) 2>/dev/null)
+  ((stray > 0)) && ok "$stray stale links removed"
 
   # Deliberately not `omarchy plugin disable`: that deletes the layout entry,
   # taking its position and settings with it, so a later install would not come
@@ -200,18 +227,23 @@ if ((UNINSTALL)); then
   # gone. What does have to go is the id in plugins[] — that list is what makes
   # the shell load it, and leaving it means loading a plugin with no files.
   local_cfg="$CONFIG_HOME/omarchy/shell.json"
-  if [[ -f $local_cfg ]] && command -v python3 >/dev/null &&
+  cfg_state=9
+  if [[ -f $local_cfg ]] && command -v python3 >/dev/null; then
     python3 - "$local_cfg" "$PLUGIN_ID" <<'PY' 2>/dev/null
 import json, sys
 try:
     plugins = json.load(open(sys.argv[1])).get("plugins") or []
 except Exception:
-    sys.exit(1)
+    sys.exit(2)
 def name(e):
     return e.get("id") if isinstance(e, dict) else e
 sys.exit(0 if any(name(e) == sys.argv[2] for e in plugins) else 1)
 PY
-  then
+    cfg_state=$?
+  fi
+  if ((cfg_state == 2)); then
+    warn "could not read $local_cfg — $PLUGIN_ID may still be in its plugin list"
+  elif ((cfg_state == 0)); then
     cp -p "$local_cfg" "$local_cfg.before-oxy.$(date +%s)"
     BO_FORGET_ID="$PLUGIN_ID" BO_FORGET_CONFIG="$local_cfg" python3 - <<'PY' 2>/dev/null
 import json, os
@@ -247,7 +279,11 @@ PY
 
   # Deleting the clone is a separate question from unlinking: it is where your
   # keybind preset edit lives, so --purge asks the filesystem, not a flag alone.
-  if [[ -d $INSTALL_DIR ]]; then
+  # Never offered when the checkout is this script's own repo — that one is the
+  # user's working copy, not a disposable clone.
+  self_real=$(cd "$SELF_DIR" 2>/dev/null && pwd -P)
+  inst_real=$(cd "$INSTALL_DIR" 2>/dev/null && pwd -P)
+  if [[ -d $INSTALL_DIR && ( -z $inst_real || $inst_real != "$self_real" ) ]]; then
     if ((PURGE)) || ask "Also delete the clone at $INSTALL_DIR?" n; then
       if wipe_checkout "$INSTALL_DIR"; then
         ok "deleted $INSTALL_DIR"
@@ -258,6 +294,8 @@ PY
     else
       note "clone kept at $INSTALL_DIR"
     fi
+  elif [[ -d $INSTALL_DIR ]]; then
+    note "the checkout is this script's own repo — left alone"
   fi
 
   # Report anything the install ever set aside, so a clean removal actually
@@ -344,6 +382,10 @@ install_body() {
         else
           die "could not reach the remote — $fetch_err"
         fi
+      # A branch that is not on the remote fails the pull with git's own
+      # wording; naming it here says what to fix instead.
+      elif ! git -C "$INSTALL_DIR" rev-parse --verify --quiet "origin/$BRANCH" >/dev/null; then
+        die "branch $BRANCH is not on $REPO_URL — check OXY_BRANCH"
       # Rebase with autostash: editing keys.lua in place is the supported way
       # to set the keybind, so a dirty tree is the expected state on every
       # update, not an error — stash, fast-forward, put the edits back. A
@@ -375,10 +417,12 @@ install_body() {
     fi
   fi
 
-  # A checkout that git calls healthy but is missing the plugin is just as
+  # A checkout that git calls healthy but is missing pieces is just as
   # broken — the driver will offer to start over.
-  [[ -f $INSTALL_DIR/plugin/manifest.json && -f $INSTALL_DIR/install.sh ]] ||
+  if [[ ! -f $INSTALL_DIR/plugin/manifest.json || ! -f $INSTALL_DIR/install.sh ||
+    ! -d $INSTALL_DIR/bin || ! -d $INSTALL_DIR/config || ! -d $INSTALL_DIR/plugin ]]; then
     die "the checkout at $INSTALL_DIR is missing files — it cannot be installed from"
+  fi
 
   # ------------------------------------------------------------ dependencies
 
@@ -484,8 +528,11 @@ LUA
       ok "wrote $loader"
     fi
     grep -q 'require("hypr.modules")' "$main" || {
-      printf '\n-- load every linked module from ~/.config/hypr/modules.d\nrequire("hypr.modules")\n' >>"$main"
-      ok "added require to hyprland.lua"
+      if printf '\n-- load every linked module from ~/.config/hypr/modules.d\nrequire("hypr.modules")\n' >>"$main"; then
+        ok "added require to hyprland.lua"
+      else
+        warn "could not write to $main — add require(\"hypr.modules\") by hand"
+      fi
     }
     for file in "$INSTALL_DIR"/hypr/*.lua; do
       [[ -e $file ]] || continue
@@ -501,29 +548,38 @@ LUA
   # ---------------------------------------------------------------- enable
 
   step "Turning it on"
-  if command -v omarchy-shell >/dev/null; then
+  command -v omarchy-shell >/dev/null && {
     omarchy-shell shell rescanPlugins >/dev/null 2>&1
     sleep 1
-    # `plugin enable` appends the plugin to its default section. On one the
-    # layout already knows, that would move it and drop its settings, so an
-    # existing placement is only reloaded.
-    if command -v omarchy >/dev/null; then
-      if python3 - "$PLUGIN_ID" <<'PY' 2>/dev/null
+  }
+  # `plugin enable` writes shell.json — the running shell needs reloadConfig to
+  # see it, and a not-yet-running one picks it up on next start. So enable only
+  # needs `omarchy`; the live reload needs `omarchy-shell`.
+  if command -v omarchy >/dev/null; then
+    if python3 - "$PLUGIN_ID" <<'PY' 2>/dev/null
 import json, os, sys
+# Skipping `plugin enable` is only safe when both halves are already right:
+# the layout keeps its place, and plugins[] is what makes the shell load it.
+# A layout entry without the list entry renders nothing.
 try:
-    layout = json.load(open(os.path.expanduser("~/.config/omarchy/shell.json")))["bar"]["layout"]
+    config = json.load(open(os.path.expanduser("~/.config/omarchy/shell.json")))
 except Exception:
     sys.exit(1)
-sys.exit(0 if any(w.get("id") == sys.argv[1] for s in layout.values() for w in s) else 1)
+layout = (config.get("bar") or {}).get("layout") or {}
+plugins = config.get("plugins") or []
+def name(e):
+    return e.get("id") if isinstance(e, dict) else e
+in_layout = any(w.get("id") == sys.argv[1] for s in layout.values() for w in s)
+in_plugins = any(name(e) == sys.argv[1] for e in plugins)
+sys.exit(0 if (in_layout and in_plugins) else 1)
 PY
-      then
-        omarchy-shell shell reloadConfig >/dev/null 2>&1
-        ok "kept its position in the shell"
-      else
-        omarchy plugin enable "$PLUGIN_ID" >/dev/null 2>&1 &&
-          ok "enabled" ||
-          warn "could not enable it — run: omarchy plugin enable $PLUGIN_ID"
-      fi
+    then
+      omarchy-shell shell reloadConfig >/dev/null 2>&1
+      ok "kept its position in the shell"
+    else
+      omarchy plugin enable "$PLUGIN_ID" >/dev/null 2>&1 &&
+        ok "enabled" ||
+        warn "could not enable it — run: omarchy plugin enable $PLUGIN_ID"
     fi
   else
     note "no shell to talk to — it will be picked up when Omarchy starts"

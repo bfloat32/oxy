@@ -57,7 +57,7 @@
 // while this extension's rows are actually on screen, and it stops the moment
 // the query changes.
 //
-// See EXTENSIONS.md for the socket protocol.
+// See docs/EXTENSIONS.md for the socket protocol.
 
 var TIERS = { calc: 9, forced: 8, prefix: 7, substring: 6, weak: 5, file: 4, web: 1 }
 

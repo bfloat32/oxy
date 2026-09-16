@@ -319,7 +319,7 @@ uninvited beside your search results is a way to clear your history by accident.
 
 An extension file may also carry an `actions` block, and those join this list:
 each is namespaced by the extension's id, so two extensions can both offer
-`auth` without one shadowing the other. See EXTENSIONS.md for the shape.
+`auth` without one shadowing the other. See docs/EXTENSIONS.md for the shape.
 
 ---
 
@@ -626,7 +626,7 @@ Three things that had to be got right, each found by testing:
 
 Searching Spotify's own catalogue properly needs the Web API, which needs a
 Spotify developer app. That ships here too, as `sp:`, and stays silent until you
-run `oxy-spotify-auth`. See [SPOTIFY-LIBRARY.md](SPOTIFY-LIBRARY.md).
+run `oxy-spotify-auth`. See [docs/SPOTIFY-LIBRARY.md](docs/SPOTIFY-LIBRARY.md).
 
 ---
 
@@ -830,7 +830,7 @@ one on this list: `Ctrl+Enter` streams into it, and an extension that names
 A view name that no `Result*.qml` provides also falls back to `list`, and fails
 in `bo test`.
 
-See [EXTENSIONS.md](EXTENSIONS.md) for the socket protocol and the longer
+See [docs/EXTENSIONS.md](docs/EXTENSIONS.md) for the socket protocol and the longer
 version of all of this.
 
 ---

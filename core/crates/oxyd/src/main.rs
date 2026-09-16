@@ -24,7 +24,7 @@ use tokio::sync::{broadcast, mpsc};
 
 #[cfg(unix)]
 use interprocess::local_socket::{
-    tokio::prelude::*, traits::tokio::Listener as _, GenericFilePath, ListenerOptions, ToFsName,
+    tokio::prelude::*, GenericFilePath, ListenerOptions, ToFsName,
 };
 #[cfg(windows)]
 use interprocess::local_socket::{tokio::prelude::*, GenericNamespaced, ListenerOptions, ToNsName};

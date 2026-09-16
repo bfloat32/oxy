@@ -636,15 +636,18 @@ LUA
     { warn "extension links missing under $CONFIG_HOME/omarchy/oxy"; ((++problems)); }
   # The daemon answering over the socket is the check nothing else covers —
   # `oxy query` falls back to an in-process engine, so only `oxy send` proves
-  # the wire works. If no daemon is up yet, start one and probe again.
+  # the wire works. If no daemon is up yet, start one and probe again. Both
+  # ends are bounded: a verify step that can hang forever is not a check.
   if [[ -x $BIN_DIR/oxy && -x $BIN_DIR/oxyd ]]; then
     daemon_up() {
-      printf '{"op":"ping"}\n' | timeout 3 "$BIN_DIR/oxy" send 2>/dev/null |
+      printf '{"op":"ping"}\n' | timeout 5 "$BIN_DIR/oxy" send 2>/dev/null |
         grep -q '"op":"pong"'
     }
     probe_pid=""
     if ! daemon_up; then
-      "$BIN_DIR/oxyd" >/dev/null 2>&1 &
+      # </dev/null matters: the script's own stdin may be a still-open curl
+      # pipe, and a daemon that inherits it holds the installer open.
+      "$BIN_DIR/oxyd" >/dev/null 2>&1 </dev/null &
       probe_pid=$!
       sleep 1
     fi
@@ -657,11 +660,14 @@ LUA
     [[ -n $probe_pid ]] && kill "$probe_pid" 2>/dev/null
   fi
   if command -v omarchy >/dev/null; then
-    if omarchy plugin validate "$PLUGIN_DIR" >/dev/null 2>&1; then
+    # Same two guards: a validator that waits on the piped stdin or takes a
+    # shell call that never returns would otherwise stall the install at the
+    # last step.
+    if timeout 15 omarchy plugin validate "$PLUGIN_DIR" </dev/null >/dev/null 2>&1; then
       ok "omarchy plugin validate passed"
     else
-      warn "omarchy plugin validate failed:"
-      omarchy plugin validate "$PLUGIN_DIR" 2>&1 | sed 's/^/     /'
+      warn "omarchy plugin validate failed or timed out:"
+      timeout 15 omarchy plugin validate "$PLUGIN_DIR" </dev/null 2>&1 | sed 's/^/     /'
       ((++problems))
     fi
   fi

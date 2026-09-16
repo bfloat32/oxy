@@ -80,6 +80,41 @@ test("argFor merges the filter value and the free text", () => {
   assert.equal(Query.argFor(q, "file", []), "report budget")
 })
 
+test("argFor resolves through an alias", () => {
+  const known = KNOWN.concat("song")
+  const q = Query.parse("song:blue", 1, known)
+  assert.equal(Query.argFor(q, "music", ["song"]), "blue")
+})
+
+test("extras keeps a provider's own keyword out", () => {
+  const q = Query.parse("music:blue format:flac", 1, KNOWN)
+  const x = Query.extras(q, "music", [])
+  assert.equal(x.music, undefined)
+  assert.equal(x.format, "flac")
+})
+
+test("a quoted filter keeps its spaces", () => {
+  const q = Query.parse('music:"kind of blue"', 1, KNOWN)
+  assert.equal(q.filters.music, "kind of blue")
+  assert.equal(q.text, "")
+})
+
+test("a bare keyword: is an empty filter, not a stray word", () => {
+  const q = Query.parse("file:", 1, KNOWN)
+  assert.equal(q.scope, "file")
+  assert.equal(q.filters.file, "")
+  assert.equal(q.empty, false)
+})
+
+test("scope is the first filter when there are two", () => {
+  const q = Query.parse("format:pdf file:report", 1, KNOWN)
+  assert.equal(q.scope, "format")
+})
+
+test("an empty query is empty", () => {
+  assert.equal(Query.parse("   ", 1, KNOWN).empty, true)
+})
+
 // -------------------------------------------------------------- Extensions
 
 const EXT = {
@@ -134,6 +169,48 @@ test("parseRows skips a mise-style preamble line", () => {
 test("parseRows accepts one JSON object per line", () => {
   const rows = Extensions.parseRows('{"id":"a","title":"A"}\n{"id":"b","title":"B"}')
   assert.equal(rows.length, 2)
+})
+
+test("parseRows wraps a single object as one row", () => {
+  const rows = Extensions.parseRows('{"id":"only","title":"Just one"}')
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].id, "only")
+})
+
+test("normalize keeps a socket-only extension", () => {
+  const e = Extensions.normalize({ id: "agent", socket: "/tmp/oxy-agent.sock" }, "/x.json")
+  assert.equal(e.socket, "/tmp/oxy-agent.sock")
+  assert.equal(e.search, "")
+})
+
+test("normalize maps tier names and defaults", () => {
+  assert.equal(Extensions.normalize({ ...EXT, tier: "calc" }, "/x.json").tier, 9)
+  assert.equal(Extensions.normalize(EXT, "/x.json").tier, 6)
+  assert.equal(Extensions.normalize({ ...EXT, tier: "bogus" }, "/x.json").tier, 6)
+})
+
+test("cacheKey for a socket spells out the question", () => {
+  const k1 = Extensions.cacheKey({ socket: "/s" }, "", "find me", { a: "1" })
+  const k2 = Extensions.cacheKey({ socket: "/s" }, "", "find me", { a: "2" })
+  const k3 = Extensions.cacheKey({ socket: "/s" }, "", "find me", { a: "1" })
+  assert.notEqual(k1, k2)
+  assert.equal(k1, k3)
+})
+
+test("toRow passes custom fields through and clamps score", () => {
+  const e = Extensions.normalize(EXT, "/x.json")
+  const row = Extensions.toRow(e, { id: "x", title: "T", score: 5e6, delta: "2h", key: "mine" }, 0)
+  assert.equal(row.delta, "2h")
+  assert.equal(row.local, 99999)
+  assert.equal(row.key, "ext:spotify:x")
+  const neg = Extensions.toRow(e, { id: "y", score: -50 }, 0)
+  assert.equal(neg.local, 0)
+})
+
+test("a row's view overrides the extension's", () => {
+  const e = Extensions.normalize({ ...EXT, view: "list" }, "/x.json")
+  assert.equal(Extensions.toRow(e, { id: "h", view: "hero" }, 0).view, "hero")
+  assert.equal(Extensions.toRow(e, { id: "p" }, 1).view, "list")
 })
 
 // ------------------------------------------------------------------- Cache

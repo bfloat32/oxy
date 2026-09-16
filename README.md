@@ -21,6 +21,12 @@ rather than overwritten. Running the same line again updates; running
 `install.sh --uninstall` from the clone takes it back out and leaves your
 settings, pins and history.
 
+The installer checks for what the core keywords need — `qalc`, `jq`, `curl`,
+`fd`, `mpv`, `python3`, `git`, `wl-copy`, `busctl` (systemd) and `cal`
+(util-linux) — and offers to `pacman -S` whatever is missing. Optional tools
+like `gh`, `docker`, `playerctl` and `socat` are only named: a keyword whose
+`when` test fails simply stays hidden, so nothing you lack ever looks broken.
+
 If an install ever misbehaves: a corrupt checkout repairs itself on the next
 run (the broken clone is moved aside, never deleted), and any other failure
 offers to wipe the checkout and try again clean. `install.sh --fresh` forces
@@ -297,9 +303,11 @@ launcher hands them to the script as environment: a key `cacheDays` arrives as
 `$OXY_CACHEDAYS`. Environment rather than an argument, because an argument
 is visible in every process listing on the machine.
 
-Two of the three read it. `def:` reads `$OXY_CACHEDAYS` and `repo:` reads
-`$OXY_ROOTS`. `tz:` still takes its zones from `timezones` in
-`oxy.json` and ignores the setting it declares.
+All three read theirs: `def:` honours `$OXY_CACHEDAYS`, `repo:` honours
+`$OXY_ROOTS`, and `tz:` honours `$OXY_ZONES` — a comma-separated line of zone
+names resolved the same loose way a `tz:` query is. The env value wins over
+`timezones` in `oxy.json`, because the thing just typed means more than the
+file edited last month.
 
 ### `/` actions
 
@@ -636,51 +644,27 @@ run `oxy-spotify-auth`. See [docs/SPOTIFY-LIBRARY.md](docs/SPOTIFY-LIBRARY.md).
 
 ## The built-in extensions
 
-These ship inside this unit because none of them works without it. They are
-scripts in `bin/` plus a JSON file in `config/omarchy/oxy/extensions/`, and
-they are the working examples to copy when writing your own.
+Each keyword above is one `oxy-*` script in `bin/` plus a JSON file in
+`config/omarchy/oxy/extensions/` — nothing compiled, nothing hidden. They
+are the working examples to copy when writing your own; the full field and
+row reference is [docs/EXTENSIONS.md](docs/EXTENSIONS.md).
 
-| Keyword | Script | Notes |
-|---|---|---|
-| `file:` | `oxy-search-files` | fd, re-ranked by depth and match position |
-| `img:` | `oxy-search-images` | newest first, dimensions from ImageMagick when present |
-| `win:` | `oxy-search-windows` | hyprctl, focuses and closes through the Lua dispatcher |
-| `kill:` | `oxy-kill` | biggest first, two characters minimum |
-| `emoji:` | `oxy-emoji` | reads Omarchy's own emoji data in place |
-| `snip:` | `oxy-snippet` | silent until the snippets file exists |
-| `recent:` | `oxy-recent` | recently-used.xbel, minus what has since been deleted |
-| `repo:` | `oxy-repo` | one fd walk, git only for the rows actually shown |
-| `git:` | `oxy-git` | the focused terminal's repo, else the one touched last |
-| `branch:` | `oxy-git-branch` | one for-each-ref, ahead/behind against upstream and trunk |
-| `stash:` | `oxy-git-stash` | one call per stash for its files; no drop, on purpose |
-| `gh:` | `oxy-gh` | the shared GitHub engine; a slug or URL answers before the request |
-| `pr:` `issue:` `ci:` | `oxy-gh-pr` etc | thin wrappers on the same engine, one mode each |
-| `ssh:` | `oxy-ssh` | ~/.ssh/config, Include followed, wildcard hosts skipped |
-| `docker:` | `oxy-docker` | gated on the daemon answering, not on the binary existing |
-| `spotify:` | `oxy-search-music` | MPRIS for the player, Deezer for search |
-| `sp:` | `oxy-spotify` | Web API search, after `oxy-spotify-auth` |
-| `radio:` | `oxy-search-radio` | radio-browser.info, plays through mpv |
-| `ch:` | `oxy-clipboard-history` | reads the file Omarchy's own overlay writes |
-| `note:` | `oxy-note` | one markdown file per note |
-| `alarm:` | `oxy-alarm` | plain language duration |
-| `theme:` | `oxy-theme` | every theme, current one first, applied as you move |
-| `omarchy:` | `oxy-omarchy` | flattens the real menu, so nothing here is a stale hand copy |
-| `cal:` | `oxy-calendar` | sends the numbers, the view draws the grid |
-| `date:` | `oxy-date` | answers unscoped, so its gate is deliberately narrow |
-| `tz:` | `oxy-timezone` | zone names matched loosely, Discord timestamps both ways |
-| `unit:` | `oxy-unit` | qalc, with the phrasing traps fixed |
-| `def:` | `oxy-define` | dictionaryapi.dev, keyless, kept for 30 days |
-| `sys:` | `oxy-system` | every reading optional, skipped when absent |
-| `calc:` | `oxy-calc-history` | written when an answer is accepted, never by a keystroke |
-| `pass:` | `oxy-pass` | `pass` or `op`, whichever is there; the secret only ever reaches wl-copy |
-| `bt:` | `oxy-bluetooth` | bluetoothctl reads, `omarchy-bluetooth-device` acts, so rfkill is handled |
-| `wifi:` | `oxy-wifi` | saved networks connect from the row, new ones go to the network panel |
-| `vol:` | `oxy-volume` | sliders; output resolved through any DSP sink to the real one |
-| `bri:` | `oxy-brightness` | a slider, through `omarchy-brightness-display`, which knows DDC from backlight |
-| `do:` | `oxy-agent` | answers over a unix socket rather than a process per keystroke |
-| `shortcuts:` | `oxy-shortcuts` | `omarchy-menu-keybindings --print` first, `hyprctl binds -j` as the fallback |
-| `herdr:` | `oxy-herdr` | one snapshot per running herdr session, and reading marks nothing seen |
-| `bo:` | `oxy-bo` | three levels of marketplace, and the toggle that closes the window |
+A few design decisions worth knowing because they are easy to break:
+
+- **`repo:` discovery is cached, status is not.** The list of repositories
+  under your roots is scanned once and reused; each row's branch and dirty
+  state is computed live and re-validated after the answer shows, so a
+  commit lands on screen one query later, not never. Untracked files count
+  toward dirty, and git worktrees — a `.git` *file*, not a directory — are
+  discovered too.
+- **Structured data never travels through shell quoting.** Scripts emit
+  fields separated by a unit separator, so a tab or newline inside a commit
+  subject, stash message or filename cannot corrupt the row carrying it.
+  And anything untrusted — a Wi-Fi SSID, a branch name — is quoted before
+  it touches a shell.
+- **`file:` matches literally.** `a.b` finds `a.b`, not `axb` — `fd` runs
+  fixed-string, and `file://` artwork URLs are percent-encoded so `#` and
+  spaces in a name still draw a thumbnail.
 
 ---
 
@@ -710,132 +694,25 @@ shell script, a Python file, or anything else that writes to stdout. Anything
 printed before the JSON starts is skipped, because tools like mise announce
 themselves the first time a shimmed binary runs.
 
-### What the file can say
+The fields that matter most:
 
-| Field | Default | What |
-|---|---|---|
-| `id` | required | how it is addressed everywhere else, including settings |
-| `keyword` | the id | what you type before the colon |
-| `aliases` | `[]` | other names for the same thing |
-| `title` | the id | the name in the `?` list, and the default group above its rows |
-| `subtitle` | the title | the fallback subtitle on every row it returns |
-| `glyph` | `""` | the fallback icon on every row it returns |
-| `accent` | `""` | one colour for this extension's rows, walked to something legible on the card |
-| `search` | required | the command. `{query}` is the shell-quoted search text, `{anything}` is another declared filter's value, so `music:blue year:1959` arrives as two arguments |
-| `filters` | `[]` | extra filter names to parse out of the query, beyond the keyword and aliases. Undeclared, `year:1959` stays literal text — which is also what keeps `https://…` from being read as a filter |
-| `socket` | `""` | a unix socket to ask instead of running a command. The launcher wants one of `search` or `socket`; with neither, the extension is dropped rather than sitting in the keyword list doing nothing. `bo test` is stricter and fails a file with no `search`, so declare both |
-| `when` | `""` | a shell test, run **once** at load. An extension for software you do not have costs nothing |
-| `always` | `false` | answer unscoped queries too. Off, because a launcher that shells out to six services per keystroke is one nobody keeps |
-| `view` | `"list"` | the layout, see below |
-| `tier` | `"substring"` | where its rows sort against everything else: `calc`, `forced`, `prefix`, `substring`, `weak`, `file`, `web` |
-| `minChars` | `1` | how much you must type before it runs |
-| `debounceMs` | `200` | how long to wait after the last keystroke |
-| `timeoutMs` | `4000` | when to give up |
-| `maxRows` | `8` | how many rows to keep |
-| `cacheMs` | `0` | keep an answer this long. Off by default on purpose: what is playing, which containers are up and what is on the clipboard are all wrong the moment you act on them, and nothing here can tell those from a dictionary lookup. The key is the exact command, so a cached answer can never reach a different question |
-| `refreshMs` | `0` | re-run this often while these rows are on screen: no spinner, no flicker, the selection stays put. Only while the launcher is open, and it stops the moment the query changes |
-| `settings` | `[]` | fields `settings:` will ask for and write to `extensionSettings.<id>` in `oxy.json`, each `{ key, label, value, placeholder, secret }`. The launcher puts them in front of your command as environment, so `cacheDays` arrives as `$OXY_CACHEDAYS`. Never an argument: an argument is in everyone's process list |
-| `testQuery` | `""` | what `bo test` types at this extension when it checks that every action names a program that exists |
-
-`bo test` reads two more things off this file. `view` has to name a
-`Result*.qml` that exists, and `tier` has to be one of the seven above.
-
-### What a row can say
-
-The minimum is `{ id, title, subtitle, exec }`. A row with an empty `title` is
-dropped, and it is dropped after `maxRows` has counted it. Beyond the minimum:
-`detail`, `accessory`, `icon`, `glyph`, `art`, `preview`, `group`, `mono`,
-`score`, `progress`, `view`, `copyText`, and its own `actions`.
-
-`copyText` is what `Ctrl+C` on the row puts on the clipboard — a file's path,
-an emoji's character — where the title alone is not the useful text. Without
-it, `Ctrl+C` copies `detail`, then `title`.
-
-Four more decide what `Enter` does to the row:
-
-- `fill` types that text into the box and runs nothing. It wins over everything
-  else on the row.
-- `keepOpen: true` keeps the launcher up.
-- `clearTo` empties the box to that text afterwards, which is what makes `do:`
-  a chat rather than one sentence you cannot get out of.
-- `escExec` is the command `Escape` runs on this row, so a row that is still
-  working is stopped by the key that looks like it stopped it.
-
-Only the **first** row's `view` is read, so put the row that decides the layout
-first. A row's own `score` orders it against its siblings and never crosses a
-tier, so an extension cannot outrank the calculator by returning a big number.
-
-An action is `{ title, exec }`. Add `query` and running it lands you on that
-query instead of closing the launcher, which is how playing a track returns you
-to the player. A `query` on the **first** action also takes over `Enter` on the
-row itself. Add `keepOpen: true` when all the action does is change something
-the launcher will show next; without it the launcher closes, which is right for
-anything that starts a program and wrong for anything that does not.
-
-`shortcut` is a string the action panel prints beside the title. Nothing binds
-it. `confirm` works on the launcher's own `/` actions and is ignored on a row's
-action.
-
-**Any field the launcher has not already named is passed through untouched.** A
-view can therefore read fields nobody has heard of yet, which is how new views
-get built without editing the row builder. Nine names are the launcher's own and
-are dropped: `key`, `providerId`, `tier`, `local`, `score`, `run`, `pending`,
-`icon` and `glyph`. The last two are still read, as `iconSource` and
-`iconGlyph`.
-
-### `view` picks the layout
-
-| view | For |
+| Field | What |
 |---|---|
-| `list` | a choice between named things. The default |
-| `hero` | one answer that is the point: a sum, a date, a conversion |
-| `cards` | things you recognise by their picture |
-| `grid` | things you pick by looking |
-| `split` | things whose content matters more than their name |
-| `dashboard` | readings, some of which are proportions |
-| `calendar` | a month |
-| `player` | what is playing, with a position bar that ticks between readings |
-| `slider` | a number you drag, written back with `setExec` as you move |
-| `form` | fields to fill in before anything happens. Takes the keyboard from the box |
-| `zones` | a column of clocks |
-| `timegrid` | one row per person, one cell per hour |
-| `gitrepo` | one repo: branch, uncommitted work, recent commits |
-| `gitbranches` | branches with the marks that decide: checked out, ahead, stale |
-| `gitstashes` | stashes, the selected one expanded into its files |
-| `ghrepo` | one GitHub repo: open PRs, checks, head commit, newest release |
-| `ghpr` | one pull request, its status drawn once and large |
-| `agent` | a chat with something that acts |
-| `docker` | containers, as a panel of machines |
-| `notes` | your notes, drawn as notes |
-| `processes` | what is running, and what it is costing |
-| `emoji` | a wall of emoji, with the name of the one under the cursor |
-| `themes` | themes drawn in their own colours |
-| `windows` | the session, drawn as the desktop it describes |
-| `hosts` | hosts, drawn as machines rather than as config lines |
-| `files` | files, drawn as files. Serves `file:` and `recent:` |
-| `repos` | local checkouts, drawn as checkouts |
-| `radios` | what is on the air around you, and which one you are joined to |
-| `radioplayer` | a stream playing, and the stations under it |
-| `menutree` | a menu, drawn as a menu |
-| `snippets` | your snippets, drawn as the text they are |
-| `vault` | your password store, drawn as a store |
-| `shortcuts` | this machine's keymap, drawn as keys |
-| `herdr` | agents, sorted by what they need from you |
-| `marketplacehome` | marketplaces, and the units you have |
-| `marketplace` | one marketplace's units, as tiles |
-| `marketplaceunit` | one unit, and the switch for it |
-| `loading` | a skeleton in the shape of the answer, so the card never says "nothing matches" before it has looked |
+| `when` | a shell test run once at load, with an eight-second bound — an extension for software you do not have costs nothing |
+| `filters` | extra `name:value` filters to parse out of the query; undeclared, `year:1959` stays literal text |
+| `cacheMs` / `refreshMs` | both off by default, on purpose: live state is wrong the moment you act on it, and a timer nobody asked for is a process a second |
+| `view` | one of ~37 layouts — `list`, `hero`, `calendar`, `timegrid`, `gitrepo`, `slider`, `agent`, `marketplace`… the full table is in [docs/EXTENSIONS.md](docs/EXTENSIONS.md) |
+| `socket` | a unix socket to ask instead of a process per keystroke |
 
-The launcher draws `loading` itself while a slow answer is still coming, so no
-extension needs to name it. `ResultAnswer.qml` is a view in the folder and not
-one on this list: `Ctrl+Enter` streams into it, and an extension that names
-`answer` gets `list`.
+Rows are `{ id, title, subtitle, exec }` plus whatever your own view needs:
+fields the launcher has not already named pass through untouched, so a new
+view needs no change to the row builder. `fill`, `keepOpen`, `clearTo` and
+`escExec` decide what `Enter` and `Escape` do to the row, and an action's
+`query` navigates instead of closing.
 
-A view name that no `Result*.qml` provides also falls back to `list`, and fails
-in `bo test`.
-
-See [docs/EXTENSIONS.md](docs/EXTENSIONS.md) for the socket protocol and the longer
-version of all of this.
+The complete schema — every extension field, every row field, the socket
+protocol, `settings:`, and how `.cases.json` assertions work — is
+[docs/EXTENSIONS.md](docs/EXTENSIONS.md).
 
 ---
 
@@ -845,14 +722,73 @@ version of all of this.
 plugin/          the QML: Launcher.qml, one Result*.qml per view, the .js logic
 bin/             one script per built-in extension
 config/          the extension JSON, mirrored into ~/.config on add
+tests/           the check suite: run.sh, logic, behavior and case tests
+docs/            EXTENSIONS.md, SPOTIFY-LIBRARY.md, LLM-INTEGRATION.md
 ```
 
 A `<name>.cases.json` sits beside `<name>.json` in the same directory and holds
-the assertions `bo test` runs against that keyword. Thirteen keywords ship one.
-The launcher globs the whole directory and a cases file survives only because
-it is an array rather than an object, so keep the two names in step.
+the assertions `bo test` — and this repo's own `tests/cases.py` — run against
+that keyword. Seventeen keywords ship one. The launcher globs the whole
+directory and a cases file survives only because it is an array rather than an
+object, so keep the two names in step.
 
-Editing QML wants a full `omarchy restart shell` to be certain. After each
-reload, check `journalctl --user -n 50 | grep -iE "TypeError|error"`: a
-TypeError inside a delegate binding renders a blank row rather than failing
-loudly, so nothing tells you otherwise.
+---
+
+## Testing
+
+```bash
+tests/run.sh                  # everything CI runs, locally
+tests/behavior.test.sh        # end-to-end script checks, in sandboxes
+python3 tests/cases.py        # the shipped .cases.json fixtures
+python3 tests/cases.py repo   # one extension's cases
+node --test tests/logic.test.mjs
+```
+
+The suite is four layers deep. Static checks cover bash and python syntax,
+shellcheck, executable bits, extension JSON and case-file shape, duplicate
+ids and keywords. The logic tests exercise the launcher's JavaScript modules
+— query parsing, filter handling, command building, caching, frecency —
+without a shell runtime. The behavior suite runs the real `bin/` scripts
+against temporary fixtures: hostile Wi-Fi SSIDs, git worktrees, dirty-tree
+detection, stale-while-revalidate caching, delimiter-safe parsing, IPv6
+docker URLs, multi-alias ssh hosts, half-hour timezones, and the installer's
+backup/restore cycle. The case runner answers the shipped `.cases.json`
+files in a throwaway `HOME` with a fixture git playground, and skips —
+rather than fails — an extension whose tools or data service are not on the
+machine.
+
+Nothing in the suite touches your real state: every test gets its own
+`HOME`, `XDG_*` and repository roots. What cannot run somewhere is skipped
+and says why — `setsid`, `qalc`, `cal`, an authenticated `gh`, tzdata — so a
+green run means what ran, held, and the output lists what did not run.
+
+GitHub Actions runs the same layers in two jobs — `static` and `behavior` —
+on every push and pull request, with `gh` authenticated so the live GitHub
+cases run for real.
+
+### What is not covered
+
+The QML half is verified statically, not on a running shell — there is no
+Quickshell in CI. The provider race handling, theme preview and navigation
+clamps are logic-reviewed but worth a smoke test on a real install. Anything
+hardware-bound — wifi, bluetooth, brightness, volume — is stub-tested or
+skipped rather than faked.
+
+---
+
+## Troubleshooting
+
+- **A keyword is missing.** Its `when` test failed — the tool it needs is
+  not installed. `?` lists only what loaded. `/stats` shows every loaded
+  extension, cached answers, and how many `when` checks pass.
+- **A row does nothing.** Check `journalctl --user -n 50 | grep -iE
+  "TypeError|error"` after `omarchy restart shell`: a TypeError inside a
+  delegate binding renders a blank row rather than failing loudly.
+- **Something misbehaved earlier.** `/logs` opens the event log — one JSON
+  line per keystroke, provider start/finish, timeout and stale drop, tied
+  together by query epoch. Hand it to an agent and ask.
+- **Install went sideways.** `install.sh` moves a broken clone aside rather
+  than deleting it; `--fresh` wipes and reinstalls, `--purge` uninstalls and
+  deletes the clone, `--uninstall` restores your `.before-oxy` files.
+- **Before reporting**, run `tests/run.sh` in the clone — if it is green
+  and your machine is not, the difference is the bug report.

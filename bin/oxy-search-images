@@ -69,6 +69,7 @@ fd "${args[@]}" -- "$query" "${roots[@]}" 2>/dev/null |
 
     dimensions=""
     if ((have_identify)); then
+      # shellcheck disable=SC1087 # path[0] is ImageMagick's first-frame syntax
       dimensions=$(identify -format '%wx%h' "$path[0]" 2>/dev/null || true)
     fi
 

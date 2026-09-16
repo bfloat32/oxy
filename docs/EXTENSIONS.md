@@ -44,7 +44,7 @@ Declared names reach the extension through both a `{name}` placeholder in
 | `subtitle` | `title` | the second line on any row that does not set its own |
 | `glyph` | `""` | the icon on any row that does not set its own |
 | `accent` | `""` | one colour for this extension's rows, walked to something legible on the card |
-| `when` | `""` | shell test; a nonzero exit hides the keyword |
+| `when` | `""` | shell test run once at load under `timeout 8s`; a nonzero exit hides the keyword |
 | `minChars` | `1` | do not run until the query is this long |
 | `debounceMs` | `200` | wait this long after the last keystroke |
 | `timeoutMs` | `4000` | kill a script that has not answered |
@@ -62,6 +62,53 @@ Declared names reach the extension through both a `{name}` placeholder in
 `web`. `view` is a `Result*.qml` in `plugin/`, named in lower case without the
 `Result`. The launcher silently falls back to `substring` and to `list` on a
 name it does not know; `bo test` fails on either.
+
+The layouts that exist today:
+
+| view | for |
+|---|---|
+| `list` | a choice between named things. The default |
+| `hero` | one answer that is the point: a sum, a date, a conversion |
+| `cards` | things you recognise by their picture |
+| `grid` | things you pick by looking |
+| `split` | things whose content matters more than their name |
+| `dashboard` | readings, some of which are proportions |
+| `calendar` | a month |
+| `player` | what is playing, with a position bar that ticks between readings |
+| `slider` | a number you drag, written back with `setExec` as you move |
+| `form` | fields to fill in before anything happens. Takes the keyboard from the box |
+| `zones` | a column of clocks |
+| `timegrid` | one row per person, one cell per hour |
+| `gitrepo` | one repo: branch, uncommitted work, recent commits |
+| `gitbranches` | branches with the marks that decide: checked out, ahead, stale |
+| `gitstashes` | stashes, the selected one expanded into its files |
+| `ghrepo` | one GitHub repo: open PRs, checks, head commit, newest release |
+| `ghpr` | one pull request, its status drawn once and large |
+| `agent` | a chat with something that acts |
+| `docker` | containers, as a panel of machines |
+| `notes` | your notes, drawn as notes |
+| `processes` | what is running, and what it is costing |
+| `emoji` | a wall of emoji, with the name of the one under the cursor |
+| `themes` | themes drawn in their own colours |
+| `windows` | the session, drawn as the desktop it describes |
+| `hosts` | hosts, drawn as machines rather than as config lines |
+| `files` | files, drawn as files. Serves `file:` and `recent:` |
+| `repos` | local checkouts, drawn as checkouts |
+| `radios` | what is on the air around you, and which one you are joined to |
+| `radioplayer` | a stream playing, and the stations under it |
+| `menutree` | a menu, drawn as a menu |
+| `snippets` | your snippets, drawn as the text they are |
+| `vault` | your password store, drawn as a store |
+| `shortcuts` | this machine's keymap, drawn as keys |
+| `herdr` | agents, sorted by what they need from you |
+| `marketplacehome` | marketplaces, and the units you have |
+| `marketplace` | one marketplace's units, as tiles |
+| `marketplaceunit` | one unit, and the switch for it |
+| `loading` | a skeleton in the shape of the answer, drawn by the launcher while a slow answer is still coming — no extension needs to name it |
+
+`ResultAnswer.qml` is a view in the folder and not one on this list:
+`Ctrl+Enter` streams into it, and an extension that names `answer` gets
+`list`.
 
 An extension file may also carry an `actions` array: `/` commands the
 extension itself owns, shown beside the built-in ones:
@@ -328,6 +375,31 @@ ok      weather cases          6 held
 `bo test <unit>` runs only that unit, which is the one to run while you are
 working. The script has to be on `PATH` for the cases to run at all, so link
 the unit first with `bo add <unit>`.
+
+### The in-repo runner: `tests/cases.py`
+
+The same case files also run without `bo`, from this repository:
+
+```bash
+python3 tests/cases.py          # every extension that can answer here
+python3 tests/cases.py repo     # just one
+```
+
+It is the same contract — the first word of `search` is called with the
+case's `query`, and `minRows`/`maxRows`/`row`/`view`/`fields`/`absent`/
+`atMost`/`matches` are checked the same way — inside a throwaway `HOME`, so
+nothing it does touches your real repos, caches or `oxy.json`. Two fixtures
+make the shipped cases work there: a small git playground with
+`oxy-fixture` (the repo the git-family cases are written against — a
+`login` branch two ahead and one behind `main`, two stashes, a dirty tree),
+plus `omarchy` and `gum` beside it, and a stub `claude` on `PATH` so the
+`do:` cases can build their drafts.
+
+An extension whose `when` fails, whose command is missing, or whose data
+service is unreachable (the dictionary API, `gh` without auth, no tzdata)
+is **skipped, not failed** — a case file cannot run where its extension
+cannot. On a real Omarchy install everything that can run, runs; CI runs
+this file too.
 
 ### When a case earns its place
 

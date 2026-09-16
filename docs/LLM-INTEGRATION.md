@@ -589,6 +589,11 @@ Rule: **an error is a row of text, never a silence and never a spinner.**
 
 ## 13. Testing plan
 
+The harnesses below already exist: `tests/behavior.test.sh` runs real
+scripts against sandboxed fixtures (fake `nmcli`, temp git repos, fakebin
+stubs) and `tests/cases.py` runs the shipped `.cases.json` files under a
+throwaway `HOME` — `ask.cases.json` slots into both without new machinery.
+
 **`oxy-ask` (the logic core — where the bugs will live):**
 
 - **Stub SSE server** (python `http.server`, emits canned

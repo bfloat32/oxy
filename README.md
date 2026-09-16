@@ -1,4 +1,4 @@
-# oxy
+# Ωᵡ₄Y
 
 A launcher. One box that answers with apps, arithmetic, files, git, music, your
 notes and the web, and draws each of those the way it deserves rather than as
@@ -460,6 +460,10 @@ folded in, because a CLI that reads stdin otherwise waits, and some print a
 warning into the middle of the answer.
 
 Escape leaves the answer. So does typing.
+
+A multi-turn `ask:` chat surface — subscription CLIs, API-keyed endpoints and
+local models behind one provider registry — is designed in
+[docs/LLM-INTEGRATION.md](docs/LLM-INTEGRATION.md).
 
 ---
 

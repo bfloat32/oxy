@@ -602,8 +602,8 @@ LUA
     # and linking it here would put both launchers on the same key.
     link_path "$INSTALL_DIR/hypr/keys-rs.lua" "$HYPR_MODULES/oxyrs-keys.lua" ||
       warn "could not link the keybinding"
-    ok "keys-rs.lua -> $HYPR_MODULES/oxyrs-keys.lua (Super+Ctrl+K)"
-    hyprctl reload >/dev/null 2>&1 && note "hyprland reloaded — Super+Ctrl+K is live"
+    ok "keys-rs.lua -> $HYPR_MODULES/oxyrs-keys.lua (Super+R)"
+    hyprctl reload >/dev/null 2>&1 && note "hyprland reloaded — Super+R is live"
   else
     warn "$main not found — link skipped."
     note "Source $INSTALL_DIR/hypr/keys-rs.lua from your Hyprland config by hand."
@@ -680,7 +680,7 @@ LUA
 
   cat <<EOF
 
-   $(bold 'Press') $(cyan 'Super+Ctrl+K') $(bold 'for the Rust build,') $(cyan 'Super+K') $(bold 'for the script one.')
+   $(bold 'Press') $(cyan 'Super+R') $(bold 'for the Rust build,') $(cyan 'Super+K') $(bold 'for the script one.')
    They share settings, extensions, pins and history — compare away.
 
    Keybind:         edit the one line at the top of $INSTALL_DIR/hypr/keys-rs.lua

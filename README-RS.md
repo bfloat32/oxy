@@ -35,7 +35,7 @@ curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
 That clones this branch to `~/.local/share/oxy-rs` (through your git
 credentials), builds `oxyd` and `oxy` with `cargo build --release` into
 `~/.local/bin`, registers a second plugin as `oma.oxyrs`, and binds it to
-`Super+Ctrl+K`. The stock install keeps `oma.oxy`, `Super+K`, and every `oxy-*`
+`Super+R`. The stock install keeps `oma.oxy`, `Super+K`, and every `oxy-*`
 command exactly as they were.
 
 Shared on purpose: the extension manifests, `oxy.json`, pins, frecency and

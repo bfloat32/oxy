@@ -1,0 +1,816 @@
+#!/bin/bash
+# Emits JSON rows for Omacast's `tz:` keyword: what time it is somewhere else,
+# and what a time here is there.
+#
+#   tz:                       every zone you configured, plus your own
+#   tz:tokyo                  what time it is there now
+#   tz:3pm tokyo              3pm here, read there, and in every configured zone
+#   tz:9am tokyo in london    between two named zones, neither of them yours
+#   tz:<t:1735689600:F>       a Discord timestamp, in every configured zone
+#   tz:1735689600             a bare unix timestamp, the same way
+#
+# Zones come from `timezones` in ~/.config/omarchy/omacast.json, a list of
+# { "label": "Ana", "zone": "Europe/Lisbon" }. The label is what you type and
+# what you read, so a zone can be a person rather than a city, which is what
+# anyone actually wants from this.
+#
+# Every resolved time can be copied back out as a Discord timestamp in all nine
+# of its styles, because the whole reason to work out that 3pm is 9pm for
+# somebody else is usually to then tell them so.
+#
+# The day is shown whenever it differs from yours. That is the thing people get
+# wrong, and a bare "09:00" hides it completely.
+
+set -uo pipefail
+
+query="${1:-}"
+config="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/omacast.json"
+
+command -v jq >/dev/null || exit 0
+
+local_zone=$(timedatectl show -p Timezone --value 2>/dev/null)
+[[ -z $local_zone ]] && local_zone=$(readlink -f /etc/localtime 2>/dev/null | sed 's#.*/zoneinfo/##')
+[[ -z $local_zone ]] && local_zone="UTC"
+
+# The configured zones, in the order they were written. Order is a choice the
+# user made, so it is not re-sorted here.
+labels=()
+zones=()
+if [[ -f $config ]]; then
+  while IFS=$'\t' read -r label zone; do
+    [[ -z $zone ]] && continue
+    [[ -e "/usr/share/zoneinfo/$zone" ]] || continue
+    labels+=("$label")
+    zones+=("$zone")
+  done < <(jq -r '(.timezones // [])[]? | select(.zone) | "\(.label // .zone)\t\(.zone)"' "$config" 2>/dev/null)
+fi
+
+# A default set that covers the zones a working day usually crosses. Anyone who
+# cares replaces it; anyone who does not still gets a useful `tz:`.
+if ((${#zones[@]} == 0)); then
+  # Cities people have colleagues in. UTC was in here and is not a place
+  # anybody is: it is a reference for machines, and a row of it in a list of
+  # cities is a line to skip past every time. `tz:utc` still answers.
+  labels=("San Francisco" "New York" "London" "Berlin" "Tokyo")
+  zones=("America/Los_Angeles" "America/New_York" "Europe/London" "Europe/Berlin" "Asia/Tokyo")
+fi
+
+ALL_ZONES=""
+ZONE_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/omacast/zones"
+
+# The IANA list is 598 lines that change when the tzdata package does, which is
+# a few times a year. Asking timedatectl for it on every keystroke is the whole
+# cost of this keyword: nothing here touches the network, and the only slow part
+# was re-reading a list that had not changed since the last time we read it.
+load_zones() {
+  [[ -n $ALL_ZONES ]] && return 0
+
+  # Older than the tzdata files themselves means the package moved under us.
+  if [[ -s $ZONE_CACHE && $ZONE_CACHE -nt /usr/share/zoneinfo/UTC ]]; then
+    ALL_ZONES=$(<"$ZONE_CACHE")
+    [[ -n $ALL_ZONES ]] && return 0
+  fi
+
+  ALL_ZONES=$(timedatectl list-timezones --no-pager 2>/dev/null)
+  [[ -z $ALL_ZONES ]] && ALL_ZONES=$(find /usr/share/zoneinfo/posix -type f -printf '%P\n' 2>/dev/null)
+  [[ -z $ALL_ZONES ]] && return 1
+
+  mkdir -p "${ZONE_CACHE%/*}"
+  printf '%s\n' "$ALL_ZONES" > "$ZONE_CACHE" 2>/dev/null
+  return 0
+}
+
+# A zone name, loosely. The IANA list spells cities in full and with
+# underscores, and nobody types "America/Sao_Paulo" into a launcher.
+# Fold accents, so "são paulo" and "sao paulo" are the same word. The IANA list
+# is pure ASCII and the person typing is not: nobody in Brazil spells it Sao.
+fold_accents() {
+  printf '%s' "$1" | iconv -f UTF-8 -t ASCII//TRANSLIT 2>/dev/null | tr -d "'\`^~\"" ||
+    printf '%s' "$1"
+}
+
+resolve_zone() {
+  local needle="${1,,}"
+  needle="$(fold_accents "$needle")"
+
+  # An offset, before anything rewrites the sign out of it.
+  #
+  # The POSIX zones spell offsets backwards: Etc/GMT+2 is two hours *behind*
+  # UTC. So `tz:gmt+2` used to find Etc/GMT+2 through the ordinary name search
+  # and answer with UTC-2, four hours from what was asked for, with a row that
+  # said "GMT+2" over the top of it. That is the exact shape of wrong this
+  # keyword must never be, so offsets are read here and the sign is flipped on
+  # the way into the zone name.
+  local off_sign off_h off_m
+  if [[ $needle =~ ^[[:space:]]*(utc|gmt)?[[:space:]]*([+-])[[:space:]]*([0-9]{1,2})([:.]?([0-9]{2}))?[[:space:]]*$ ]]; then
+    off_sign="${BASH_REMATCH[2]}"
+    off_h="${BASH_REMATCH[3]}"
+    off_m="${BASH_REMATCH[5]:-00}"
+    if ((10#$off_m != 0)); then
+      # Etc/ has whole hours and nothing else. Half an hour out is a real place
+      # with a real name, and guessing which one is worse than saying so.
+      return 1
+    fi
+    ((10#$off_h > 14)) && return 1
+    ((10#$off_h == 0)) && { printf 'UTC'; return 0; }
+    if [[ $off_sign == "+" ]]; then printf 'Etc/GMT-%d' "$((10#$off_h))"
+    else printf 'Etc/GMT+%d' "$((10#$off_h))"; fi
+    return 0
+  fi
+
+  needle="${needle//[[:space:]]/_}"
+  needle="${needle//-/_}"
+  needle="${needle//./}"
+  needle="${needle#/}"
+  [[ -z $needle ]] && return 1
+
+  local i label
+  # A configured label wins outright: naming a zone after a person is only
+  # worth doing if typing the person finds it.
+  for i in "${!zones[@]}"; do
+    label="${labels[$i],,}"
+    label="${label//[[:space:]]/_}"
+    [[ $label == "$needle" ]] && { printf '%s' "${zones[$i]}"; return 0; }
+  done
+  for i in "${!zones[@]}"; do
+    label="${labels[$i],,}"
+    label="${label//[[:space:]]/_}"
+    [[ $label == "$needle"* ]] && { printf '%s' "${zones[$i]}"; return 0; }
+  done
+
+  # Abbreviations that are not in the IANA list at all, and the handful of
+  # city nicknames that are shorter than the initials rule below.
+  case $needle in
+    utc|gmt|z|zulu) printf 'UTC'; return 0 ;;
+    est|edt|et|nyc) printf 'America/New_York'; return 0 ;;
+    pst|pdt|pt|sf|bayarea|cali) printf 'America/Los_Angeles'; return 0 ;;
+    cst|cdt|ct) printf 'America/Chicago'; return 0 ;;
+    mst|mdt|mt) printf 'America/Denver'; return 0 ;;
+    cet|cest) printf 'Europe/Berlin'; return 0 ;;
+    bst|uk|gb|england|britain) printf 'Europe/London'; return 0 ;;
+
+    # Countries, by the city almost everyone in them means. The IANA list is a
+    # list of cities, so a country either misses entirely (germany, france) or
+    # matches the wrong thing: "spain" found Port of Spain, in Trinidad, and
+    # "canada" found Yukon. Naming a colleague's country is the most natural way
+    # to ask this question and it was the least reliable.
+    spain|es) printf 'Europe/Madrid'; return 0 ;;
+    germany|de|deutschland) printf 'Europe/Berlin'; return 0 ;;
+    france|fr) printf 'Europe/Paris'; return 0 ;;
+    italy|it) printf 'Europe/Rome'; return 0 ;;
+    netherlands|nl|holland) printf 'Europe/Amsterdam'; return 0 ;;
+    poland|pl) printf 'Europe/Warsaw'; return 0 ;;
+    sweden|se) printf 'Europe/Stockholm'; return 0 ;;
+    norway|no) printf 'Europe/Oslo'; return 0 ;;
+    ireland|ie) printf 'Europe/Dublin'; return 0 ;;
+    ukraine|ua) printf 'Europe/Kyiv'; return 0 ;;
+    turkey|tr) printf 'Europe/Istanbul'; return 0 ;;
+    china|cn) printf 'Asia/Shanghai'; return 0 ;;
+    japan|jp) printf 'Asia/Tokyo'; return 0 ;;
+    korea|kr|southkorea) printf 'Asia/Seoul'; return 0 ;;
+    india|in_|bharat) printf 'Asia/Kolkata'; return 0 ;;
+    singapore|sg) printf 'Asia/Singapore'; return 0 ;;
+    indonesia|id) printf 'Asia/Jakarta'; return 0 ;;
+    philippines|ph) printf 'Asia/Manila'; return 0 ;;
+    vietnam|vn) printf 'Asia/Ho_Chi_Minh'; return 0 ;;
+    thailand|th) printf 'Asia/Bangkok'; return 0 ;;
+    israel|il) printf 'Asia/Jerusalem'; return 0 ;;
+    uae|dubai|ae) printf 'Asia/Dubai'; return 0 ;;
+    brazil|br|brasil) printf 'America/Sao_Paulo'; return 0 ;;
+    argentina|ar) printf 'America/Argentina/Buenos_Aires'; return 0 ;;
+    chile|cl) printf 'America/Santiago'; return 0 ;;
+    colombia|co) printf 'America/Bogota'; return 0 ;;
+    peru|pe) printf 'America/Lima'; return 0 ;;
+    mexico|mx) printf 'America/Mexico_City'; return 0 ;;
+    canada|ca) printf 'America/Toronto'; return 0 ;;
+    australia|au) printf 'Australia/Sydney'; return 0 ;;
+    newzealand|nz) printf 'Pacific/Auckland'; return 0 ;;
+    southafrica|za) printf 'Africa/Johannesburg'; return 0 ;;
+    nigeria|ng) printf 'Africa/Lagos'; return 0 ;;
+    egypt|eg) printf 'Africa/Cairo'; return 0 ;;
+    kenya|ke) printf 'Africa/Nairobi'; return 0 ;;
+    portugal|pt) printf 'Europe/Lisbon'; return 0 ;;
+
+    # American cities the list spells differently, or not at all.
+    washington|dc|washingtondc) printf 'America/New_York'; return 0 ;;
+    seattle|wa) printf 'America/Los_Angeles'; return 0 ;;
+    austin|dallas|houston|texas) printf 'America/Chicago'; return 0 ;;
+    boston|philly|philadelphia|miami|atlanta) printf 'America/New_York'; return 0 ;;
+    ist) printf 'Asia/Kolkata'; return 0 ;;
+    jst) printf 'Asia/Tokyo'; return 0 ;;
+    kst) printf 'Asia/Seoul'; return 0 ;;
+    aest|aedt|awst|acst) printf 'Australia/Sydney'; return 0 ;;
+    brt|brasilia) printf 'America/Sao_Paulo'; return 0 ;;
+    wet|west) printf 'Europe/Lisbon'; return 0 ;;
+    eet|eest) printf 'Europe/Athens'; return 0 ;;
+    msk|moscow) printf 'Europe/Moscow'; return 0 ;;
+    sgt) printf 'Asia/Singapore'; return 0 ;;
+
+    # Cities the IANA list does not carry, under the names people call them.
+    # Every one of these answered "No timezone matches" and every one of them is
+    # somewhere a colleague sits.
+    bangalore|bengaluru|mumbai|bombay|delhi|new_delhi|hyderabad|chennai|pune) printf 'Asia/Kolkata'; return 0 ;;
+    barcelona|valencia|seville|sevilla|bilbao) printf 'Europe/Madrid'; return 0 ;;
+    munich|muenchen|munchen|frankfurt|hamburg|cologne|koln|stuttgart|dusseldorf) printf 'Europe/Berlin'; return 0 ;;
+    milan|milano|turin|torino|naples|napoli|florence|venice|bologna) printf 'Europe/Rome'; return 0 ;;
+    lyon|marseille|nice|toulouse|bordeaux|lille) printf 'Europe/Paris'; return 0 ;;
+    porto|oporto|coimbra|braga|faro) printf 'Europe/Lisbon'; return 0 ;;
+    edinburgh|manchester|glasgow|liverpool|birmingham|leeds|bristol|cardiff|reading) printf 'Europe/London'; return 0 ;;
+    geneva|zurich|basel|bern|lausanne) printf 'Europe/Zurich'; return 0 ;;
+    rio|rio_de_janeiro|belo_horizonte|curitiba|porto_alegre|florianopolis|campinas) printf 'America/Sao_Paulo'; return 0 ;;
+    osaka|kyoto|nagoya|yokohama|kobe|fukuoka) printf 'Asia/Tokyo'; return 0 ;;
+    beijing|peking|shenzhen|guangzhou|chengdu|hangzhou|wuhan) printf 'Asia/Shanghai'; return 0 ;;
+    busan|incheon) printf 'Asia/Seoul'; return 0 ;;
+    tel_aviv|telaviv|haifa) printf 'Asia/Jerusalem'; return 0 ;;
+    abu_dhabi|abudhabi|sharjah) printf 'Asia/Dubai'; return 0 ;;
+    cape_town|capetown|durban|pretoria|joburg|jozi) printf 'Africa/Johannesburg'; return 0 ;;
+    melbourne|canberra|hobart) printf 'Australia/Sydney'; return 0 ;;
+    wellington|christchurch) printf 'Pacific/Auckland'; return 0 ;;
+    montreal|ottawa|quebec) printf 'America/Toronto'; return 0 ;;
+    calgary|edmonton) printf 'America/Edmonton'; return 0 ;;
+    las_vegas|vegas|san_diego|sacramento|portland|san_jose|palo_alto|oakland) printf 'America/Los_Angeles'; return 0 ;;
+    orlando|tampa|charlotte|raleigh|pittsburgh|baltimore) printf 'America/New_York'; return 0 ;;
+    minneapolis|milwaukee|kansas_city|st_louis|nashville|memphis|new_orleans) printf 'America/Chicago'; return 0 ;;
+    guadalajara|monterrey) printf 'America/Mexico_City'; return 0 ;;
+
+    # "us" is a country, not the pronoun: `tz:us` is asking about America, and
+    # the zone almost everybody means by it is the eastern one.
+    us|usa|america|united_states) printf 'America/New_York'; return 0 ;;
+
+    here|me|local|home|my_time) printf '%s' "$local_zone"; return 0 ;;
+  esac
+
+  load_zones || return 1
+
+  local hit
+  hit=$(awk -v n="$needle" '
+    {
+      z = $0
+      lz = tolower(z)
+      city = lz
+      sub(/.*\//, "", city)
+      squash = city
+      gsub(/_/, "", squash)
+
+      # The initials of a multi-word city: "sp" for Sao_Paulo, "ny" for
+      # New_York, "la" for Los_Angeles. This is how people abbreviate cities
+      # out loud, so it ranks above a plain substring hit.
+      ini = ""
+      parts_n = split(city, parts, "_")
+      for (i = 1; i <= parts_n; i++) ini = ini substr(parts[i], 1, 1)
+
+      s = 0
+      # A substring hit needs three characters. With two, "of" is inside Sofia
+      # and `tz:of` answered with the time in Bulgaria: a real answer to a
+      # question nobody asked, on top of whatever else was on screen.
+      if (lz == n) s = 100
+      else if (city == n) s = 90
+      else if (squash == n) s = 85
+      else if (length(n) >= 2 && ini == n) s = 80
+      else if (index(city, n) == 1) s = 70
+      else if (index(squash, n) == 1) s = 65
+      else if (length(n) >= 3 && index(city, n) > 0) s = 45
+      else if (length(n) >= 3 && index(lz, n) > 0) s = 30
+
+      # A shorter name breaks a tie, which keeps Asia/Tokyo ahead of anything
+      # that merely contains it.
+      if (s > 0) printf "%d\t%d\t%s\n", s, -length(z), z
+    }' <<<"$ALL_ZONES" | sort -t$'\t' -k1,1nr -k2,2nr | head -1 | cut -f3)
+
+  [[ -z $hit ]] && return 1
+  printf '%s' "$hit"
+}
+
+# What to call a zone. A configured label wins, so somebody who named a zone
+# after a person reads the person back rather than the nearest capital.
+label_for_zone() {
+  local zone="$1" i
+  for i in "${!zones[@]}"; do
+    [[ ${zones[$i]} == "$zone" ]] && { printf '%s' "${labels[$i]}"; return 0; }
+  done
+  # Etc/GMT-5 is UTC+5, and putting the zone's own name on the row would tell
+  # the reader the opposite of the time underneath it.
+  if [[ $zone =~ ^Etc/GMT([+-])([0-9]{1,2})$ ]]; then
+    if [[ ${BASH_REMATCH[1]} == "-" ]]; then printf 'UTC+%s' "${BASH_REMATCH[2]}"
+    else printf 'UTC-%s' "${BASH_REMATCH[2]}"; fi
+    return 0
+  fi
+  printf '%s' "${zone##*/}" | tr '_' ' '
+}
+
+DAYWORDS='today|tonight|tomorrow|yesterday|monday|tuesday|wednesday|thursday|friday|saturday|sunday|mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat|sun'
+
+looks_like_time() {
+  local s="${1,,}"
+  [[ $s =~ ^(now|noon|midnight|midday)$ ]] && return 0
+  [[ $s =~ ^((next[[:space:]]+)?($DAYWORDS)[[:space:]]+(at[[:space:]]+)?)?[0-9]{1,2}([:.h][0-9]{2})?(:[0-9]{2})?([[:space:]]*(am|pm))?$ ]] && return 0
+  [[ $s =~ ^(next[[:space:]]+)?($DAYWORDS)[[:space:]]+(noon|midnight|midday)$ ]] && return 0
+  return 1
+}
+
+# `date -d` reads "noon" as nothing and "3" as the third of the month, so the
+# two forms people type most both need translating before it sees them.
+normalize_time() {
+  local s="${1,,}" day=""
+  case $s in
+    noon | midday) printf '12:00'; return 0 ;;
+    midnight) printf '00:00'; return 0 ;;
+    now) printf 'now'; return 0 ;;
+  esac
+
+  # A day in front of the clock, kept whole and handed to `date` with the clock
+  # behind it: "monday 9am" was refused outright, and it is how a meeting next
+  # week gets asked about.
+  if [[ $s =~ ^(next[[:space:]]+)?($DAYWORDS)[[:space:]]+(at[[:space:]]+)?(.+)$ ]]; then
+    day="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"
+    [[ $day == tonight ]] && day=today
+    s="${BASH_REMATCH[4]}"
+    case $s in
+      noon | midday) printf '%s 12:00' "$day"; return 0 ;;
+      midnight) printf '%s 00:00' "$day"; return 0 ;;
+    esac
+  fi
+
+  # "15.30" and "15h30" are the same time as "15:30" to everyone except `date`.
+  s="${s//./:}"
+  s="${s//h/:}"
+  s="${s%:}"
+  if [[ $s =~ ^([0-9]{1,2})[[:space:]]*(am|pm)?$ ]]; then
+    s="${BASH_REMATCH[1]}:00"
+    [[ -n ${BASH_REMATCH[2]} ]] && s="$s ${BASH_REMATCH[2]}"
+  fi
+  [[ -n $day ]] && s="$day $s"
+  printf '%s' "$s"
+}
+
+time_text=""
+src_zone=""
+
+# Splits "9am tokyo" into a time and the zone it is in. Walking the split point
+# from the left means the shortest time wins, so "9 am tokyo" reads as 9am
+# rather than as the 9th.
+parse_when() {
+  local text="$1" found=""
+  time_text=""
+  src_zone=""
+  [[ -z $text ]] && return 0
+
+  if ! looks_like_time "$text"; then
+    found=$(resolve_zone "$text") && { src_zone="$found"; return 0; }
+  fi
+  if looks_like_time "$text"; then
+    time_text="$text"
+    return 0
+  fi
+
+  local -a words=()
+  read -ra words <<<"$text"
+  local i n=${#words[@]} left right
+  for ((i = 1; i < n; i++)); do
+    left="${words[*]:0:i}"
+    right="${words[*]:i}"
+    looks_like_time "$left" || continue
+    found=$(resolve_zone "$right") || continue
+    time_text="$left"
+    src_zone="$found"
+    return 0
+  done
+
+  # The other order. "tokyo 3pm" is the same sentence with the words swapped and
+  # it was refused, which is a strange thing to tell somebody who just watched
+  # "3pm tokyo" work.
+  for ((i = n - 1; i >= 1; i--)); do
+    left="${words[*]:0:i}"
+    right="${words[*]:i}"
+    looks_like_time "$right" || continue
+    found=$(resolve_zone "$left") || continue
+    time_text="$right"
+    src_zone="$found"
+    return 0
+  done
+  return 1
+}
+
+# A list of places, not a place. "tokyo vs london", "tokyo and london",
+# "london new york tokyo": a comparison, which is the question the day grid is
+# already drawn to answer.
+#
+# Separators first, because they are unambiguous. Failing those, the words are
+# eaten greedily from the left, longest run that resolves first, so "new york"
+# stays one place.
+compare_names=()
+compare_zones=()
+parse_places() {
+  local text="$1" part zone probe rest taken
+  compare_names=()
+  compare_zones=()
+
+  if [[ $text =~ [[:space:]](vs|versus|and|or|x)[[:space:]] || $text == *,* || $text == *"/"* ]]; then
+    while IFS= read -r part; do
+      part="${part#"${part%%[![:space:]]*}"}"
+      part="${part%"${part##*[![:space:]]}"}"
+      [[ -z $part ]] && continue
+      zone=$(resolve_zone "$part") || return 1
+      compare_names+=("$(label_for_zone "$zone")")
+      compare_zones+=("$zone")
+    done < <(sed -E 's/[[:space:]]+(vs|versus|and|or|x)[[:space:]]+/\n/g; s/[,\/]/\n/g' <<<"$text")
+  else
+    rest="$text"
+    while [[ -n $rest ]]; do
+      probe="$rest"
+      taken=""
+      while [[ -n $probe ]]; do
+        if zone=$(resolve_zone "$probe"); then taken="$probe"; break; fi
+        [[ $probe == *[[:space:]]* ]] || break
+        probe="${probe% *}"
+        probe="${probe%"${probe##*[![:space:]]}"}"
+      done
+      [[ -z $taken ]] && return 1
+      compare_names+=("$(label_for_zone "$zone")")
+      compare_zones+=("$zone")
+      rest="${rest:${#taken}}"
+      rest="${rest#"${rest%%[![:space:]]*}"}"
+    done
+  fi
+
+  ((${#compare_zones[@]} >= 2)) || return 1
+  return 0
+}
+
+# The day grid, given names and zones. Same view the `name:place` form draws,
+# because it is the same question asked with the people left out.
+draw_grid() {
+  OMACAST_NAMES="$(printf '%s\n' "$@")" \
+  OMACAST_ZONES="$(printf '%s\n' "${compare_zones[@]}")" \
+  OMACAST_HOME="$local_zone" \
+  python3 "$(dirname "$(readlink -f "$0")")/omacast-timezone-plan"
+}
+
+fail_row() {
+  jq -cn --arg t "$1" --arg d "$2" \
+    '{id: "tz-none", title: $t, subtitle: "Timezone", detail: $d,
+      exec: "", score: 90000, view: "list", glyph: ""}'
+  exit 0
+}
+
+# Offset in minutes east of UTC, at the instant in question, so a DST boundary
+# between now and then is accounted for rather than assumed away.
+offset_minutes() {
+  local zone="$1" stamp="$2" raw sign hh mm
+  raw=$(TZ="$zone" date -d "@$stamp" +%z 2>/dev/null) || return 1
+  sign="${raw:0:1}"
+  hh="${raw:1:2}"
+  mm="${raw:3:2}"
+  local total=$((10#$hh * 60 + 10#$mm))
+  [[ $sign == "-" ]] && total=$((-total))
+  printf '%s' "$total"
+}
+
+describe_shift() {
+  local delta="$1"
+  ((delta == 0)) && { printf 'same time'; return 0; }
+  local word="ahead" abs=$delta
+  ((delta < 0)) && { word="behind"; abs=$((-delta)); }
+  local h=$((abs / 60)) m=$((abs % 60))
+  if ((m == 0)); then
+    printf '%dh %s' "$h" "$word"
+  elif ((h == 0)); then
+    printf '%dm %s' "$m" "$word"
+  else
+    printf '%dh%02d %s' "$h" "$m" "$word"
+  fi
+}
+
+# Discord renders <t:UNIX:STYLE> in the reader's own zone and locale, which is
+# exactly the problem this script solves in the other direction. All nine
+# styles are offered because the useful one depends on the sentence.
+discord_actions() {
+  local stamp="$1"
+  jq -n --arg u "$stamp" '
+    [
+      { style: "F", name: "Full Date and Time" },
+      { style: "f", name: "Date and Time" },
+      { style: "R", name: "Relative" },
+      { style: "t", name: "Time" },
+      { style: "T", name: "Time with Seconds" },
+      { style: "D", name: "Long Date" },
+      { style: "d", name: "Short Date" },
+      { style: "s", name: "Short Date and Time" },
+      { style: "S", name: "Short Date and Time with Seconds" }
+    ]
+    | map({
+        title: ("Copy Discord " + .name + " (" + .style + ")"),
+        exec: ("printf %s " + ("<t:" + $u + ":" + .style + ">" | @sh) + " | wl-copy")
+      })'
+}
+
+# One zone at one instant. `hero` is for the single conversion that is the
+# whole question; `list` is for the column of zones underneath it.
+zone_row() {
+  local id="$1" label="$2" zone="$3" stamp="$4" score="$5" view="$6" origin="$7"
+
+  local clock day pretty abbr
+  clock=$(TZ="$zone" date -d "@$stamp" '+%H:%M') || return 0
+  day=$(TZ="$zone" date -d "@$stamp" '+%Y-%m-%d')
+  pretty=$(TZ="$zone" date -d "@$stamp" '+%a %-d %b')
+  abbr=$(TZ="$zone" date -d "@$stamp" '+%Z')
+
+  local local_day
+  local_day=$(TZ="$local_zone" date -d "@$stamp" '+%Y-%m-%d')
+
+  local day_diff=$(( ($(date -d "$day" +%s) - $(date -d "$local_day" +%s)) / 86400 ))
+  local day_word="" day_phrase=""
+  case $day_diff in
+    0) day_word="" ;;
+    1) day_word="Tomorrow"; day_phrase="already tomorrow" ;;
+    -1) day_word="Yesterday"; day_phrase="still yesterday" ;;
+    *) if ((day_diff > 0)); then
+         day_word="+$day_diff days"; day_phrase="$day_diff days ahead of you"
+       else
+         day_word="$day_diff days"; day_phrase="$((-day_diff)) days behind you"
+       fi ;;
+  esac
+
+  # "UTC · UTC" says nothing twice. The abbreviation earns its place only when
+  # it is not just the zone name again.
+  local zone_tail="${zone##*/}"
+  [[ $abbr == "$zone_tail" ]] && abbr=""
+
+  local shift="Local"
+  if [[ $zone != "$local_zone" ]]; then
+    local here there
+    here=$(offset_minutes "$local_zone" "$stamp")
+    there=$(offset_minutes "$zone" "$stamp")
+    shift=$(describe_shift $((there - here)))
+  fi
+
+  local title detail subtitle accessory
+  if [[ $view == "hero" ]]; then
+    title="$clock"
+    subtitle=$(TZ="$zone" date -d "@$stamp" '+%A %-d %B')
+    [[ -n $day_phrase ]] && subtitle="$subtitle  ·  $day_phrase"
+    detail="$zone"
+    [[ $label != "$zone" ]] && detail="$label  ·  $zone"
+    # Etc/GMT-5 next to "UTC+5" reads as a contradiction, so the offset zones
+    # show only the name that means what it says.
+    [[ $zone == Etc/GMT* ]] && detail="$label"
+    [[ -n $abbr ]] && detail="$detail ($abbr)"
+    detail="$detail  ·  $shift"
+    [[ -n $origin ]] && detail="$detail  ·  from $origin"
+    accessory=""
+  else
+    # `zones` is a layout, not a list of sentences, so the parts go over
+    # separately: joining them here and splitting them there is how a view ends
+    # up unable to give the time more weight than the zone id.
+    view="zones"
+    title="$label"
+    detail="$zone"
+    [[ -n $abbr ]] && detail="$abbr"
+    subtitle="$shift"
+    accessory="$day_word"
+  fi
+
+  jq -cn \
+    --arg id "$id" --arg t "$title" --arg s "$subtitle" --arg d "$detail" \
+    --arg a "$accessory" --arg v "$view" --argjson sc "$score" \
+    --arg copy "printf %s $(printf '%q' "$clock") | wl-copy" \
+    --arg full "printf %s $(printf '%q' "$(TZ="$zone" date -d "@$stamp" '+%Y-%m-%d %H:%M %Z')") | wl-copy" \
+    --arg unix "printf %s $(printf '%q' "$stamp") | wl-copy" \
+    --argjson discord "$(discord_actions "$stamp")" \
+    --arg clock "$clock" --arg dayline "$pretty" --arg zoneid "$zone" \
+    '{id: $id, title: $t, subtitle: $s, detail: $d, accessory: $a,
+      clock: $clock, dayline: $dayline, zoneid: $zoneid,
+      exec: $copy, score: $sc, view: $v, glyph: "",
+      actions: ([{ title: "Copy Time", shortcut: "↵", exec: $copy },
+                 { title: "Copy Date and Time", exec: $full }]
+                + $discord
+                + [{ title: "Copy Unix Seconds", exec: $unix }])}'
+}
+
+# The column: your own zone first, then everything configured, each zone once.
+zone_column() {
+  local stamp="$1" score="$2" skip="${3:-}"
+  local -a seen=()
+  local i label zone
+
+  emit_once() {
+    local label="$1" zone="$2"
+    local s
+    for s in "${seen[@]:-}"; do [[ $s == "$zone" ]] && return 0; done
+    seen+=("$zone")
+    [[ $zone == "$skip" ]] && return 0
+    zone_row "z-$zone" "$label" "$zone" "$stamp" "$score" "list" ""
+    score=$((score - 100))
+  }
+
+  emit_once "$(label_for_zone "$local_zone")" "$local_zone"
+  for i in "${!zones[@]}"; do
+    emit_once "${labels[$i]}" "${zones[$i]}"
+  done
+}
+
+trimmed="${query#"${query%%[![:space:]]*}"}"
+trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+
+# The question people actually type. `tz:` is reached by typing `time`, so
+# `time:in tokyo` is one keystroke from the front of the launcher and it
+# answered "No timezone matches "time"", which reads as though the keyword did
+# not understand its own name. The wrapping is stripped and what is left is the
+# question.
+trimmed="${trimmed%%\?}"
+trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
+while true; do
+  before="$trimmed"
+  for prefix in "what time is it" "what time it is" "what is the time" "what's the time" \
+    "whats the time" "what time" "current time" "time now" "the time" "que horas sao" \
+    "que horas são" "hora" "time" "clock" "in" "at" "for" "on"; do
+    if [[ ${trimmed,,} == "$prefix" || ${trimmed,,} == "$prefix "* ]]; then
+      trimmed="${trimmed:${#prefix}}"
+      trimmed="${trimmed#"${trimmed%%[![:space:]]*}"}"
+      break
+    fi
+  done
+  [[ $trimmed == "$before" ]] && break
+  # Everything eaten means the query was only wrapping, which is not a question.
+  [[ -z $trimmed ]] && exit 0
+done
+
+# Nothing typed: the whole board.
+if [[ -z $trimmed ]]; then
+  zone_column "$(date +%s)" 95000
+  exit 0
+fi
+
+# A Discord timestamp, pasted back in. The style is ignored on the way in
+# because it only ever described how somebody else's client drew it.
+if [[ $trimmed =~ ^\<t:([0-9]{1,12})(:[tTdDfFsSR])?\>$ ]]; then
+  zone_column "${BASH_REMATCH[1]}" 95000
+  exit 0
+fi
+
+# Two or more `name:place` pairs is a meeting, not a lookup.
+#
+#   tz: john:tokyo maria:spain ana:sp ronaldo:washington
+#
+# The question behind that typing is never "what time is it for John", it is
+# "when can all of us talk", and a column of four times answers the first while
+# leaving the second to the reader. So this draws a day: one row per person, one
+# cell per hour, shaded by whether that hour is reasonable where they are. The
+# hours where every row is reasonable are the answer, and they are visible
+# without reading a single number.
+pair_count=$(grep -oE '(^|[[:space:]])[A-Za-z0-9_-]+:' <<<"$trimmed" | wc -l)
+
+# One pair is a person too. Requiring two meant `maria:saopaulo` was not read as
+# naming anybody: it fell through to "is `maria:saopaulo` a place", which it is
+# not, and answered that no timezone matches. Naming one person is the smallest
+# way to ask this and it has to work.
+if ((pair_count >= 1)); then
+  people_names=() people_zones=()
+
+  # One pair per line. A place may hold spaces ("new york"), so the split is on
+  # the next `name:` rather than on whitespace, and sed is the honest tool for
+  # "put a newline before each of these".
+  while IFS= read -r pair; do
+    [[ -z $pair ]] && continue
+    who="${pair%%:*}"
+    where="${pair#*:}"
+    where="${where#"${where%%[![:space:]]*}"}"
+    where="${where%"${where##*[![:space:]]}"}"
+    [[ -z $who ]] && continue
+
+    # `me:` with nothing after it puts you in the grid. Your own hours used to
+    # be drawn as a ruler above everyone else's, which put you in every answer
+    # whether or not you were in the meeting. Being in it is now something you
+    # ask for.
+    if [[ -z $where ]]; then
+      case "${who,,}" in
+        me|i|local|here|home) people_names+=("$who"); people_zones+=("$local_zone"); continue ;;
+        *) continue ;;
+      esac
+    fi
+
+    # A place may hold spaces ("new york"), and the last word may be the start
+    # of the next name that has not got its colon yet. So try the whole thing,
+    # then drop trailing words until something resolves: while `john:tokyo m` is
+    # being typed, John is still in Tokyo.
+    zone=""
+    probe="$where"
+    while [[ -n $probe ]]; do
+      zone=$(resolve_zone "$probe") && break
+      [[ $probe == *[[:space:]]* ]] || { zone=""; break; }
+      probe="${probe% *}"
+      probe="${probe%"${probe##*[![:space:]]}"}"
+    done
+    [[ -n $zone ]] || continue
+
+    people_names+=("$who")
+    people_zones+=("$zone")
+  done < <(sed -E 's/(^|[[:space:]])([A-Za-z0-9_-]+:)/\n\2/g' <<<"$trimmed")
+
+  # Naming one person is a comparison with you, so you are in it. Unless they
+  # are in your zone, where a second identical row says nothing. Two or more and
+  # you are only there if you asked with `me:`, because by then the question is
+  # about them.
+  if ((${#people_names[@]} == 1)) && [[ ${people_zones[0]} != "$local_zone" ]]; then
+    people_names=("you" "${people_names[0]}")
+    people_zones=("$local_zone" "${people_zones[0]}")
+  fi
+
+  # One person is a grid. Requiring two meant naming somebody in your own zone
+  # produced nothing at all, because the you-row was skipped as redundant and
+  # the count never reached two.
+  if ((${#people_names[@]} >= 1)); then
+    OMACAST_NAMES="$(printf '%s\n' "${people_names[@]}")" \
+    OMACAST_ZONES="$(printf '%s\n' "${people_zones[@]}")" \
+    OMACAST_HOME="$local_zone" \
+    python3 "$(dirname "$(readlink -f "$0")")/omacast-timezone-plan"
+    exit 0
+  fi
+
+  # Nobody placed. Fall through rather than complaining: the ordinary lookup
+  # below reports an unknown place perfectly well, and a second error here fired
+  # in the middle of typing. `tz: john:tokyo m` has one good pair and one that
+  # is half a word, and announcing that none of them is a timezone while the
+  # sentence is still being written is both wrong and in the way.
+fi
+
+# A bare unix timestamp, in the range that is a plausible date rather than a
+# quantity somebody meant to convert.
+if [[ $trimmed =~ ^[0-9]{9,11}$ ]]; then
+  zone_column "$trimmed" 95000
+  exit 0
+fi
+
+# Anything that opens a Discord timestamp and does not close one is a paste in
+# progress or a typo, and either way there is no answer yet.
+if [[ $trimmed == *"<t:"* ]]; then
+  [[ $trimmed =~ ^\<t:[0-9]*(:[a-zA-Z])?\>?$ ]] && exit 0
+  fail_row "Not a Discord timestamp" "Expected <t:1735689600:F>"
+fi
+
+# An offset that is not a whole number of hours. There is no Etc zone for it and
+# rounding to the nearest one would answer half an hour out, so it says what it
+# cannot do and names the way to ask that works.
+if [[ ${trimmed,,} =~ ^(utc|gmt)?[[:space:]]*[+-][[:space:]]*[0-9]{1,2}[:.][0-9]{2}$ ]]; then
+  fail_row "No zone is exactly \"$trimmed\"" "Offsets come in whole hours here: try the city, such as Kolkata for +05:30"
+fi
+
+dst_zone=""
+origin=""
+
+if [[ $trimmed =~ ^(.*[^[:space:]])[[:space:]]+(in|to|for)[[:space:]]+([^[:space:]].*)$ ]]; then
+  head_part="${BASH_REMATCH[1]}"
+  tail_part="${BASH_REMATCH[3]}"
+
+  dst_zone=$(resolve_zone "$tail_part") || fail_row "No timezone matches \"$tail_part\"" "Try a city, a region, or a label from omacast.json"
+  if ! parse_when "$head_part"; then
+    # "3pm in tokyo in london" says "in" twice and the split above took the last
+    # one, leaving "3pm in tokyo" as the head. It is the same sentence as
+    # "3pm tokyo", which parses, so the leftover joining word comes out.
+    head_part=$(sed -E 's/[[:space:]]+(in|from|at)[[:space:]]+/ /' <<<"$head_part")
+    parse_when "$head_part" || fail_row "No timezone matches \"$head_part\"" "Expected a time, a zone, or both"
+  fi
+
+  # "tokyo to london" is a comparison, not a conversion: there is no time in it
+  # to convert. It used to answer with London's clock and never mention Tokyo at
+  # all, which is a true row that answers a different question.
+  if [[ -z $time_text && -n $src_zone && $src_zone != "$dst_zone" ]]; then
+    compare_zones=("$src_zone" "$dst_zone")
+    draw_grid "$(label_for_zone "$src_zone")" "$(label_for_zone "$dst_zone")"
+    exit 0
+  fi
+else
+  if ! parse_when "$trimmed"; then
+    # Several places at once is the other way this question gets asked.
+    parse_places "$trimmed" && { draw_grid "${compare_names[@]}"; exit 0; }
+    fail_row "No timezone matches \"$trimmed\"" "Try a city, a region, or a label from omacast.json"
+  fi
+  # Without an explicit "in", a named zone is where the answer goes and the
+  # time is read as yours. That is the way the sentence is meant out loud.
+  dst_zone="$src_zone"
+  src_zone=""
+fi
+
+if [[ -n $time_text ]]; then
+  spec=$(normalize_time "$time_text")
+  if [[ -n $src_zone ]]; then
+    stamp=$(TZ="$src_zone" date -d "$spec" +%s 2>/dev/null)
+    origin="$(TZ="$src_zone" date -d "$spec" '+%H:%M') in $src_zone"
+  else
+    stamp=$(date -d "$spec" +%s 2>/dev/null)
+    origin="$(date -d "$spec" '+%H:%M') your time"
+  fi
+  [[ -z $stamp ]] && fail_row "Not a time \"$time_text\"" "Try 3pm, 15:30, or 9 am"
+else
+  stamp=$(date +%s)
+fi
+
+if [[ -n $dst_zone ]]; then
+  label=$(label_for_zone "$dst_zone")
+  zone_row "tz-hero" "$label" "$dst_zone" "$stamp" 99000 "hero" "$origin"
+  zone_column "$stamp" 94000 "$dst_zone"
+else
+  zone_column "$stamp" 95000
+fi
+
+exit 0

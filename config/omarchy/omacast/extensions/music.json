@@ -1,0 +1,21 @@
+{
+  "id": "spotify",
+  "title": "Spotify",
+  "keyword": "spotify",
+  "aliases": [
+    "music",
+    "song",
+    "track",
+    "play"
+  ],
+  "subtitle": "Spotify",
+  "glyph": "",
+  "search": "omacast-search-music {query}",
+  "when": "command -v spotify",
+  "minChars": 0,
+  "debounceMs": 60,
+  "maxRows": 9,
+  "tier": "substring",
+  "view": "player",
+  "timeoutMs": 8000
+}

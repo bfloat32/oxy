@@ -1,0 +1,233 @@
+#!/bin/bash
+# Emits one JSON row per host in ~/.ssh/config for Omacast's `ssh:` keyword.
+#
+#   ssh:            every host you have written down
+#   ssh:prod        by alias, hostname or user
+#
+# A host is a machine, so the row carries the machine in parts rather than as
+# one string: the alias you type, the user, the address, the port, the file the
+# entry came from, and whether an identity file is pinned to it. The `hosts`
+# view puts those in their own columns; a concatenated "user@host:port" could
+# only ever be read left to right.
+#
+# Include directives are followed, because a config split across
+# ~/.ssh/config.d is common and a launcher that only reads the top file would
+# quietly show half the answer. Wildcard entries are skipped: `Host *` is a
+# block of defaults, not a machine you can connect to.
+#
+# Nothing here touches the network. A reachability dot would be the obvious
+# next field and it is deliberately absent: `ssh:` runs on a 60ms debounce with
+# no cache, so a probe per row is a dozen sockets per keystroke, and the only
+# honest timeout for a host that is down is long enough to stall the answer.
+# known_hosts gives most of what a probe would, offline and from one file read:
+# whether you have ever actually connected to this machine.
+#
+# The terminal is whatever xdg-terminal-exec resolves, through
+# omarchy-launch-tui, so this follows `omarchy default terminal` rather than
+# hardcoding one.
+
+set -uo pipefail
+
+query="${1:-}"
+needle="${query,,}"
+
+CONFIG="$HOME/.ssh/config"
+[[ -f $CONFIG ]] || exit 0
+
+# ---------------------------------------------------------------- known_hosts
+#
+# Read once, before any row is built. `ssh-keygen -F` would handle hashed
+# entries too, but that is a process per host per keystroke, and this file is
+# usually a few dozen lines.
+#
+# When HashKnownHosts is on there is nothing to match against without hashing
+# each candidate ourselves, so the whole signal is dropped rather than reported
+# as "never connected" for every host. A field that is wrong is worse than a
+# field that is missing.
+declare -A KNOWN=()
+known_usable=1
+
+known_file="$HOME/.ssh/known_hosts"
+if [[ -f $known_file ]]; then
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ -z $line || $line == "#"* ]] && continue
+    # @cert-authority and @revoked put a marker where the hostname goes. Rare
+    # enough not to be worth a second parse, and skipping loses one row's mark.
+    [[ $line == "@"* ]] && continue
+    read -r hostfield _ <<<"$line"
+    if [[ $hostfield == "|"* ]]; then
+      known_usable=0
+      break
+    fi
+    IFS=',' read -ra names <<<"$hostfield"
+    for name in "${names[@]}"; do
+      [[ -n $name ]] && KNOWN["${name,,}"]=1
+    done
+  done <"$known_file"
+else
+  known_usable=0
+fi
+
+# Emits "file" lines in the order ssh itself would read them. Depth is bounded
+# because an Include cycle would otherwise be an infinite loop rather than an
+# error.
+expand_includes() {
+  local file="$1" depth="$2" line word target
+  ((depth > 8)) && return 0
+  [[ -f $file ]] || return 0
+
+  printf 'FILE\t%s\n' "$file"
+
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ $line == "#"* || -z $line ]] && continue
+    read -r word rest <<<"$line"
+    [[ ${word,,} == "include" ]] || continue
+
+    for target in $rest; do
+      target="${target/#\~/$HOME}"
+      # A relative Include is relative to ~/.ssh, not to the current directory.
+      [[ $target == /* ]] || target="$HOME/.ssh/$target"
+      local match
+      for match in $target; do
+        [[ -f $match ]] && expand_includes "$match" $((depth + 1))
+      done
+    done
+  done <"$file"
+}
+
+now_host=""
+now_hostname=""
+now_user=""
+now_port=""
+now_identity=""
+now_proxy=""
+now_file=""
+
+rank=90000
+emitted=0
+
+flush() {
+  [[ -n $now_host ]] || return 0
+
+  local target port sub
+  target="${now_hostname:-$now_host}"
+  port="${now_port:-22}"
+
+  # The plain list still has to read, because an unregistered view falls back
+  # to it and a keyword that answers with blank rows is worse than an ugly one.
+  if [[ -n $now_user ]]; then
+    sub="$now_user@$target"
+  else
+    sub="$target"
+  fi
+  [[ $port != "22" ]] && sub="$sub:$port"
+
+  if [[ -n $needle ]]; then
+    [[ "${now_host,,} ${sub,,}" == *"$needle"* ]] || return 0
+  fi
+
+  # ssh writes the port into the key only when it is not 22, so the lookup has
+  # to match that exactly or every non-default host reads as never visited.
+  local key seen
+  if [[ $port == "22" ]]; then
+    key="${target,,}"
+  else
+    key="[${target,,}]:$port"
+  fi
+  seen="null"
+  if ((known_usable)); then
+    if [[ -n ${KNOWN[$key]:-} ]]; then seen="true"; else seen="false"; fi
+  fi
+
+  local quoted
+  quoted=$(printf '%q' "$now_host")
+
+  jq -cn --arg id "$now_host" --arg d "$sub" \
+    --arg file "${now_file/#$HOME/\~}" \
+    --arg fileAbs "$now_file" \
+    --arg host "$target" --arg user "$now_user" --arg port "$port" \
+    --arg identity "${now_identity/#$HOME/\~}" --arg proxy "$now_proxy" \
+    --arg e "omarchy-launch-tui --app-id=org.omarchy.ssh ssh $quoted" \
+    --argjson seen "$seen" --argjson sc "$rank" \
+    '{
+       id: $id, title: $id, detail: $d, subtitle: $file, exec: $e, score: $sc,
+       # On every row, not just the first: ranking can put any row first and
+       # only the first row has its view read.
+       view: "hosts",
+
+       alias: $id,
+       hostName: $host,
+       user: $user,
+       port: ($port | tonumber? // 22),
+       sourceFile: $file,
+       identity: $identity,
+       proxyJump: $proxy,
+       # true, false, or null when known_hosts is hashed and cannot be read.
+       known: $seen,
+
+       # Three actions, each going somewhere different. "Copy Hostname" and
+       # "Copy SSH Command" were here and were not worth the keystroke they
+       # cost: both put a string on the clipboard that the panel had to be
+       # opened and read to choose between, while Enter already connects.
+       actions: [
+         { title: "Connect", shortcut: "↵", exec: $e },
+         { title: "Open SFTP", exec: ("setsid uwsm-app -- nautilus " + (("sftp://" + $id) | @sh)) },
+         { title: "Edit Config", exec: ("omarchy-launch-editor " + ($fileAbs | @sh)) }
+       ]
+     }'
+
+  rank=$((rank - 100))
+  emitted=$((emitted + 1))
+}
+
+while IFS= read -r entry; do
+  [[ $entry == FILE$'\t'* ]] || continue
+  file="${entry#FILE$'\t'}"
+
+  while IFS= read -r line; do
+    line="${line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    [[ $line == "#"* || -z $line ]] && continue
+
+    # ssh accepts "Key value" and "Key=value" alike. Only a leading Key= is
+    # rewritten, or an "=" inside a ProxyCommand would be eaten too.
+    [[ $line =~ ^[A-Za-z]+= ]] && line="${line/=/ }"
+    read -r key value <<<"$line"
+    [[ -n ${value:-} ]] || continue
+
+    case "${key,,}" in
+    host)
+      flush
+      now_host=""
+      now_hostname=""
+      now_user=""
+      now_port=""
+      now_identity=""
+      now_proxy=""
+      now_file="$file"
+      # Only the first pattern of a Host line is a name you can type, and a
+      # pattern is a default block rather than a machine.
+      read -r first _ <<<"$value"
+      [[ $first == *[\*\?\!]* ]] || now_host="$first"
+      ;;
+    hostname) now_hostname="$value" ;;
+    user) now_user="$value" ;;
+    port) now_port="$value" ;;
+    # Only the first is kept. ssh accepts several and tries each in turn, and
+    # the row is answering "is a key pinned here", not listing the keyring.
+    identityfile) [[ -n $now_identity ]] || now_identity="$value" ;;
+    # A host reached through another host is a different kind of machine, and
+    # the one whose connection fails for reasons that are not about it.
+    proxyjump) now_proxy="$value" ;;
+    esac
+
+    ((emitted >= 30)) && break
+  done <"$file"
+done < <(expand_includes "$CONFIG" 0)
+
+flush
+
+exit 0

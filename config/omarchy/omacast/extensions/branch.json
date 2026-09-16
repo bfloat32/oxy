@@ -1,0 +1,18 @@
+{
+  "id": "branch",
+  "title": "Branches",
+  "keyword": "branch",
+  "aliases": [
+    "branches"
+  ],
+  "subtitle": "Git",
+  "glyph": "",
+  "search": "omacast-git-branch {query}",
+  "when": "command -v git >/dev/null",
+  "minChars": 0,
+  "debounceMs": 60,
+  "timeoutMs": 5000,
+  "maxRows": 24,
+  "tier": "substring",
+  "view": "gitbranches"
+}

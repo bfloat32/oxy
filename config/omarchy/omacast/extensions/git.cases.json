@@ -1,0 +1,98 @@
+[
+  {
+    "why": "a bare git: is not a search: it is one panel carrying the whole repo",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "view": "gitrepo",
+    "fields": [
+      "repo",
+      "commits"
+    ]
+  },
+  {
+    "why": "the panel names the branch and how far it has drifted, which is the actionable part",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "matches": {
+      "repo": "'branch':"
+    }
+  },
+  {
+    "why": "did I stash that is asked from the panel, and a count is the whole answer when it is zero",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "matches": {
+      "repo": "'stashes': [0-9]+"
+    }
+  },
+  {
+    "why": "a repo with changes answers Enter with the diff: opening a terminal answers a question nobody asked, and the repo is named so the case does not depend on whether this checkout happens to be clean",
+    "query": "omacast-fixture",
+    "minRows": 1,
+    "row": 0,
+    "matches": {
+      "exec": "git -C .* diff"
+    }
+  },
+  {
+    "why": "branches and stashes are one keypress from the panel, so the depth is found rather than memorised",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "matches": {
+      "actions": "'query': 'branch:.*'query': 'stash:"
+    }
+  },
+  {
+    "why": "the panel carries what you were about to open anyway: reading the repo and acting on it should not be a keystroke apart, so lazygit, herdr, the editor and a terminal in the right directory are all in there",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "atMost": {
+      "actions": 8
+    }
+  },
+  {
+    "why": "GitHub is gh:, not git:. Remote rows here blurred local and remote into one keyword",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "absent": [
+      "prs",
+      "issues"
+    ]
+  },
+  {
+    "why": "a filter that matches nothing answers nothing rather than the whole repo",
+    "query": "zzznosuchthing",
+    "maxRows": 0
+  },
+  {
+    "why": "naming a repo answers about that repo: pinning was hidden state solving this in two steps and a file",
+    "query": "gum",
+    "minRows": 1,
+    "row": 0,
+    "view": "gitrepo",
+    "matches": {
+      "repo": "'name': 'gum'"
+    }
+  },
+  {
+    "why": "branch and stash rows here were names with nothing on them, so a word that only a stash could match now answers nothing: branch: and stash: own them, with views that show the divergence and the contents",
+    "query": "omacast-fixture stash",
+    "maxRows": 0
+  },
+  {
+    "why": "a clean repo has no diff, so Enter showed a terminal that closed before it could be read: on a clean repo the first action is the log",
+    "query": "gum",
+    "minRows": 1,
+    "row": 0,
+    "matches": {
+      "actions": "'title': 'Show Log'",
+      "exec": "log --stat"
+    }
+  }
+]

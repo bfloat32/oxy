@@ -1,0 +1,16 @@
+{
+  "id": "git",
+  "title": "Git",
+  "keyword": "git",
+  "aliases": [],
+  "subtitle": "Git",
+  "glyph": "",
+  "search": "omacast-git {query}",
+  "when": "command -v git >/dev/null",
+  "minChars": 0,
+  "debounceMs": 60,
+  "timeoutMs": 5000,
+  "maxRows": 24,
+  "tier": "substring",
+  "view": "list"
+}

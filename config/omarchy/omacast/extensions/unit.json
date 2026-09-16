@@ -1,0 +1,20 @@
+{
+  "id": "unit",
+  "title": "Units",
+  "keyword": "unit",
+  "aliases": [
+    "units",
+    "convert",
+    "conv"
+  ],
+  "subtitle": "Unit",
+  "glyph": "",
+  "search": "omacast-unit {query}",
+  "when": "command -v qalc",
+  "minChars": 2,
+  "debounceMs": 180,
+  "cacheMs": 60000,
+  "maxRows": 6,
+  "tier": "prefix",
+  "view": "list"
+}

@@ -1,0 +1,29 @@
+{
+  "id": "tz",
+  "title": "Timezones",
+  "keyword": "tz",
+  "aliases": [
+    "time",
+    "timezone",
+    "zone",
+    "clock"
+  ],
+  "subtitle": "Timezone",
+  "glyph": "",
+  "search": "omacast-timezone {query}",
+  "when": "command -v jq",
+  "minChars": 0,
+  "debounceMs": 80,
+  "maxRows": 12,
+  "tier": "prefix",
+  "view": "list",
+  "settings": [
+    {
+      "key": "zones",
+      "label": "Zones to show",
+      "value": "",
+      "placeholder": "UTC, New York, Tokyo"
+    }
+  ],
+  "timeoutMs": 6000
+}

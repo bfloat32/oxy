@@ -1,7 +1,12 @@
 #!/bin/bash
 # Oxy (Rust core) installer — the experimental daemon-backed build.
 #
-#   curl -fsSL https://raw.githubusercontent.com/bfloat32/oxy/experimental/rust-core/install-rs.sh | bash
+#   git clone -b experimental/rust-core https://github.com/bfloat32/oxy.git ~/.local/share/oxy-rs
+#   ~/.local/share/oxy-rs/install-rs.sh
+#
+# (The repo is private, so the curl-pipe form needs a token in scope:
+#   curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
+#     https://raw.githubusercontent.com/bfloat32/oxy/experimental/rust-core/install-rs.sh | bash)
 #
 # Installs the Rust-core launcher alongside the script one: a second checkout,
 # a second plugin id, its own keybinding, and the oxyd daemon both frontends
@@ -60,7 +65,7 @@ for arg in "$@"; do
   --purge) UNINSTALL=1; PURGE=1 ;;
   --fresh | --reinstall) FRESH=1 ;;
   -h | --help)
-    sed -n '2,29p' "$0"
+    sed -n '2,34p' "$0"
     exit 0
     ;;
   *) echo "unknown argument: $arg" >&2; exit 1 ;;

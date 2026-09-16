@@ -1683,6 +1683,9 @@ Item {
     // reach "Open Folder", not a way of saying the file did not matter.
     root.remember(root.rows[root.selectedIndex])
     root.rememberQuery(root.queryText)
+    root.log("act", { ep: root.epoch, via: "panel",
+      id: root.clip(action.row && action.row.id || "", 120),
+      t: root.clip(action.title, 120) })
 
     if (typeof action.run === "function") {
       if (followUp === "" && !stayOpen) dismiss()

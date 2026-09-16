@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "bo.oxy",
   "name": "Oxy",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "author": "bfloat32",
   "description": "A launcher with 41 keywords, one box",
   "license": "MIT",

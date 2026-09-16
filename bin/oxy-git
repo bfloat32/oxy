@@ -148,9 +148,9 @@ if [[ -z $needle ]]; then
   # answer is either a number you can ignore or the reason you type `stash:`.
   stashes=$(git -C "$repo" --no-optional-locks stash list 2>/dev/null | wc -l)
 
-  commits_json=$(git -C "$repo" --no-optional-locks log -6 --format=$'%h\t%s\t%an\t%ct' 2>/dev/null |
+  commits_json=$(git -C "$repo" --no-optional-locks log -6 --format=$'%h\x1f%s\x1f%an\x1f%ct' 2>/dev/null |
     jq -Rn --argjson now "$now" '
-      [inputs | split("\t") | select(length >= 4)
+      [inputs | split("\u001f") | select(length >= 4)
        | { hash: .[0], subject: .[1], author: .[2], age: ($now - (.[3] | tonumber)) }]')
   [[ -n ${commits_json:-} ]] || commits_json="[]"
 
@@ -261,7 +261,7 @@ emit "branch" "$branch" "$track" "$name" "" "Branch" "Every Branch" \
 # a card that shows a dozen.
 
 shown=0
-while IFS=$'\t' read -r hash subject author ts; do
+while IFS=$'\x1f' read -r hash subject author ts; do
   [[ -n $hash ]] || continue
   # Asked here as well as inside emit, because the action list below is built by
   # a jq of its own and that fork is paid before emit ever sees the row.
@@ -276,7 +276,7 @@ while IFS=$'\t' read -r hash subject author ts; do
     "$(jq -cn --arg h "$hash" '[
          { title: "Copy Hash", exec: ("printf %s " + ($h | @sh) + " | wl-copy") }
        ]')"
-done < <(git -C "$repo" --no-optional-locks log -40 --format=$'%h\t%s\t%an\t%ct' 2>/dev/null)
+done < <(git -C "$repo" --no-optional-locks log -40 --format=$'%h\x1f%s\x1f%an\x1f%ct' 2>/dev/null)
 
 # Branches and stashes used to be two more sections down here, as rows carrying
 # a name and nothing else: which one is checked out, how far each had drifted

@@ -180,15 +180,23 @@ collect() {
     "$head" "$staged" "$changed" "$conflicted" "$trunk" "$(date +%s)"
 
   # Unit separator, not a tab: commit subjects and author names are data
-  # here, and a tab inside either must not split the line it rides in. A
-  # subject cannot carry a newline (git takes the first line), so lines
-  # stay newline-delimited.
+  # here, and a tab inside either must not split the line it rides in.
   local fmt='%(HEAD)'$'\x1f''%(refname:short)'$'\x1f''%(upstream:short)'$'\x1f''%(upstream:track,nobracket)'
   [[ -n $trunk ]] && fmt+=$'\x1f'"%(ahead-behind:refs/heads/$trunk)" || fmt+=$'\x1f'
   fmt+=$'\x1f''%(committerdate:unix)'$'\x1f''%(authorname)'$'\x1f''%(contents:subject)'
 
   git -C "$repo" --no-optional-locks for-each-ref --sort=-committerdate \
-    --format="$fmt" refs/heads 2>/dev/null
+    --format="$fmt" refs/heads 2>/dev/null |
+    # `contents:subject` keeps a multi-line subject paragraph's newlines,
+    # and the subject is the last field: a fragment containing no unit
+    # separator is the rest of the record above it. Fold it back with a
+    # space — one row per branch again.
+    awk 'BEGIN { us = sprintf("%c", 31) }
+    {
+      if (index($0, us) == 0 && held != "") { held = held " " $0; next }
+      if (held != "") print held
+      held = $0
+    } END { if (held != "") print held }'
 }
 
 lines=()

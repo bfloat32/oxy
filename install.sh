@@ -242,7 +242,8 @@ if ((UNINSTALL)); then
       mv "$backup" "$base" 2>/dev/null && ((++restored))
     fi
   done < <(find "$PLUGINS_DIR" "$BIN_DIR" "$HYPR_MODULES" "$CONFIG_HOME/omarchy" \
-    -name '*.before-oxy' -type f ! -name '*.before-oxy.*' 2>/dev/null)
+    -name '*.before-oxy' \( -type f -o -type d -o -type l \) \
+    ! -name '*.before-oxy.*' 2>/dev/null)
   ((restored > 0)) && ok "$restored backed-up file(s) restored"
 
   # Deliberately not `omarchy plugin disable`: that deletes the layout entry,

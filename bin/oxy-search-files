@@ -135,7 +135,10 @@ mapfile -t hits < <(
 
 paths=()
 for hit in "${hits[@]}"; do
-  paths+=("${hit##*$'\t'}")
+  # The path is the fourth and last field, so it keeps whatever tabs it
+  # contains: strip the first three fields, never up-to-the-last-tab, or a
+  # tab inside the name stat's only its tail and the row quietly vanishes.
+  paths+=("${hit#*$'\t'*$'\t'*$'\t'}")
 done
 
 # One stat for the whole answer. Keyed by name rather than read positionally,

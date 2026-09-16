@@ -49,6 +49,10 @@ file_url() {
 # Newest first: with pictures, recent is nearly always what you are after.
 fd "${args[@]}" -- "$query" "${roots[@]}" 2>/dev/null |
   while read -r path; do
+    # A filename can contain a newline, and fd frames on newlines: each half
+    # of one arrives here as its own "path" to a file that does not exist.
+    # Checking existence drops both fragments instead of drawing them.
+    [[ -e $path ]] || continue
     # Unit separator, not a tab: a filename is data here, and a tab inside one
     # must not split the line it rides in.
     printf '%s\x1f%s\n' "$(stat -c %Y "$path" 2>/dev/null || echo 0)" "$path"

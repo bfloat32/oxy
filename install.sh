@@ -78,7 +78,7 @@ ask() {
     printf '%s' "$default"
     return 0
   }
-  printf '   %s %s ' "$prompt" "$(dim "$([[ $default == y ]] && echo '[Y/n]' || echo '[y/N]')")" >/dev/null
+  printf '   %s %s ' "$prompt" "$(dim "$([[ $default == y ]] && echo '[Y/n]' || echo '[y/N]')")" >/dev/tty
   read -r answer </dev/tty
   answer="${answer:-$default}"
   [[ ${answer,,} == y* ]]
@@ -280,7 +280,7 @@ count=0
 for file in "$INSTALL_DIR"/bin/*; do
   [[ -f $file ]] || continue
   chmod +x "$file" 2>/dev/null
-  link_path "$file" "$BIN_DIR/$(basename "$file")" && ((count++))
+  link_path "$file" "$BIN_DIR/$(basename "$file")" && ((++count))
 done
 ok "$count commands -> $BIN_DIR"
 case :$PATH: in
@@ -298,7 +298,7 @@ step "Linking the extension definitions"
 # sit beside the shipped ones and are never touched.
 count=0
 while IFS= read -r rel; do
-  link_path "$INSTALL_DIR/config/$rel" "$CONFIG_HOME/$rel" && ((count++))
+  link_path "$INSTALL_DIR/config/$rel" "$CONFIG_HOME/$rel" && ((++count))
 done < <(cd "$INSTALL_DIR/config" && find . -type f -printf '%P\n')
 ok "$count files -> $CONFIG_HOME (extensions, snippets defaults)"
 
@@ -397,9 +397,9 @@ done
 
 step "Verify"
 problems=0
-[[ -f $PLUGINS_DIR/$PLUGIN_ID/Launcher.qml ]] || { warn "plugin/Launcher.qml not reachable through the link"; ((problems++)); }
+[[ -f $PLUGINS_DIR/$PLUGIN_ID/Launcher.qml ]] || { warn "plugin/Launcher.qml not reachable through the link"; ((++problems)); }
 command -v oxy-search-files >/dev/null || { warn "oxy-* commands not on PATH yet (open a new shell)"; }
-[[ -f $CONFIG_HOME/omarchy/oxy/extensions/emoji.json ]] || { warn "extension links missing under $CONFIG_HOME/omarchy/oxy"; ((problems++)); }
+[[ -f $CONFIG_HOME/omarchy/oxy/extensions/emoji.json ]] || { warn "extension links missing under $CONFIG_HOME/omarchy/oxy"; ((++problems)); }
 # The shell's own validator is the strongest check there is — it is what
 # decides whether the plugin loads at all.
 if command -v omarchy >/dev/null; then
@@ -408,7 +408,7 @@ if command -v omarchy >/dev/null; then
   else
     warn "omarchy plugin validate failed:"
     omarchy plugin validate "$INSTALL_DIR/plugin" 2>&1 | sed 's/^/     /'
-    ((problems++))
+    ((++problems))
   fi
 fi
 

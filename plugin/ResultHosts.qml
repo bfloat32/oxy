@@ -20,7 +20,7 @@ import qs.Ui
 // The dot before the address is the one thing here that is not in the config:
 // whether this machine is in known_hosts, which is to say whether you have ever
 // actually connected. It is offline and free. A real reachability probe is not:
-// see the note in omacast-ssh for why there is no green light here.
+// see the note in oxy-ssh for why there is no green light here.
 //
 // Rows carry:
 //   alias hostName user port sourceFile identity proxyJump known

@@ -1,0 +1,20 @@
+{
+  "id": "theme",
+  "title": "Theme",
+  "keyword": "theme",
+  "aliases": [
+    "themes",
+    "colours",
+    "colors",
+    "appearance"
+  ],
+  "subtitle": "Theme",
+  "glyph": "",
+  "search": "oxy-theme {query}",
+  "when": "command -v omarchy",
+  "minChars": 0,
+  "debounceMs": 80,
+  "maxRows": 48,
+  "tier": "prefix",
+  "view": "themes"
+}

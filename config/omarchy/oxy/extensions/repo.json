@@ -1,0 +1,28 @@
+{
+  "id": "repo",
+  "title": "Local Repos",
+  "keyword": "repo",
+  "aliases": [
+    "repos",
+    "project",
+    "projects"
+  ],
+  "subtitle": "Local Repo",
+  "glyph": "\uf1d3",
+  "search": "oxy-repo {query} {branch}",
+  "when": "command -v git >/dev/null && command -v fd >/dev/null",
+  "minChars": 0,
+  "debounceMs": 60,
+  "timeoutMs": 5000,
+  "maxRows": 12,
+  "tier": "substring",
+  "view": "repos",
+  "settings": [
+    {
+      "key": "roots",
+      "label": "Where your repos live",
+      "value": "",
+      "placeholder": "~/localhost:~/work"
+    }
+  ]
+}

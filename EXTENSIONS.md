@@ -1,6 +1,6 @@
-# Writing an Omacast extension
+# Writing an Oxy extension
 
-An extension is one JSON file in `~/.config/omarchy/omacast/extensions/`. It
+An extension is one JSON file in `~/.config/omarchy/oxy/extensions/`. It
 names a keyword and something that answers for it. There is no QML, nothing
 compiled, and no restart beyond the next time the launcher opens.
 
@@ -10,7 +10,7 @@ compiled, and no restart beyond the next time the launcher opens.
   "title": "Spotify",
   "keyword": "music",
   "aliases": ["song", "track"],
-  "search": "omacast-spotify search {query}",
+  "search": "oxy-spotify search {query}",
   "when": "playerctl --list-all | grep -q spotify",
   "minChars": 2,
   "debounceMs": 250,
@@ -62,7 +62,7 @@ extension itself owns, shown beside the built-in ones:
 ```json
 "actions": [
   { "id": "auth", "title": "Sign in to Spotify",
-    "exec": "omacast-spotify-auth" }
+    "exec": "oxy-spotify-auth" }
 ]
 ```
 
@@ -75,10 +75,10 @@ first, the way the built-in `/clear-all` asks.
 ## settings
 
 `settings:` shows every extension that declares a `settings` list and writes the
-answers to `extensionSettings.<id>` in `~/.config/omarchy/omacast.json`.
+answers to `extensionSettings.<id>` in `~/.config/omarchy/oxy.json`.
 
 The launcher puts them in front of your command as environment, upper-cased and
-prefixed: a key `cacheDays` arrives as `$OMACAST_CACHEDAYS`. A key that is not a
+prefixed: a key `cacheDays` arrives as `$OXY_CACHEDAYS`. A key that is not a
 legal environment name is dropped, so a hand-edited config cannot inject a
 second command through one.
 
@@ -87,7 +87,7 @@ process listing on the machine, and a token is the first thing anybody will put
 in here. Read yours the way a shell script wants to be configured:
 
 ```bash
-cache_days="${OMACAST_CACHEDAYS:-30}"
+cache_days="${OXY_CACHEDAYS:-30}"
 ```
 
 ## cacheMs
@@ -249,7 +249,7 @@ Three fields decide what the two keys that always mean something do.
 ```json
 {"title": "Output Volume", "view": "slider", "value": 90, "min": 0,
  "max": 100, "step": 5, "accessory": "90%",
- "setExec": "omacast-volume set output {value}"}
+ "setExec": "oxy-volume set output {value}"}
 ```
 
 `title` is the label, `accessory` is the formatted current value, and `setExec`
@@ -301,8 +301,8 @@ So an extension may ship `<name>.cases.json` beside its own JSON: queries, and
 what the answer to each has to look like.
 
 ```
-config/omarchy/omacast/extensions/weather.json
-config/omarchy/omacast/extensions/weather.cases.json
+config/omarchy/oxy/extensions/weather.json
+config/omarchy/oxy/extensions/weather.cases.json
 ```
 
 The name is the extension file's name, not its `id`: `timezone.json` has

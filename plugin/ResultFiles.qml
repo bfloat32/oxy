@@ -246,7 +246,7 @@ ListView {
 
         // Elided from the left, which is the opposite of everywhere else on
         // this card and is correct here: the useful end of a path is the end.
-        // "…/units/omacast/bin" tells you where you are; "~/localhost/bet…"
+        // "…/units/oxy/bin" tells you where you are; "~/localhost/bet…"
         // tells you nothing you did not already know.
         Text {
           anchors.verticalCenter: parent.verticalCenter

@@ -1,0 +1,19 @@
+{
+  "id": "radio",
+  "title": "Radio",
+  "keyword": "radio",
+  "aliases": [
+    "fm",
+    "station",
+    "stream"
+  ],
+  "subtitle": "Radio",
+  "glyph": "",
+  "search": "oxy-search-radio {query}",
+  "minChars": 0,
+  "debounceMs": 250,
+  "timeoutMs": 8000,
+  "maxRows": 11,
+  "tier": "substring",
+  "view": "radioplayer"
+}

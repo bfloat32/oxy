@@ -1,8 +1,12 @@
-# omacast
+# oxy
 
 A launcher. One box that answers with apps, arithmetic, files, git, music, your
 notes and the web, and draws each of those the way it deserves rather than as
 one long list.
+
+Oxy began as omacast by pehcastro. Upgrading keeps everything that was yours:
+the first run moves `omacast.json`, your snippets, your custom extensions and
+the whole state directory over to the new names.
 
 `Super+K` opens it. To change that, edit the one line at the top of
 `hypr/keys.lua`:
@@ -106,7 +110,7 @@ to the text cursor and are not taken, except in the views named above.
 A pin lifts a row the way frecency does and by more, and neither ever crosses a
 tier: a name that starts with what you typed still beats a pinned substring.
 Calculator and web rows cannot be pinned, since their key is the text you typed.
-Pins and recent queries live in `~/.local/state/omarchy/omacast-state.json`,
+Pins and recent queries live in `~/.local/state/omarchy/oxy-state.json`,
 beside the frecency file rather than in your settings, which stay yours to edit.
 
 ---
@@ -182,7 +186,7 @@ not inches, a bare `f` is Fahrenheit and not farads, a bare `k` is kelvin only
 next to a temperature, and a word that is not a unit answers nothing rather than
 qalc's `0 B`.
 
-`def:` keeps what it fetched under `~/.cache/omacast/define` for 30 days.
+`def:` keeps what it fetched under `~/.cache/oxy/define` for 30 days.
 
 `date:` answers five shapes of question:
 
@@ -204,7 +208,7 @@ directions, so `2^32` is `4294967296` and not `4.29497E9`. An answer never
 carries fewer significant digits than the number you typed into it. Money is
 cut to two decimals, and `12% of 250` is read as the multiplication you meant.
 
-`repo:` looks in `$OMACAST_REPO_ROOTS` (colon separated) when that is set, and
+`repo:` looks in `$OXY_REPO_ROOTS` (colon separated) when that is set, and
 otherwise in whichever of `~/localhost`, `~/Projects`, `~/Work`, `~/src`,
 `~/code`, `~/dev`, `~/repos`, `~/git` and `~/Developer` exist.
 
@@ -213,7 +217,7 @@ otherwise in whichever of `~/localhost`, `~/Projects`, `~/Work`, `~/src`,
 | Keyword | Aliases | What | Needs |
 |---|---|---|---|
 | `emoji:` | `emojis`, `e`, `smiley`, `symbol` | the emoji by name, copied | Omarchy's emoji data |
-| `snip:` | `snippet`, `snippets`, `text`, `expand` | boilerplate you keep retyping, matched by name or body | `~/.config/omarchy/omacast-snippets.json` |
+| `snip:` | `snippet`, `snippets`, `text`, `expand` | boilerplate you keep retyping, matched by name or body | `~/.config/omarchy/oxy-snippets.json` |
 | `ch:` | `clip`, `clipboard`, `paste` | what you copied, newest first, with the full text beside the list | Omarchy's clipboard history |
 | `note:` | `notes`, `n`, `notepad` | your notes, and `note:new tuesday standup` to start one | nothing extra |
 | `pass:` | `secret`, `password`, `1p` | an entry from `pass` or 1Password, copied, cleared after 45 seconds | `pass`, or `op` signed in |
@@ -225,7 +229,7 @@ The secret only ever reaches `wl-copy`; nothing is passed on a command line.
 | Keyword | Aliases | What | Needs |
 |---|---|---|---|
 | `spotify:` | `music`, `song`, `track`, `play` | bare: the player, with cover, scrubber and transport. With words: search and play, with no API account | the Spotify client; `curl`, `mpv` and the network for search |
-| `sp:` | `spotify`, `track`, `album`, `artist` | the real Spotify Web API search: tracks, then albums, then artists, narrowed with `type:album` | a completed `omacast-spotify-auth` |
+| `sp:` | `spotify`, `track`, `album`, `artist` | the real Spotify Web API search: tracks, then albums, then artists, narrowed with `type:album` | a completed `oxy-spotify-auth` |
 | `radio:` | `fm`, `station`, `stream` | internet radio from radio-browser.info, played through mpv | `mpv`, `curl`, the network |
 
 Both music keywords claim `spotify` and `track`, so which one answers depends on
@@ -252,7 +256,7 @@ so a stopped daemon hides the keyword instead of giving you an empty list.
 Hyprland reports an Omarchy Lua bind as dispatcher `__lua` with a number and
 reports a `code:` bind with no key at all. `hyprctl binds -j` is the fallback,
 and it can only report the binds that still carry a key. The launcher's own keys
-are in neither source, so they are listed too and marked Omacast. Enter copies
+are in neither source, so they are listed too and marked Oxy. Enter copies
 the combination and never fires it.
 
 ### The launcher itself
@@ -271,12 +275,12 @@ Three extensions declare settings today: `def:` (how long to keep definitions),
 `repo:` (where your repos live) and `tz:` (which zones to show). The form saves
 them to `extensionSettings` in your config, under each extension's id. The
 launcher hands them to the script as environment: a key `cacheDays` arrives as
-`$OMACAST_CACHEDAYS`. Environment rather than an argument, because an argument
+`$OXY_CACHEDAYS`. Environment rather than an argument, because an argument
 is visible in every process listing on the machine.
 
-Two of the three read it. `def:` reads `$OMACAST_CACHEDAYS` and `repo:` reads
-`$OMACAST_ROOTS`. `tz:` still takes its zones from `timezones` in
-`omacast.json` and ignores the setting it declares.
+Two of the three read it. `def:` reads `$OXY_CACHEDAYS` and `repo:` reads
+`$OXY_ROOTS`. `tz:` still takes its zones from `timezones` in
+`oxy.json` and ignores the setting it declares.
 
 ### `/` actions
 
@@ -288,9 +292,9 @@ uninvited beside your search results is a way to clear your history by accident.
 | `/clear` | forget the recent queries |
 | `/clear-pins` | forget the pins |
 | `/clear-all` | both. Asks first: the second Enter is the answer |
-| `/reload` | rescan `~/.config/omarchy/omacast/extensions` |
+| `/reload` | rescan `~/.config/omarchy/oxy/extensions` |
 | `/settings` | types `settings:` for you |
-| `/config` | open `~/.config/omarchy/omacast.json` in your editor |
+| `/config` | open `~/.config/omarchy/oxy.json` in your editor |
 | `/stats` | extensions loaded, answers cached, `when` checks and how many pass |
 
 An extension file may also carry an `actions` block, and those join this list:
@@ -348,7 +352,7 @@ That summon is a public entry point. Any payload with a `query` key opens the
 launcher on that query:
 
 ```bash
-omarchy-shell shell summon bo.omacast '{"query":"bo:"}'
+omarchy-shell shell summon bo.oxy '{"query":"bo:"}'
 ```
 
 A payload that will not parse opens the launcher empty rather than not at all.
@@ -406,13 +410,13 @@ sentence and pressed a key.
 
 It knows this desktop. Hyprland here is configured in Lua, where `hyprctl
 dispatch workspace 9` is not merely wrong but can return `ok` and do nothing;
-the agent is told the real form, and `omacast-agent desk` gives it the
+the agent is told the real form, and `oxy-agent desk` gives it the
 dispatchers already spelled right, waiting for windows to actually appear:
 
 ```
-omacast-agent desk empty              # the lowest workspace with nothing on it
-omacast-agent desk tile 4 terminal    # four of them, splitting the largest each time
-omacast-agent desk help               # the rest
+oxy-agent desk empty              # the lowest workspace with nothing on it
+oxy-agent desk tile 4 terminal    # four of them, splitting the largest each time
+oxy-agent desk help               # the rest
 ```
 
 It needs `claude`, `codex` or `gemini` on `PATH`. With none of them there the
@@ -441,7 +445,7 @@ Escape leaves the answer. So does typing.
 
 ## Settings
 
-`~/.config/omarchy/omacast.json`, watched, so an edit takes effect on the next
+`~/.config/omarchy/oxy.json`, watched, so an edit takes effect on the next
 keystroke. `/config` opens it.
 
 ```json
@@ -494,7 +498,7 @@ owns the same keyword wins.
 
 ## Timezones
 
-`tz:` reads its zones from `timezones` in `~/.config/omarchy/omacast.json`:
+`tz:` reads its zones from `timezones` in `~/.config/omarchy/oxy.json`:
 
 ```json
 {
@@ -537,7 +541,7 @@ that 3pm is 9pm for somebody else is usually the step before telling them.
 
 ## Snippets
 
-`snip:` reads `~/.config/omarchy/omacast-snippets.json`, a flat object of name
+`snip:` reads `~/.config/omarchy/oxy-snippets.json`, a flat object of name
 to text:
 
 ```json
@@ -575,57 +579,57 @@ Three things that had to be got right, each found by testing:
 
 Searching Spotify's own catalogue properly needs the Web API, which needs a
 Spotify developer app. That ships here too, as `sp:`, and stays silent until you
-run `omacast-spotify-auth`. See [SPOTIFY-LIBRARY.md](SPOTIFY-LIBRARY.md).
+run `oxy-spotify-auth`. See [SPOTIFY-LIBRARY.md](SPOTIFY-LIBRARY.md).
 
 ---
 
 ## The built-in extensions
 
 These ship inside this unit because none of them works without it. They are
-scripts in `bin/` plus a JSON file in `config/omarchy/omacast/extensions/`, and
+scripts in `bin/` plus a JSON file in `config/omarchy/oxy/extensions/`, and
 they are the working examples to copy when writing your own.
 
 | Keyword | Script | Notes |
 |---|---|---|
-| `file:` | `omacast-search-files` | fd, re-ranked by depth and match position |
-| `img:` | `omacast-search-images` | newest first, dimensions from ImageMagick when present |
-| `win:` | `omacast-search-windows` | hyprctl, focuses and closes through the Lua dispatcher |
-| `kill:` | `omacast-kill` | biggest first, two characters minimum |
-| `emoji:` | `omacast-emoji` | reads Omarchy's own emoji data in place |
-| `snip:` | `omacast-snippet` | silent until the snippets file exists |
-| `recent:` | `omacast-recent` | recently-used.xbel, minus what has since been deleted |
-| `repo:` | `omacast-repo` | one fd walk, git only for the rows actually shown |
-| `git:` | `omacast-git` | the focused terminal's repo, else the one touched last |
-| `branch:` | `omacast-git-branch` | one for-each-ref, ahead/behind against upstream and trunk |
-| `stash:` | `omacast-git-stash` | one call per stash for its files; no drop, on purpose |
-| `gh:` | `omacast-gh` | the shared GitHub engine; a slug or URL answers before the request |
-| `pr:` `issue:` `ci:` | `omacast-gh-pr` etc | thin wrappers on the same engine, one mode each |
-| `ssh:` | `omacast-ssh` | ~/.ssh/config, Include followed, wildcard hosts skipped |
-| `docker:` | `omacast-docker` | gated on the daemon answering, not on the binary existing |
-| `spotify:` | `omacast-search-music` | MPRIS for the player, Deezer for search |
-| `sp:` | `omacast-spotify` | Web API search, after `omacast-spotify-auth` |
-| `radio:` | `omacast-search-radio` | radio-browser.info, plays through mpv |
-| `ch:` | `omacast-clipboard-history` | reads the file Omarchy's own overlay writes |
-| `note:` | `omacast-note` | one markdown file per note |
-| `alarm:` | `omacast-alarm` | plain language duration |
-| `theme:` | `omacast-theme` | every theme, current one first, applied as you move |
-| `omarchy:` | `omacast-omarchy` | flattens the real menu, so nothing here is a stale hand copy |
-| `cal:` | `omacast-calendar` | sends the numbers, the view draws the grid |
-| `date:` | `omacast-date` | answers unscoped, so its gate is deliberately narrow |
-| `tz:` | `omacast-timezone` | zone names matched loosely, Discord timestamps both ways |
-| `unit:` | `omacast-unit` | qalc, with the phrasing traps fixed |
-| `def:` | `omacast-define` | dictionaryapi.dev, keyless, kept for 30 days |
-| `sys:` | `omacast-system` | every reading optional, skipped when absent |
-| `calc:` | `omacast-calc-history` | written when an answer is accepted, never by a keystroke |
-| `pass:` | `omacast-pass` | `pass` or `op`, whichever is there; the secret only ever reaches wl-copy |
-| `bt:` | `omacast-bluetooth` | bluetoothctl reads, `omarchy-bluetooth-device` acts, so rfkill is handled |
-| `wifi:` | `omacast-wifi` | saved networks connect from the row, new ones go to the network panel |
-| `vol:` | `omacast-volume` | sliders; output resolved through any DSP sink to the real one |
-| `bri:` | `omacast-brightness` | a slider, through `omarchy-brightness-display`, which knows DDC from backlight |
-| `do:` | `omacast-agent` | answers over a unix socket rather than a process per keystroke |
-| `shortcuts:` | `omacast-shortcuts` | `omarchy-menu-keybindings --print` first, `hyprctl binds -j` as the fallback |
-| `herdr:` | `omacast-herdr` | one snapshot per running herdr session, and reading marks nothing seen |
-| `bo:` | `omacast-bo` | three levels of marketplace, and the toggle that closes the window |
+| `file:` | `oxy-search-files` | fd, re-ranked by depth and match position |
+| `img:` | `oxy-search-images` | newest first, dimensions from ImageMagick when present |
+| `win:` | `oxy-search-windows` | hyprctl, focuses and closes through the Lua dispatcher |
+| `kill:` | `oxy-kill` | biggest first, two characters minimum |
+| `emoji:` | `oxy-emoji` | reads Omarchy's own emoji data in place |
+| `snip:` | `oxy-snippet` | silent until the snippets file exists |
+| `recent:` | `oxy-recent` | recently-used.xbel, minus what has since been deleted |
+| `repo:` | `oxy-repo` | one fd walk, git only for the rows actually shown |
+| `git:` | `oxy-git` | the focused terminal's repo, else the one touched last |
+| `branch:` | `oxy-git-branch` | one for-each-ref, ahead/behind against upstream and trunk |
+| `stash:` | `oxy-git-stash` | one call per stash for its files; no drop, on purpose |
+| `gh:` | `oxy-gh` | the shared GitHub engine; a slug or URL answers before the request |
+| `pr:` `issue:` `ci:` | `oxy-gh-pr` etc | thin wrappers on the same engine, one mode each |
+| `ssh:` | `oxy-ssh` | ~/.ssh/config, Include followed, wildcard hosts skipped |
+| `docker:` | `oxy-docker` | gated on the daemon answering, not on the binary existing |
+| `spotify:` | `oxy-search-music` | MPRIS for the player, Deezer for search |
+| `sp:` | `oxy-spotify` | Web API search, after `oxy-spotify-auth` |
+| `radio:` | `oxy-search-radio` | radio-browser.info, plays through mpv |
+| `ch:` | `oxy-clipboard-history` | reads the file Omarchy's own overlay writes |
+| `note:` | `oxy-note` | one markdown file per note |
+| `alarm:` | `oxy-alarm` | plain language duration |
+| `theme:` | `oxy-theme` | every theme, current one first, applied as you move |
+| `omarchy:` | `oxy-omarchy` | flattens the real menu, so nothing here is a stale hand copy |
+| `cal:` | `oxy-calendar` | sends the numbers, the view draws the grid |
+| `date:` | `oxy-date` | answers unscoped, so its gate is deliberately narrow |
+| `tz:` | `oxy-timezone` | zone names matched loosely, Discord timestamps both ways |
+| `unit:` | `oxy-unit` | qalc, with the phrasing traps fixed |
+| `def:` | `oxy-define` | dictionaryapi.dev, keyless, kept for 30 days |
+| `sys:` | `oxy-system` | every reading optional, skipped when absent |
+| `calc:` | `oxy-calc-history` | written when an answer is accepted, never by a keystroke |
+| `pass:` | `oxy-pass` | `pass` or `op`, whichever is there; the secret only ever reaches wl-copy |
+| `bt:` | `oxy-bluetooth` | bluetoothctl reads, `omarchy-bluetooth-device` acts, so rfkill is handled |
+| `wifi:` | `oxy-wifi` | saved networks connect from the row, new ones go to the network panel |
+| `vol:` | `oxy-volume` | sliders; output resolved through any DSP sink to the real one |
+| `bri:` | `oxy-brightness` | a slider, through `omarchy-brightness-display`, which knows DDC from backlight |
+| `do:` | `oxy-agent` | answers over a unix socket rather than a process per keystroke |
+| `shortcuts:` | `oxy-shortcuts` | `omarchy-menu-keybindings --print` first, `hyprctl binds -j` as the fallback |
+| `herdr:` | `oxy-herdr` | one snapshot per running herdr session, and reading marks nothing seen |
+| `bo:` | `oxy-bo` | three levels of marketplace, and the toggle that closes the window |
 
 ---
 
@@ -635,7 +639,7 @@ they are the working examples to copy when writing your own.
 `weather:hello`, and the row comes back with hello in it. Then replace the body
 of the script and keep the shape.
 
-An extension is a JSON file in `~/.config/omarchy/omacast/extensions/` naming a
+An extension is a JSON file in `~/.config/omarchy/oxy/extensions/` naming a
 keyword and a command:
 
 ```json
@@ -678,7 +682,7 @@ themselves the first time a shimmed binary runs.
 | `maxRows` | `8` | how many rows to keep |
 | `cacheMs` | `0` | keep an answer this long. Off by default on purpose: what is playing, which containers are up and what is on the clipboard are all wrong the moment you act on them, and nothing here can tell those from a dictionary lookup. The key is the exact command, so a cached answer can never reach a different question |
 | `refreshMs` | `0` | re-run this often while these rows are on screen: no spinner, no flicker, the selection stays put. Only while the launcher is open, and it stops the moment the query changes |
-| `settings` | `[]` | fields `settings:` will ask for and write to `extensionSettings.<id>` in `omacast.json`, each `{ key, label, value, placeholder, secret }`. The launcher puts them in front of your command as environment, so `cacheDays` arrives as `$OMACAST_CACHEDAYS`. Never an argument: an argument is in everyone's process list |
+| `settings` | `[]` | fields `settings:` will ask for and write to `extensionSettings.<id>` in `oxy.json`, each `{ key, label, value, placeholder, secret }`. The launcher puts them in front of your command as environment, so `cacheDays` arrives as `$OXY_CACHEDAYS`. Never an argument: an argument is in everyone's process list |
 | `testQuery` | `""` | what `bo test` types at this extension when it checks that every action names a program that exists |
 
 `bo test` reads two more things off this file. `view` has to name a

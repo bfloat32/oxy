@@ -35,7 +35,7 @@ client id of your own. Making one takes about a minute and costs nothing.
 
 ```bash
 bo add spotify
-omacast-spotify-auth
+oxy-spotify-auth
 ```
 
 It asks for the client id, opens your browser at Spotify's approval page, and
@@ -55,9 +55,9 @@ nothing and shows nothing.
 
 ## Where the credentials live
 
-`~/.local/state/omarchy/omacast-spotify.json`, mode 600.
+`~/.local/state/omarchy/oxy-spotify.json`, mode 600.
 
-Not in `~/.config/omarchy/omacast.json`, and not in this repo. That config
+Not in `~/.config/omarchy/oxy.json`, and not in this repo. That config
 file is meant to be committed and carried between machines; this one is a live
 Spotify session for anyone who can read it. The access token is refreshed in
 place when it expires, so the file rewrites itself roughly every hour.
@@ -70,7 +70,7 @@ forgets the grant once you remove the app under
 
 Search works on any account. `PUT /v1/me/player/play` is a Premium only
 endpoint, so a free account gets a notification saying so instead of music.
-`omacast-spotify-auth` checks this at the end of setup and warns you there.
+`oxy-spotify-auth` checks this at the end of setup and warns you there.
 
 Playback also needs somewhere to play. Spotify has no concept of "start on this
 laptop" without a device already registered, so open the Spotify app once after

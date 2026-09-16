@@ -41,7 +41,7 @@ import qs.Ui
 //   mem memBytes memPct memCap memCapText
 //   hostCores hostMem
 // The cpu and mem fields are absent until the sampler has run; see
-// omacast-docker for why they arrive a beat late rather than costing a second.
+// oxy-docker for why they arrive a beat late rather than costing a second.
 // Everywhere one of them would be, a Skeleton holds the space until it lands,
 // so the first frame reads as a panel still counting rather than as a panel
 // that finished and found nothing.

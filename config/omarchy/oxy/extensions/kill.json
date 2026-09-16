@@ -1,0 +1,22 @@
+{
+  "id": "kill",
+  "title": "Processes",
+  "keyword": "kill",
+  "aliases": [
+    "ps",
+    "proc",
+    "process",
+    "top",
+    "quit"
+  ],
+  "subtitle": "Process",
+  "glyph": "",
+  "search": "oxy-kill {query}",
+  "minChars": 0,
+  "debounceMs": 120,
+  "timeoutMs": 3000,
+  "maxRows": 12,
+  "refreshMs": 1500,
+  "tier": "substring",
+  "view": "processes"
+}

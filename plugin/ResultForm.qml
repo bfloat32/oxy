@@ -43,7 +43,7 @@ import qs.Ui
 //
 // A row built inside the launcher may carry `onSubmit` instead of `exec`: a
 // function taking the collected values. That is how the settings form writes to
-// omacast.json without inventing a shell command to do it.
+// oxy.json without inventing a shell command to do it.
 Item {
   // Without this, a height computed from content draws past the card's border
   // when the sum is wrong, rather than being cut off inside it.

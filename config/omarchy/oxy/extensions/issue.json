@@ -1,0 +1,16 @@
+{
+  "id": "issue",
+  "title": "Issues",
+  "keyword": "issue",
+  "aliases": ["issues"],
+  "subtitle": "Issue",
+  "glyph": "",
+  "search": "oxy-gh-issue {query}",
+  "when": "command -v gh >/dev/null 2>&1 && command -v jq >/dev/null 2>&1",
+  "minChars": 0,
+  "debounceMs": 320,
+  "timeoutMs": 9000,
+  "maxRows": 14,
+  "tier": "substring",
+  "view": "list"
+}

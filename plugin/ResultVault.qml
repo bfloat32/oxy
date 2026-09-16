@@ -23,7 +23,7 @@ import qs.Ui
 // is here.
 //
 // Nothing in this file reads a secret. The value is fetched inside
-// `omacast-pass copy`, goes down a pipe into wl-copy, and never becomes a row,
+// `oxy-pass copy`, goes down a pipe into wl-copy, and never becomes a row,
 // an argument, or a string in this process.
 //
 // The row carries, beyond the usual title:

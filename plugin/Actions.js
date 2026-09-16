@@ -46,9 +46,9 @@ var ACTIONS = [
     effect: "stats",
     confirm: "" },
 
-  { id: "config", title: "Edit omacast.json", subtitle: "Launcher", glyph: "",
+  { id: "config", title: "Edit oxy.json", subtitle: "Launcher", glyph: "",
     keywords: ["config", "json", "edit", "file"],
-    exec: "omarchy-launch-editor ~/.config/omarchy/omacast.json",
+    exec: "omarchy-launch-editor ~/.config/omarchy/oxy.json",
     confirm: "" }
 ]
 
@@ -57,7 +57,7 @@ var ACTIONS = [
 //
 //   "actions": [
 //     { "id": "auth", "title": "Sign in to Spotify",
-//       "exec": "omacast-spotify-auth" }
+//       "exec": "oxy-spotify-auth" }
 //   ]
 //
 // Namespaced by extension id, so two extensions may both offer "auth" without

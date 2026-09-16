@@ -1,0 +1,17 @@
+{
+  "id": "omarchy",
+  "title": "Omarchy",
+  "keyword": "omarchy",
+  "aliases": ["oma", "menu", "settings-menu", "o"],
+  "search": "oxy-omarchy {query}",
+  "when": "command -v omarchy",
+  "glyph": "󰆌",
+  "subtitle": "Every Omarchy setting",
+  "minChars": 0,
+  "debounceMs": 90,
+  "timeoutMs": 5000,
+  "cacheMs": 600000,
+  "maxRows": 16,
+  "tier": "substring",
+  "view": "menutree"
+}

@@ -1,6 +1,6 @@
 .pragma library
 
-// An extension is a JSON file in ~/.config/omarchy/omacast/extensions/.
+// An extension is a JSON file in ~/.config/omarchy/oxy/extensions/.
 // It declares a keyword and a command that answers for it, so a new source of
 // results is a shell script and a JSON file, in any language, with nothing
 // compiled and no QML.
@@ -10,7 +10,7 @@
 //     "title": "Spotify",
 //     "keyword": "music",
 //     "aliases": ["song", "track"],
-//     "search": "omacast-spotify search {query}",
+//     "search": "oxy-spotify search {query}",
 //     "minChars": 2,
 //     "debounceMs": 250,
 //     "when": "playerctl --list-all | grep -q spotify",
@@ -145,13 +145,13 @@ function buildCommand(ext, argText, filters, quote, settings) {
 // What `settings:` collected, handed to the script as environment.
 //
 // This was the missing half of that feature: the launcher wrote a user's
-// answers into omacast.json under the extension's id and nothing ever read them
+// answers into oxy.json under the extension's id and nothing ever read them
 // back, so three keywords offered settings that did nothing at all.
 //
 // Environment rather than arguments, because an argument is visible in every
 // process listing on the machine and one of the first things anyone will put in
-// here is an API token. A script reads its own with $OMACAST_ORG or
-// ${OMACAST_ORG:-default}, which is how a shell script wants to be configured.
+// here is an API token. A script reads its own with $OXY_ORG or
+// ${OXY_ORG:-default}, which is how a shell script wants to be configured.
 function settingsPrefix(settings, quote) {
   if (!settings) return ""
 
@@ -162,7 +162,7 @@ function settingsPrefix(settings, quote) {
     if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(key)) continue
     var value = settings[key]
     if (value === undefined || value === null) continue
-    out += "OMACAST_" + key.toUpperCase() + "=" + quote(String(value)) + " "
+    out += "OXY_" + key.toUpperCase() + "=" + quote(String(value)) + " "
   }
   return out
 }

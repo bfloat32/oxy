@@ -22,7 +22,7 @@ import "Accent.js" as Accent
 import "Cache.js" as Cache
 import "Availability.js" as Availability
 
-// Omacast: one box that answers with apps, arithmetic, Omarchy commands, or
+// Oxy: one box that answers with apps, arithmetic, Omarchy commands, or
 // the web.
 //
 // The shell injects `shell`, `manifest` and `omarchyPath` by name, calls
@@ -135,10 +135,10 @@ Item {
     sourceComponent: AppLibraryFallback { omarchyPath: root.omarchyPath }
   }
 
-  // Extensions, loaded from ~/.config/omarchy/omacast/extensions/*.json.
+  // Extensions, loaded from ~/.config/omarchy/oxy/extensions/*.json.
   // A unit drops a file there through its config/ folder, so a new source of
   // results needs no QML and no rebuild.
-  readonly property string extensionsDir: Quickshell.env("HOME") + "/.config/omarchy/omacast/extensions"
+  readonly property string extensionsDir: Quickshell.env("HOME") + "/.config/omarchy/oxy/extensions"
   property var extensions: []
   property var extensionProviders: []
 
@@ -160,7 +160,7 @@ Item {
   // for `bash -lc`, which sources the profile again on every keystroke: ~56ms
   // a fork on a plain profile, and profiles carrying mise or nix take far
   // longer. `env -0` once at startup replays whatever the login shell would
-  // have exported — PATH for shims, OMACAST_REPO_ROOTS, the lot — onto a bare
+  // have exported — PATH for shims, OXY_REPO_ROOTS, the lot — onto a bare
   // `bash -c`, which costs single-digit milliseconds.
   property var loginEnv: []
 
@@ -193,6 +193,54 @@ Item {
     Component.onCompleted: running = true
   }
 
+  // The rename left everything the user already had under the old name: their
+  // omacast.json, their snippets, their custom extensions, and every state
+  // file. Moved once, into the new names, so an upgrade keeps all of it.
+  //
+  // `migrated` gates the FileView paths below rather than ordering process
+  // against reads: a view that read first would cache an empty answer and the
+  // moved file would never be seen until the next write.
+  property bool migrated: false
+
+  Process {
+    id: migration
+    // Every move is "old exists and new does not": the shipped config dir is
+    // already in place by then, so the extensions merge is per file — the
+    // user's own files land beside the shipped ones rather than replacing or
+    // being skipped with the directory.
+    command: ["bash", "-c",
+      'cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"; ' +
+      'st="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy"; ' +
+      'ca="${XDG_CACHE_HOME:-$HOME/.cache}"; ' +
+      'shopt -s nullglob; ' +
+      'for pair in omacast.json:oxy.json omacast-snippets.json:oxy-snippets.json; do ' +
+      '  old="$cfg/${pair%%:*}"; new="$cfg/${pair##*:}"; ' +
+      '  [[ -f $old && ! -f $new ]] && mv "$old" "$new"; ' +
+      'done; ' +
+      'for f in "$st"/omacast-*; do ' +
+      '  new="$st/oxy-${f##*omacast-}"; [[ -e $new ]] || mv "$f" "$new"; ' +
+      'done; ' +
+      'for sub in "" extensions; do ' +
+      '  src="$cfg/omacast${sub:+/$sub}"; dst="$cfg/oxy${sub:+/$sub}"; ' +
+      '  [[ -d $src ]] || continue; mkdir -p "$dst"; ' +
+      '  for f in "$src"/*; do base="${f##*/}"; [[ -e $dst/$base ]] || mv "$f" "$dst/$base"; done; ' +
+      'done; ' +
+      '[[ -d $ca/omacast && ! -d $ca/oxy ]] && mv "$ca/omacast" "$ca/oxy"; ' +
+      // rmdir refuses a directory that still holds anything, so this only
+      // removes one the moves above fully emptied.
+      'rmdir "$cfg/omacast/extensions" "$cfg/omacast" 2>/dev/null; ' +
+      'true']
+    onExited: {
+      root.migrated = true
+      // An open that landed mid-migration may have probed the empty new
+      // directory already; clearing the signature forces the next scan to
+      // actually read what just arrived.
+      root.extSignature = ""
+      root.scanExtensions()
+    }
+    Component.onCompleted: running = true
+  }
+
   // `?` on its own is help. `?dogs` stays a web search, because the sigil is
   // worth more as the shorthand people already use than as a help key, and a
   // `?` with nothing after it has nothing to search for anyway.
@@ -212,7 +260,7 @@ Item {
   // Off unless asked for. An empty box greeting you with the last few things you
   // typed sounds helpful and is not: half of them are partial words from a
   // query you abandoned, and none of them is what you opened the launcher to
-  // do. Turn it on with `"recents": true` in omacast.json.
+  // do. Turn it on with `"recents": true` in oxy.json.
   readonly property bool recentsEnabled: root.config.recents === true
 
   readonly property bool recentMode: root.recentsEnabled && root.queryText.trim() === ""
@@ -448,7 +496,7 @@ Item {
   // ------------------------------------------------------------ lifecycle
 
   // `payloadJson` is how something outside asks for a particular screen rather
-  // than the opening one: `omarchy-shell shell summon bo.omacast '{"query":"bo:"}'`.
+  // than the opening one: `omarchy-shell shell summon bo.oxy '{"query":"bo:"}'`.
   // It exists because a few actions have to close this window to do their work,
   // and the only decent way to do that is to put the user back where they were.
   function open(payloadJson) {
@@ -565,7 +613,7 @@ Item {
     revertPreview()
     close()
     if (root.shell && typeof root.shell.hide === "function") {
-      root.shell.hide((root.manifest && root.manifest.id) || "bo.omacast")
+      root.shell.hide((root.manifest && root.manifest.id) || "bo.oxy")
     }
   }
 
@@ -815,11 +863,11 @@ Item {
   // An extension declares what it wants in its own JSON file:
   //
   //   "settings": [
-  //     { "key": "org", "label": "Organisation", "value": "pehcastro" },
+  //     { "key": "org", "label": "Organisation", "value": "bfloat32" },
   //     { "key": "token", "label": "API Token", "secret": true }
   //   ]
   //
-  // and reads the answers back out of omacast.json under its own id. The
+  // and reads the answers back out of oxy.json under its own id. The
   // launcher never passes them to the search command: a token on a command line
   // is a token in everyone's process list.
   function extensionById(id) {
@@ -906,7 +954,7 @@ Item {
       group: "Settings",
       view: "form",
       title: ext.title,
-      subtitle: "Saved to ~/.config/omarchy/omacast.json",
+      subtitle: "Saved to ~/.config/omarchy/oxy.json",
       submit: "Save",
       fields: fields,
       // Back to the list, which the flow stack reads as walking back out.
@@ -922,7 +970,7 @@ Item {
   // Through the file's own text, so nothing the user wrote is lost and nothing
   // we merely defaulted to is written down as though they had chosen it.
   //
-  // omacast.json is watched, so this write comes straight back as a reload and
+  // oxy.json is watched, so this write comes straight back as a reload and
   // the form's next visit shows what was saved. That round trip is only safe
   // because this file is ours: the same write into shell.json would make the
   // shell recompute its panel list and destroy this overlay mid-edit.
@@ -1404,7 +1452,7 @@ Item {
     onExited: function (code) {
       root.answerStreaming = false
       if (code !== 0 && root.answerText === "") {
-        root.answerError = "That command exited " + code + ". Check ask.command in omacast.json."
+        root.answerError = "That command exited " + code + ". Check ask.command in oxy.json."
       }
     }
   }
@@ -1938,7 +1986,7 @@ Item {
       // does both. `calc:` reads the file this writes, and its `when` is a test
       // that the file has anything in it, so a launcher that only copied would
       // leave that keyword permanently invisible.
-      var record = "omacast-calc-history record " + Util.shellQuote(calc.pendingText)
+      var record = "oxy-calc-history record " + Util.shellQuote(calc.pendingText)
         + " " + Util.shellQuote(row.title)
 
       row.run = (function (command) {
@@ -2054,7 +2102,7 @@ Item {
 
   FileView {
     id: frecencyFile
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/omacast-frecency.json"
+    path: root.migrated ? Quickshell.env("HOME") + "/.local/state/omarchy/oxy-frecency.json" : ""
     printErrors: false
     atomicWrites: true
     // Not watched: this file is written from here, and reacting to our own
@@ -2081,12 +2129,12 @@ Item {
     }
   }
 
-  // Recent queries and pins. Not in omacast.json: that file is the user's to
+  // Recent queries and pins. Not in oxy.json: that file is the user's to
   // edit, and a launcher rewriting it under them would lose their comments and
   // their formatting the first time they searched for anything.
   FileView {
     id: stateFile
-    path: Quickshell.env("HOME") + "/.local/state/omarchy/omacast-state.json"
+    path: root.migrated ? Quickshell.env("HOME") + "/.local/state/omarchy/oxy-state.json" : ""
     printErrors: false
     atomicWrites: true
     // Not watched, for the reason the frecency file is not watched: this is the
@@ -2113,7 +2161,7 @@ Item {
 
   FileView {
     id: configFile
-    path: Quickshell.env("HOME") + "/.config/omarchy/omacast.json"
+    path: root.migrated ? Quickshell.env("HOME") + "/.config/omarchy/oxy.json" : ""
     watchChanges: true
     printErrors: false
     onLoaded: {
@@ -2172,7 +2220,7 @@ Item {
     visible: root.opened
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
-    WlrLayershell.namespace: "omacast"
+    WlrLayershell.namespace: "oxy"
     WlrLayershell.layer: WlrLayer.Overlay
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.Exclusive
     exclusionMode: ExclusionMode.Ignore

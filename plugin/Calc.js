@@ -372,7 +372,7 @@ function magnitudeAfter(text, end) {
 // certainty. Null is the whole point: it is how the calculator declines.
 //
 // `notes` collects the literals that were ambiguous and got read anyway, so the
-// row can say which way it took them. `omacast-unit` does the same thing for
+// row can say which way it took them. `oxy-unit` does the same thing for
 // the `unit` keyword and for the same reason: somebody who meant the other
 // reading deserves to see that, rather than to find out from the number.
 function withNumbers(text, notes) {

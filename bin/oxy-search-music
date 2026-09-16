@@ -1,0 +1,189 @@
+#!/bin/bash
+# Music for Oxy's `music:` keyword.
+#
+#   music:                what is playing, as a player
+#   music:kind of blue    search a catalogue, then play or open the result
+#
+# Two halves that need nothing installed and nothing registered. Control goes
+# over MPRIS, which every player that shows a media widget already speaks.
+# Search goes to iTunes' public endpoint, which needs no key and returns cover
+# art, and playback of a result goes back through MPRIS OpenUri, which the Linux
+# Spotify client implements.
+#
+# What this cannot do without the Spotify developer app is play the exact track
+# a search returned: nothing keyless maps a title to a Spotify id. So a result
+# opens that search inside Spotify, which is one keypress from the right track
+# rather than zero. `sp:` from the spotify unit does the exact thing, once set up.
+
+set -uo pipefail
+
+query="${1:-}"
+
+BUS_PATH=/org/mpris/MediaPlayer2
+PLAYER_IFACE=org.mpris.MediaPlayer2.Player
+
+player=$(busctl --user list --no-legend 2>/dev/null |
+  awk '$1 ~ /^org\.mpris\.MediaPlayer2\./ { print $1; exit }')
+
+prop() {
+  busctl --user get-property "$player" "$BUS_PATH" "$PLAYER_IFACE" "$1" 2>/dev/null
+}
+
+# busctl escapes quotes, backslashes and apostrophes inside its strings, so a
+# title like "Doesn't Just Happen" arrives with a backslash in it.
+unescape() { sed 's/\\\(.\)/\1/g'; }
+
+field() {
+  printf '%s' "$1" | grep -oP "\"$2\"\s+\Ks[^\"]*\"([^\"\\\\]|\\\\.)*\"" | head -1 |
+    sed 's/^s\s*//; s/^"//; s/"$//' | unescape
+}
+
+# ---------------------------------------------------------------- now playing
+
+now_playing() {
+  [[ -z $player ]] && return 0
+
+  local metadata title album artist art status length position
+  metadata=$(busctl --user get-property "$player" "$BUS_PATH" "$PLAYER_IFACE" Metadata 2>/dev/null)
+  title=$(field "$metadata" "xesam:title")
+  [[ -z $title ]] && return 0
+
+  album=$(field "$metadata" "xesam:album")
+  art=$(field "$metadata" "mpris:artUrl")
+  artist=$(printf '%s' "$metadata" | grep -oP '"xesam:artist"\s+as\s+\d+\s+\K"([^"\\]|\\.)*"' |
+    head -1 | sed 's/^"//; s/"$//' | unescape)
+
+  status=$(prop PlaybackStatus | sed 's/^s\s*//; s/"//g')
+  [[ -z $status ]] && status="Stopped"
+
+  length=$(printf '%s' "$metadata" | grep -oP '"mpris:length"\s+t\s+\K\d+' | head -1)
+  position=$(prop Position | grep -oP '^x\s+\K\d+' | head -1)
+
+  local seconds=0 progress=0
+  if [[ -n $length && $length -gt 0 ]]; then
+    seconds=$(awk -v l="$length" 'BEGIN { printf "%.0f", l / 1000000 }')
+    [[ -n $position ]] && progress=$(awk -v p="$position" -v l="$length" 'BEGIN { printf "%.4f", p / l }')
+  fi
+
+  local short=${player#org.mpris.MediaPlayer2.}
+  local call="busctl --user call $player $BUS_PATH $PLAYER_IFACE"
+  local setprop="busctl --user set-property $player $BUS_PATH $PLAYER_IFACE"
+
+  # Shuffle and repeat are real player state, not commands, so the view needs
+  # to know which way they are set before it can draw them lit or unlit.
+  local shuffle loop
+  shuffle=$(prop Shuffle | awk '{print $2}')
+  [[ $shuffle == "true" ]] || shuffle=false
+  loop=$(prop LoopStatus | sed 's/^s\s*//; s/"//g')
+  [[ -z $loop ]] && loop="None"
+
+  # LoopStatus cycles None, Playlist, Track, which is the order the buttons in
+  # every player step through: off, repeat all, repeat one.
+  local next_loop
+  case "$loop" in
+    None) next_loop="Playlist" ;;
+    Playlist) next_loop="Track" ;;
+    *) next_loop="None" ;;
+  esac
+
+  local can_next can_prev
+  can_next=$(prop CanGoNext | awk '{print $2}')
+  can_prev=$(prop CanGoPrevious | awk '{print $2}')
+  local trackid
+  trackid=$(field "$metadata" "mpris:trackid")
+
+  # SetPosition takes an object path and microseconds. The view knows neither,
+  # so it substitutes the seconds it wants into this and runs it.
+  local seek=""
+  [[ -n $trackid ]] && seek="$call SetPosition ox $trackid \$(( {seconds} * 1000000 ))"
+
+  jq -cn \
+    --arg t "$title" --arg s "$artist" --arg d "$album" --arg art "$art" \
+    --arg status "$status" --arg player "$short" --arg seek "$seek" \
+    --arg pp "$call PlayPause" --arg next "$call Next" --arg prev "$call Previous" \
+    --arg shuffleCmd "$setprop Shuffle b $([[ $shuffle == true ]] && echo false || echo true)" \
+    --arg loopCmd "$setprop LoopStatus s $next_loop" \
+    --arg loop "$loop" \
+    --argjson shuffle "$shuffle" \
+    --argjson canNext "${can_next:-true}" --argjson canPrev "${can_prev:-true}" \
+    --argjson pr "$progress" --argjson len "$seconds" \
+    '{
+       id: "now", title: $t, subtitle: $s, detail: $d, art: $art,
+       status: $status, player: $player, progress: $pr, lengthSeconds: $len,
+       seek: $seek, view: "player", score: 99000,
+       shuffle: $shuffle, loop: $loop, canNext: $canNext, canPrev: $canPrev,
+       controls: { playPause: $pp, next: $next, prev: $prev,
+                   shuffle: $shuffleCmd, loop: $loopCmd },
+       exec: $pp,
+       actions: [
+         { title: (if $status == "Playing" then "Pause" else "Play" end),
+           shortcut: "↵", exec: $pp, query: "spotify:" },
+         { title: "Next Track", exec: $next, query: "spotify:" },
+         { title: "Previous Track", exec: $prev, query: "spotify:" },
+         { title: (if $shuffle then "Shuffle Off" else "Shuffle On" end),
+           exec: $shuffleCmd, query: "spotify:" },
+         { title: (if $loop == "None" then "Repeat All"
+                   elif $loop == "Playlist" then "Repeat One"
+                   else "Repeat Off" end), exec: $loopCmd, query: "spotify:" },
+         { title: "Copy Title and Artist",
+           exec: ("printf %s " + (($t + " - " + $s) | @sh) + " | wl-copy") }
+       ]
+     }'
+}
+
+# ---------------------------------------------------------------- search
+
+# Deezer rather than iTunes, for one reason: it returns an ISRC on every row,
+# and an ISRC is what MusicBrainz can turn into a Spotify track id. Without it
+# a result can only ever open a search rather than play the track.
+search() {
+  local terms="$1" encoded json
+  encoded=$(jq -rn --arg q "$terms" '$q|@uri')
+
+  json=$(curl -sf --max-time 6 "https://api.deezer.com/search?q=$encoded&limit=9" 2>/dev/null) || return 0
+
+  printf '%s' "$json" | jq -c '
+    .data[]? |
+    {
+      id: (.id | tostring),
+      title: .title,
+      subtitle: .artist.name,
+      detail: .album.title,
+      accessory: ((.duration / 60 | floor | tostring) + ":" +
+                  ((.duration % 60 | tostring) | if length == 1 then "0" + . else . end)),
+      art: .album.cover_medium,
+      preview: .preview,
+      isrc: (.isrc // ""),
+      view: "cards",
+      score: 90000
+    }' 2>/dev/null |
+  while IFS= read -r row; do
+    local isrc phrase preview play open web
+    isrc=$(printf '%s' "$row" | jq -r '.isrc')
+    phrase=$(printf '%s' "$row" | jq -r '.subtitle + " " + .title')
+    preview=$(printf '%s' "$row" | jq -r '.preview // ""')
+
+    play="oxy-music-play $(printf '%q' "$isrc") $(printf '%q' "$phrase")"
+    # Shift+Enter raises the Spotify window on that search, for when you want
+    # the app rather than the track.
+    open="busctl --user call org.mpris.MediaPlayer2.spotify $BUS_PATH $PLAYER_IFACE OpenUri s $(printf '%q' "spotify:search:$(jq -rn --arg q "$phrase" '$q|@uri')") && omarchy-launch-or-focus '^[Ss]potify$' 'uwsm-app -- spotify'"
+    web="omarchy-launch-browser $(printf '%q' "https://open.spotify.com/search/$(jq -rn --arg q "$phrase" '$q|@uri')")"
+
+    printf '%s' "$row" | jq -c --arg play "$play" --arg open "$open" --arg web "$web" --arg preview "$preview" \
+      'del(.isrc, .preview) | .exec = $play |
+       .actions = ([{title: "Play", shortcut: "\u21b5", exec: $play, query: "spotify:"},
+                    {title: "Open in Spotify", shortcut: "\u21e7\u21b5", exec: $open}] +
+                   (if $preview != "" then [{title: "Play 30s Preview", exec: ("mpv --no-video --really-quiet " + ($preview | @sh))}] else [] end) +
+                   [{title: "Open in Browser", exec: $web},
+                    {title: "Copy Title and Artist",
+                     exec: ("printf %s " + ((.title + " - " + .subtitle) | @sh) + " | wl-copy")}])'
+  done
+}
+
+if [[ -z $query ]]; then
+  now_playing
+  exit 0
+fi
+
+search "$query"
+exit 0

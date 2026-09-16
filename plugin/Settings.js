@@ -1,6 +1,6 @@
 .pragma library
 
-// Everything the user can change, in ~/.config/omarchy/omacast.json.
+// Everything the user can change, in ~/.config/omarchy/oxy.json.
 //
 // Not in shell.json: any write to that file makes the shell recompute its panel
 // list, which destroys and recreates every overlay, so an unrelated bar edit
@@ -36,7 +36,7 @@ var DEFAULTS = {
   // opens the placeholder-free part of the site.
   //
   //   { "title": "GitHub Issues", "keyword": "issues", "tags": ["dev"],
-  //     "url": "https://github.com/pehcastro/{}/issues" }
+  //     "url": "https://github.com/bfloat32/{}/issues" }
   //
   // `open` replaces `url` when the link should run something instead, which is
   // how a quicklink becomes a shortcut to a folder or a script.
@@ -81,7 +81,7 @@ var DEFAULTS = {
   // declares the settings it wants in its own JSON file; `settings:` in the
   // launcher fills them in and writes them here.
   //
-  //   "extensionSettings": { "gh": { "org": "pehcastro" } }
+  //   "extensionSettings": { "gh": { "org": "bfloat32" } }
   //
   // A script reads its own back out of this file, which is why they live under
   // the id rather than being flattened into the top level: two extensions both

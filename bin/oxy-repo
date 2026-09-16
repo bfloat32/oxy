@@ -1,0 +1,673 @@
+#!/bin/bash
+# Emits one JSON row per local git repository for Oxy's `repo:` keyword.
+#
+#   repo:                    every repo found, most recently touched first
+#   repo:oma                 by name or by path
+#   repo:oma branch:main     only the ones sitting on that branch
+#
+# Two side modes, used by the other git extensions rather than by the launcher:
+#
+#   oxy-repo --paths     every discovered repo path, one per line
+#   oxy-repo --current   the one repo `git:` and `pr:` should answer for
+#   oxy-repo --slug [p]  owner/name for that repo, for handing to `gh`
+#   oxy-repo --resolve q  "which repo, and what is left over", as path TAB text
+#
+# Cost is the whole design here. Discovery walks the project roots once with fd
+# and is cached, because a keystroke must not pay for a filesystem walk. Name
+# and path matching then run in bash with no forks at all. Branch, dirty state,
+# ahead/behind and last-commit age are read only for the rows that survive to
+# the answer, so the expensive part is proportional to what is shown (a dozen
+# rows, two git calls each) rather than to what exists on the disk. `branch:` is
+# the one filter that needs a fact about every candidate, and it gets it by
+# reading .git/HEAD in bash rather than forking git per repo.
+
+set -uo pipefail
+
+STATE="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy"
+CACHE="$STATE/oxy-repos.list"
+PIN="$STATE/oxy-repo"
+
+# Two minutes. A repo you cloned in the last two minutes is not the one you are
+# reaching for from a launcher, and this is the only number that decides whether
+# typing costs a filesystem walk.
+CACHE_TTL=120
+
+MAX_ROWS=12
+
+roots=()
+collect_roots() {
+  local candidates=() c
+  # Three names for the same thing: the environment variable somebody exports
+  # in their shell, what `settings:` saved (handed over as OXY_ROOTS), and the
+  # name this had before the rebrand. The explicit export wins, because a
+  # person who typed it in a terminal a second ago means it more than a form
+  # they filled in last month.
+  roots_setting="${OXY_REPO_ROOTS:-${OXY_ROOTS:-${OMACAST_REPO_ROOTS:-}}}"
+
+  if [[ -n $roots_setting ]]; then
+    IFS=: read -r -a candidates <<<"$roots_setting"
+  else
+    candidates=(
+      "$HOME/localhost" "$HOME/Projects" "$HOME/projects" "$HOME/Work"
+      "$HOME/work" "$HOME/src" "$HOME/code" "$HOME/dev" "$HOME/repos"
+      "$HOME/git" "$HOME/Developer"
+    )
+  fi
+  for c in "${candidates[@]}"; do
+    c="${c/#\~/$HOME}"
+    [[ -d $c ]] && roots+=("$c")
+  done
+}
+
+discover() {
+  # --hidden because .git is hidden, --max-depth because a monorepo full of
+  # vendored checkouts is not a list of your projects.
+  fd --hidden --type d --max-depth 6 --absolute-path \
+    --exclude node_modules --exclude .cache --exclude vendor \
+    --exclude target --exclude .venv \
+    '^\.git$' "${roots[@]}" 2>/dev/null |
+    sed 's:/\.git/\?$::'
+}
+
+repos=()
+load_repos() {
+  collect_roots
+  ((${#roots[@]})) || return 1
+
+  local now age stamp
+  now=$(date +%s)
+  if [[ -f $CACHE ]]; then
+    stamp=$(stat -c %Y "$CACHE" 2>/dev/null) || stamp=0
+    age=$((now - stamp))
+    if ((age >= 0 && age < CACHE_TTL)); then
+      mapfile -t repos <"$CACHE"
+      ((${#repos[@]})) && return 0
+    fi
+  fi
+
+  mapfile -t repos < <(discover)
+  mkdir -p "$STATE" 2>/dev/null
+
+  # Written through a temp file and renamed, because three extensions ask this
+  # question at the same keystroke and `> "$CACHE"` truncates before it writes.
+  # A reader arriving in that window got an empty list and answered "nothing
+  # matches" about a repo that was right there. It looked random, it was not,
+  # and it cost a morning of recordings.
+  if ((${#repos[@]})); then
+    local tmp
+    tmp=$(mktemp "$CACHE.XXXXXX" 2>/dev/null) || tmp=""
+    if [[ -n $tmp ]]; then
+      printf '%s\n' "${repos[@]}" >"$tmp" 2>/dev/null && mv -f "$tmp" "$CACHE" 2>/dev/null
+      rm -f "$tmp" 2>/dev/null
+    fi
+  fi
+
+  ((${#repos[@]}))
+}
+
+# The real git directory, which is a file rather than a directory inside a
+# worktree or a submodule.
+git_dir() {
+  local repo="$1" line
+  if [[ -f $repo/.git ]]; then
+    read -r line <"$repo/.git" 2>/dev/null || return 1
+    line="${line#gitdir: }"
+    [[ $line == /* ]] || line="$repo/$line"
+    printf '%s' "$line"
+    return 0
+  fi
+  [[ -d $repo/.git ]] || return 1
+  printf '%s' "$repo/.git"
+}
+
+# Branch without forking git, for the case where every candidate needs one.
+head_branch() {
+  local gitdir="$1" line
+  [[ -f $gitdir/HEAD ]] || return 1
+  read -r line <"$gitdir/HEAD" 2>/dev/null || return 1
+  if [[ $line == "ref: refs/heads/"* ]]; then
+    printf '%s' "${line#ref: refs/heads/}"
+  else
+    printf '%s' "${line:0:7}"
+  fi
+}
+
+# Reading .git/config directly is the same answer git would give and saves a
+# third fork on every displayed row.
+origin_url() {
+  local cfg="$1/config" line section="" url=""
+  [[ -f $cfg ]] || return 1
+  while IFS= read -r line; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    case $line in
+    \[*)
+      section="$line"
+      ;;
+    url*=*)
+      [[ $section == '[remote "origin"]'* ]] || continue
+      url="${line#*=}"
+      url="${url#"${url%%[![:space:]]*}"}"
+      ;;
+    esac
+  done <"$cfg"
+  [[ -n $url ]] || return 1
+  printf '%s' "$url"
+}
+
+# scp-style, ssh://, git:// and https:// all name the same page in a browser.
+web_url() {
+  local u="${1%/}"
+  u="${u%.git}"
+  case $u in
+  git@*:*)
+    u="${u#git@}"
+    u="${u/://}"
+    printf 'https://%s' "$u"
+    ;;
+  ssh://git@*) printf 'https://%s' "${u#ssh://git@}" ;;
+  ssh://*) printf 'https://%s' "${u#ssh://}" ;;
+  git://*) printf 'https://%s' "${u#git://}" ;;
+  http://* | https://*) printf '%s' "$u" ;;
+  *) return 1 ;;
+  esac
+}
+
+# owner/name, for handing to `gh` and to the `pr:` keyword.
+name_with_owner() {
+  local web="$1" path
+  case $web in
+  https://github.com/*) path="${web#https://github.com/}" ;;
+  *) return 1 ;;
+  esac
+  [[ $path == */* ]] || return 1
+  printf '%s' "${path%%/*}/${path#*/}"
+}
+
+short_age() {
+  local d=$1
+  ((d < 0)) && d=0
+  if ((d < 3600)); then
+    printf '%dm' $((d / 60))
+  elif ((d < 86400)); then
+    printf '%dh' $((d / 3600))
+  elif ((d < 2592000)); then
+    printf '%dd' $((d / 86400))
+  elif ((d < 31536000)); then
+    printf '%dmo' $((d / 2592000))
+  else
+    printf '%dy' $((d / 31536000))
+  fi
+}
+
+# What "open this repo" means, in order of who has said so most deliberately.
+#
+# Opening a project is the start of working on it, and everybody starts
+# differently: an editor, a terminal already in the directory, an agent waiting
+# in that directory. So it is a setting, and it takes the path as an argument or
+# as {} anywhere in the command.
+#
+#   "repoOpen": "zeditor {}"
+#   "repoOpen": "setsid uwsm-app -- ghostty --working-directory={}"
+#   "repoOpen": "omarchy-launch-tui --app-id=org.omarchy.claude claude --cwd {}"
+#
+# Deliberately unquoted where it is used: these routinely carry flags. setsid
+# keeps a --wait style editor from holding on to the launcher's child.
+config_file="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/oxy.json"
+repo_open=""
+[[ -f $config_file ]] && repo_open=$(jq -r '.repoOpen // empty' "$config_file" 2>/dev/null)
+
+if [[ -n $repo_open ]]; then
+  EDITOR_PREFIX=""   # the command carries its own placeholder
+elif [[ -n ${VISUAL:-} ]]; then
+  EDITOR_PREFIX="setsid $VISUAL"
+else
+  EDITOR_PREFIX="omarchy-launch-editor"
+fi
+
+# The command that opens one repo. `{}` is the path; a command without one gets
+# the path appended, which is what every editor expects anyway.
+open_command() {
+  local path="$1" quoted
+  quoted=$(printf '%q' "$path")
+
+  if [[ -n $repo_open ]]; then
+    if [[ $repo_open == *"{}"* ]]; then
+      printf '%s' "${repo_open//\{\}/$quoted}"
+    else
+      printf '%s %s' "$repo_open" "$quoted"
+    fi
+    return
+  fi
+
+  printf '%s %s' "$EDITOR_PREFIX" "$quoted"
+}
+
+# --paths and --current, for the other extensions
+# ------------------------------------------------------------------
+
+mode="${1:-}"
+
+if [[ $mode == "--paths" ]]; then
+  load_repos || exit 0
+  printf '%s\n' "${repos[@]}"
+  exit 0
+fi
+
+up_to_repo() {
+  local d="$1"
+  while [[ -n $d && $d != "/" ]]; do
+    [[ -e $d/.git ]] && {
+      printf '%s' "$d"
+      return 0
+    }
+    d="${d%/*}"
+  done
+  return 1
+}
+
+# A launcher has no working directory, so "the repo I am in" has to be inferred.
+# In order of how much the answer was actually chosen by the user: an explicit
+# environment override, then a repo pinned from this extension's own action
+# list, then the directory of the terminal that had focus before the launcher
+# opened (the same trick Omarchy's own terminal-in-cwd keybinding uses), then
+# the repo touched most recently. The first three are what you meant; the last
+# one is a guess that is right often enough to beat answering nothing.
+current_repo() {
+  local candidate
+
+  if [[ -n ${OXY_REPO:-} ]] && candidate=$(up_to_repo "${OXY_REPO%/}"); then
+    printf '%s' "$candidate"
+    return 0
+  fi
+
+  if [[ -f $PIN ]]; then
+    read -r candidate <"$PIN" 2>/dev/null
+    if [[ -n ${candidate:-} && -e $candidate/.git ]]; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  fi
+
+  if [[ -n ${HYPRLAND_INSTANCE_SIGNATURE:-} ]] && command -v omarchy-cmd-terminal-cwd >/dev/null 2>&1; then
+    candidate=$(omarchy-cmd-terminal-cwd 2>/dev/null)
+    if [[ -n $candidate ]] && candidate=$(up_to_repo "$candidate"); then
+      printf '%s' "$candidate"
+      return 0
+    fi
+  fi
+
+  load_repos || return 1
+  local newest="" newest_ts=0 gitdir ts r
+  for r in "${repos[@]}"; do
+    gitdir=$(git_dir "$r") || continue
+    # The reflog moves on commit, checkout, merge and pull, which is a better
+    # reading of "the repo I am working in" than the mtime of a build artefact.
+    ts=$(stat -c %Y "$gitdir/logs/HEAD" 2>/dev/null) || ts=0
+    ((ts > newest_ts)) && {
+      newest_ts=$ts
+      newest="$r"
+    }
+  done
+  [[ -n $newest ]] || return 1
+  printf '%s' "$newest"
+}
+
+if [[ $mode == "--current" ]]; then
+  current_repo || exit 0
+  printf '\n'
+  exit 0
+fi
+
+# --resolve: which repo is this query about, and what is left over
+# ------------------------------------------------------------------
+#
+# `git:`, `branch:` and `stash:` all start with the same problem: the words
+# after the colon are either the name of a repo, or a filter on the repo you are
+# in, or a name followed by a filter. Each of them had its own answer, and
+# `git:` answered it by running the whole `repo:` listing and reading the first
+# row, which meant a git status per candidate repo: 227ms on `git:o`, on every
+# keystroke, to work out a name.
+#
+# So it is one mode, here, next to the discovery it depends on, and it costs no
+# forks at all: matching is string work over the cached list, and nothing about
+# a repo's state is read to decide what the query names.
+find_repo() {
+  local needle="${1,,}" best="" best_score=0 best_ts=0
+  [[ -n $needle ]] || return 1
+
+  local repo name score gitdir ts
+  for repo in "${repos[@]}"; do
+    name="${repo##*/}"
+    name="${name,,}"
+    if [[ $name == "$needle" ]]; then
+      score=50000
+    elif [[ $name == "$needle"* ]]; then
+      score=40000
+    elif [[ $name == *"$needle"* ]]; then
+      score=25000
+    elif [[ ${repo,,} == *"$needle"* ]]; then
+      score=10000
+    else
+      continue
+    fi
+
+    # Same tie-break as the listing: the one whose HEAD moved most recently.
+    # One stat, and only for a repo that already matched by name.
+    gitdir=$(git_dir "$repo") || continue
+    ts=$(stat -c %Y "$gitdir/logs/HEAD" 2>/dev/null) || ts=0
+
+    if ((score > best_score)) || ((score == best_score && ts > best_ts)); then
+      best="$repo"
+      best_score=$score
+      best_ts=$ts
+    fi
+  done
+
+  [[ -n $best ]] || return 1
+  printf '%s' "$best"
+}
+
+if [[ $mode == "--resolve" ]]; then
+  raw="${2:-}"
+  raw="${raw#"${raw%%[![:space:]]*}"}"
+  raw="${raw%"${raw##*[![:space:]]}"}"
+
+  load_repos || true
+
+  target="" leftover=""
+  if [[ -n $raw ]]; then
+    # The whole thing as a name first, so a repo called "better omarchy" is not
+    # read as the repo "better" filtered by "omarchy".
+    if target=$(find_repo "$raw"); then
+      leftover=""
+    elif [[ $raw == *[[:space:]]* ]] && target=$(find_repo "${raw%%[[:space:]]*}"); then
+      leftover="${raw#*[[:space:]]}"
+      leftover="${leftover#"${leftover%%[![:space:]]*}"}"
+    else
+      # A word that names no repo is a filter on the one you are in, which is
+      # what typing it looked like it meant.
+      target=""
+      leftover="$raw"
+    fi
+  fi
+
+  [[ -n $target ]] || target=$(current_repo) || exit 0
+  [[ -n $target && -e $target/.git ]] || exit 0
+  printf '%s\t%s\n' "$target" "$leftover"
+  exit 0
+fi
+
+if [[ $mode == "--slug" ]]; then
+  target="${2:-}"
+  [[ -n $target ]] || target=$(current_repo) || exit 0
+  gitdir=$(git_dir "$target") || exit 0
+  remote=$(origin_url "$gitdir") || remote=$(git -C "$target" remote get-url origin 2>/dev/null)
+  [[ -n ${remote:-} ]] || exit 0
+  web=$(web_url "$remote") || exit 0
+  slug=$(name_with_owner "$web") || exit 0
+  printf '%s\n' "$slug"
+  exit 0
+fi
+
+# repo:
+# ------------------------------------------------------------------
+
+query="${1:-}"
+branch_filter="${2:-}"
+
+load_repos || exit 0
+
+needle="${query,,}"
+now=$(date +%s)
+
+# Rank first, with nothing but string work, then pay for git only on the rows
+# that are going to be drawn.
+ranked=()
+for repo in "${repos[@]}"; do
+  [[ -d $repo ]] || continue
+  name="${repo##*/}"
+  lower_name="${name,,}"
+  lower_path="${repo,,}"
+
+  score=1000
+  if [[ -n $needle ]]; then
+    if [[ $lower_name == "$needle"* ]]; then
+      score=40000
+    elif [[ $lower_name == *"$needle"* ]]; then
+      score=25000
+    elif [[ $lower_path == *"$needle"* ]]; then
+      score=10000
+    else
+      continue
+    fi
+  fi
+
+  gitdir=$(git_dir "$repo") || continue
+
+  if [[ -n $branch_filter ]]; then
+    head=$(head_branch "$gitdir") || continue
+    [[ ${head,,} == *"${branch_filter,,}"* ]] || continue
+  fi
+
+  touched=$(stat -c %Y "$gitdir/logs/HEAD" 2>/dev/null) || touched=0
+  ranked+=("$score	$touched	$repo	$gitdir")
+done
+
+((${#ranked[@]})) || exit 0
+
+# Per-repo state, cached against the index. `git status` and `git log -1` are
+# two forks per row and twelve rows was 250ms on every keystroke, which is why
+# the spinner never stopped. A repo's state cannot change without .git/index or
+# a ref moving, so the cache key is the newest mtime in .git and a hit costs one
+# stat instead of two processes.
+# A cache that outlives a change to how it is keyed will serve a wrong answer
+# forever. This number goes in the path, so bumping it retires every entry that
+# was written under the old scheme rather than hoping each key still means what
+# it used to. An empty answer cached during a broken run is exactly the fault
+# this prevents, and it cost two recordings before anybody looked.
+#
+# 3: `dirty` went from 0-or-1 to a count of changed files. A v2 entry saying
+# "1" would have been read as "one file changed" for as long as that repo's
+# index sat still, which can be months.
+CACHE_FORMAT=3
+
+# The field separator inside a cache line, and it is not a tab on purpose.
+#
+# Tab is an IFS whitespace character, so `IFS=$'\t' read -r a b c` collapses a
+# run of tabs into one delimiter and loses every empty field. A repo with no
+# upstream writes two empty fields in the middle of its line, and reading that
+# back shifted `dirty` and `committed` off the end: the next run handed an empty
+# string to `jq --argjson` and the repo disappeared from the answer entirely.
+# It only ever happened on the second run, so it read as a caching problem
+# rather than as a separator problem, and a repo with no remote was simply
+# missing from `repo:` for as long as its index sat still.
+#
+# Unit separator is not whitespace and does not collapse. A v3 line written
+# with tabs fails the stamp comparison below and is recomputed, so nothing has
+# to be migrated.
+SEP=$'\x1f'
+
+cache_root="${XDG_CACHE_HOME:-$HOME/.cache}/oxy"
+state_cache="$cache_root/v$CACHE_FORMAT/repo-state"
+mkdir -p "$state_cache" 2>/dev/null
+
+# One file per repo, keyed by a hash of its path. The loop below rewrites an
+# entry on every hit so its mtime says when it was last wanted, which was
+# always the intent; what was missing is anything that reads those mtimes. A
+# repo you deleted last year still had an entry, and every bump of CACHE_FORMAT
+# left the whole previous directory behind.
+#
+# Once per run, before the loop: this walks the directory and the loop does not.
+# 300 is far more repos than anybody has; it is a ceiling, not a working set.
+CACHE_KEEP=300
+prune_state_cache() {
+  # Every other format's copy of this cache, and only this cache: the same
+  # version directory also holds git-branches and git-stashes, which are on
+  # their own version numbers.
+  local old
+  for old in "$cache_root"/v*/repo-state; do
+    [[ -d $old && $old != "$state_cache" ]] && rm -rf -- "$old"
+  done
+
+  # Counted with a glob and not with `find`, because this runs on every
+  # keystroke and the common answer is "nothing to do". A glob costs no
+  # process; the walk below only happens on the run that goes over.
+  local entries=("$state_cache"/*)
+  [[ -e ${entries[0]:-} ]] || return 0
+  local count=${#entries[@]}
+  ((count > CACHE_KEEP)) || return 0
+
+  find "$state_cache" -maxdepth 1 -type f -printf '%T@\t%p\n' 2>/dev/null |
+    sort -n | head -n "$((count - CACHE_KEEP))" | cut -f2- |
+    tr '\n' '\0' | xargs -0 -r rm -f -- 2>/dev/null
+}
+prune_state_cache
+
+repo_stamp() {
+  local gitdir="$1" newest=0 f t
+  for f in "$gitdir/index" "$gitdir/HEAD" "$gitdir/refs" "$gitdir/packed-refs"; do
+    [[ -e $f ]] || continue
+    t=$(stat -c %Y "$f" 2>/dev/null) || continue
+    ((t > newest)) && newest=$t
+  done
+  printf '%s' "$newest"
+}
+
+while IFS=$'\t' read -r score touched repo gitdir; do
+  [[ -n $repo ]] || continue
+
+  branch="" upstream="" ab="" dirty=0
+
+  cache_key="$state_cache/$(printf '%s' "$repo" | md5sum | cut -c1-16)"
+  stamp=$(repo_stamp "$gitdir")
+  cached=""
+  [[ -s $cache_key ]] && cached=$(<"$cache_key")
+
+  if [[ ${cached%%"$SEP"*} == "$stamp" && -n $cached ]]; then
+    IFS=$SEP read -r _ branch upstream ab dirty committed <<<"$cached"
+    # Rewritten so the file's mtime says when this answer was last wanted,
+    # which is the only thing that keeps a cache of dead repos from growing.
+    printf '%s\n' "$stamp$SEP$branch$SEP$upstream$SEP$ab$SEP$dirty$SEP$committed" > "$cache_key"
+    repo_state_cached=1
+  else
+    repo_state_cached=0
+  fi
+
+  if ((repo_state_cached == 0)); then
+  # porcelain v2 with --branch is one call for branch, upstream, ahead/behind
+  # and dirtiness. --no-optional-locks so a launcher reading in the background
+  # never writes to somebody's index.
+  while IFS= read -r line; do
+    case $line in
+    "# branch.head "*) branch="${line#\# branch.head }" ;;
+    "# branch.upstream "*) upstream="${line#\# branch.upstream }" ;;
+    "# branch.ab "*) ab="${line#\# branch.ab }" ;;
+    "#"*) ;;
+    # Counted, not flagged. "Dirty" is one bit and every uncommitted repo looks
+    # the same under it; the number is what tells a stray formatting change
+    # apart from the afternoon of work you walked away from. It costs nothing:
+    # these lines were already being read and thrown away.
+    #
+    # --untracked-files=no is unchanged and is the one thing this number does
+    # not see. Walking the worktree for untracked files is the expensive half of
+    # `git status`, and a repo whose only change is a new file still reads as
+    # clean here.
+    ?*) dirty=$((dirty + 1)) ;;
+    esac
+  done < <(git -C "$repo" --no-optional-locks status --porcelain=v2 --branch --untracked-files=no 2>/dev/null)
+
+    [[ -n $branch ]] || branch=$(head_branch "$gitdir") || branch="?"
+    [[ $branch == "(detached)" ]] && branch="detached"
+
+    committed=$(git -C "$repo" --no-optional-locks log -1 --format=%ct 2>/dev/null)
+    [[ -n ${committed:-} ]] || committed=$touched
+
+    printf '%s\n' "$stamp$SEP$branch$SEP$upstream$SEP$ab$SEP$dirty$SEP$committed" > "$cache_key"
+  fi
+
+  [[ -n $branch ]] || branch="?"
+  [[ -n ${committed:-} ]] || committed=$touched
+  # jq --argjson refuses an empty string, and it refuses it by printing to
+  # stderr and emitting no row at all. A number that arrived wrong should cost
+  # this repo its dirt count, not its place in the answer.
+  [[ $dirty =~ ^[0-9]+$ ]] || dirty=0
+
+  # Assembled for the old list view, and kept apart for the new one: a layout
+  # cannot give the branch and the ahead count different weights if they arrive
+  # already glued into one string.
+  ahead_txt="" behind_txt=""
+  if [[ -n $ab ]]; then
+    ahead="${ab%% *}"
+    behind="${ab##* }"
+    ((${ahead#+} > 0)) && ahead_txt="${ahead#+}"
+    ((${behind#-} > 0)) && behind_txt="${behind#-}"
+  fi
+
+  state="$branch"
+  ((dirty)) && state="$state ●"
+  [[ -n $ahead_txt ]] && state="$state ↑$ahead_txt"
+  [[ -n $behind_txt ]] && state="$state ↓$behind_txt"
+
+  display="${repo/#$HOME/\~}"
+  quoted=$(printf '%q' "$repo")
+
+  remote=$(origin_url "$gitdir") || remote=$(git -C "$repo" remote get-url origin 2>/dev/null)
+  web=""
+  slug=""
+  if [[ -n ${remote:-} ]]; then
+    web=$(web_url "$remote") || web=""
+    [[ -n $web ]] && slug=$(name_with_owner "$web") || slug=""
+  fi
+
+  jq -cn \
+    --arg id "$repo" \
+    --arg title "${repo##*/}" \
+    --arg detail "$display" \
+    --arg subtitle "$state" \
+    --arg accessory "$(short_age $((now - committed)))" \
+    --arg open "$(open_command "$repo")" \
+    --arg term "setsid uwsm-app -- xdg-terminal-exec --dir=$quoted" \
+    --arg log "omarchy-launch-tui --app-id=org.omarchy.git git -C $quoted log --oneline --graph --decorate -40" \
+    --arg branch "$branch" --arg ahead "${ahead_txt:-}" --arg behind "${behind_txt:-}" \
+    --argjson dirty "$dirty" --arg upstream "${upstream:-}" \
+    --arg copypath "printf %s $quoted | wl-copy" \
+    --arg clone "${remote:-}" \
+    --arg web "$web" \
+    --arg slug "$slug" \
+    --arg pin "mkdir -p $(printf '%q' "$STATE") && printf %s $quoted > $(printf '%q' "$PIN")" \
+    --argjson score "$score" '
+      {
+        id: $id, title: $title, detail: $detail, subtitle: $subtitle,
+        accessory: $accessory, exec: $open, score: $score,
+
+        # The same four facts the subtitle spells out, kept apart so the
+        # `repos` view can weight them independently: the branch is a label,
+        # the drift is a pair of numbers, and dirtiness is the one that decides
+        # whether the row is worth looking at. Empty means zero rather than
+        # unknown, and an absent upstream is a real state (nothing to be ahead
+        # of) rather than a missing reading.
+        branch: $branch,
+        ahead: (if $ahead == "" then 0 else ($ahead | tonumber) end),
+        behind: (if $behind == "" then 0 else ($behind | tonumber) end),
+        dirty: $dirty,
+        upstream: $upstream,
+        path: $detail,
+        age: $accessory,
+        slug: $slug,
+
+        actions: (
+          [
+            { title: "Open in Editor", shortcut: "↵", exec: $open },
+            { title: "Open Terminal Here", exec: $term }
+          ]
+          + (if $web == "" then [] else
+               [{ title: "Open on GitHub",
+                  exec: ("omarchy-launch-browser " + ($web | @sh)) }] end)
+          + (if $slug == "" then [] else
+               [{ title: "Open Issues and Pull Requests", exec: "true",
+                  query: ("gh:" + $slug) }] end)
+        )
+      }'
+done < <(printf '%s\n' "${ranked[@]}" | sort -t$'\t' -k1,1rn -k2,2rn | head -"$MAX_ROWS")
+
+exit 0

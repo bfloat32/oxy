@@ -1,4 +1,4 @@
--- What opens Omacast.
+-- What opens Oxy.
 --
 -- Three presets, one line to switch. Editing this file is the whole
 -- configuration: nothing reads a setting, because a Hyprland keybinding has to
@@ -13,16 +13,16 @@
 
 local preset = "balanced"
 
-local function open_omacast(key)
-  o.bind(key, "Omacast", "omarchy-shell shell toggle bo.omacast")
+local function open_oxy(key)
+  o.bind(key, "Oxy", "omarchy-shell shell toggle bo.oxy")
 end
 
 if preset == "additive" then
-  open_omacast("SUPER + SHIFT + K")
+  open_oxy("SUPER + SHIFT + K")
 else
   -- Super+K is Omarchy's keybindings cheatsheet, so it moves to H for help.
   hl.unbind("SUPER + K")
-  open_omacast("SUPER + K")
+  open_oxy("SUPER + K")
   o.bind("SUPER + H", "Keybindings", "omarchy-menu-keybindings")
 
   if preset == "full" then

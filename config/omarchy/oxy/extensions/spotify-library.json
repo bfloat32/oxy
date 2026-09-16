@@ -1,0 +1,21 @@
+{
+  "id": "spotify-library",
+  "title": "Spotify Library",
+  "keyword": "sp",
+  "aliases": [
+    "spotify",
+    "track",
+    "album",
+    "artist"
+  ],
+  "subtitle": "Spotify",
+  "glyph": "",
+  "search": "oxy-spotify search {query} {type}",
+  "when": "test -s \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/oxy-spotify.json\"",
+  "minChars": 2,
+  "debounceMs": 250,
+  "timeoutMs": 6000,
+  "maxRows": 9,
+  "tier": "substring",
+  "view": "cards"
+}

@@ -8,6 +8,23 @@ Oxy began as omacast by pehcastro. Upgrading keeps everything that was yours:
 the first run moves `omacast.json`, your snippets, your custom extensions and
 the whole state directory over to the new names.
 
+## Install
+
+On an Omarchy system, one line:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bfloat32/oxy/main/install.sh | bash
+```
+
+That clones to `~/.local/share/oxy`, links the plugin, the `oxy-*` commands, the
+extension definitions and the keybinding into place, installs whatever `pacman`
+has that the keywords need, and enables it. Everything it links is a symlink
+into the clone, so `git pull` in that directory updates all of it, and anything
+of yours already at a target path is moved aside with a `.before-oxy` suffix
+rather than overwritten. Running the same line again updates; running
+`install.sh --uninstall` from the clone takes it back out and leaves your
+settings, pins and history.
+
 `Super+K` opens it. To change that, edit the one line at the top of
 `hypr/keys.lua`:
 

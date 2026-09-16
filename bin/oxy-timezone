@@ -609,6 +609,28 @@ zone_column() {
   done
 }
 
+# `settings:` collects zones as one comma-separated line, which arrives as
+# OXY_ZONES. Names resolve the same loose way a `tz:` query does, and the env
+# wins over the file for the usual reason: the thing just typed means more
+# than the file edited last month. Empty stays empty — a cleared field is not
+# an instruction.
+if [[ -n ${OXY_ZONES:-} ]]; then
+  env_labels=() env_zones=() env_name env_zone
+  IFS=',' read -r -a env_want <<<"$OXY_ZONES"
+  for env_name in "${env_want[@]}"; do
+    env_name="${env_name#"${env_name%%[![:space:]]*}"}"
+    env_name="${env_name%"${env_name##*[![:space:]]}"}"
+    [[ -z $env_name ]] && continue
+    env_zone=$(resolve_zone "$env_name") || continue
+    env_labels+=("$env_name")
+    env_zones+=("$env_zone")
+  done
+  if ((${#env_zones[@]})); then
+    labels=("${env_labels[@]}")
+    zones=("${env_zones[@]}")
+  fi
+fi
+
 trimmed="${query#"${query%%[![:space:]]*}"}"
 trimmed="${trimmed%"${trimmed##*[![:space:]]}"}"
 

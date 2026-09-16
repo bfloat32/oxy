@@ -37,12 +37,11 @@ MAX_ROWS=12
 roots=()
 collect_roots() {
   local candidates=() c
-  # Three names for the same thing: the environment variable somebody exports
-  # in their shell, what `settings:` saved (handed over as OXY_ROOTS), and the
-  # name this had before the rebrand. The explicit export wins, because a
-  # person who typed it in a terminal a second ago means it more than a form
-  # they filled in last month.
-  roots_setting="${OXY_REPO_ROOTS:-${OXY_ROOTS:-${OMACAST_REPO_ROOTS:-}}}"
+  # Two names for the same thing: the environment variable somebody exports in
+  # their shell, and what `settings:` saved (handed over as OXY_ROOTS). The
+  # explicit export wins, because a person who typed it in a terminal a second
+  # ago means it more than a form they filled in last month.
+  roots_setting="${OXY_REPO_ROOTS:-${OXY_ROOTS:-}}"
 
   if [[ -n $roots_setting ]]; then
     IFS=: read -r -a candidates <<<"$roots_setting"

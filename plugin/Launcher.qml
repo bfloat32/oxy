@@ -193,54 +193,6 @@ Item {
     Component.onCompleted: running = true
   }
 
-  // The rename left everything the user already had under the old name: their
-  // omacast.json, their snippets, their custom extensions, and every state
-  // file. Moved once, into the new names, so an upgrade keeps all of it.
-  //
-  // `migrated` gates the FileView paths below rather than ordering process
-  // against reads: a view that read first would cache an empty answer and the
-  // moved file would never be seen until the next write.
-  property bool migrated: false
-
-  Process {
-    id: migration
-    // Every move is "old exists and new does not": the shipped config dir is
-    // already in place by then, so the extensions merge is per file — the
-    // user's own files land beside the shipped ones rather than replacing or
-    // being skipped with the directory.
-    command: ["bash", "-c",
-      'cfg="${XDG_CONFIG_HOME:-$HOME/.config}/omarchy"; ' +
-      'st="${XDG_STATE_HOME:-$HOME/.local/state}/omarchy"; ' +
-      'ca="${XDG_CACHE_HOME:-$HOME/.cache}"; ' +
-      'shopt -s nullglob; ' +
-      'for pair in omacast.json:oxy.json omacast-snippets.json:oxy-snippets.json; do ' +
-      '  old="$cfg/${pair%%:*}"; new="$cfg/${pair##*:}"; ' +
-      '  [[ -f $old && ! -f $new ]] && mv "$old" "$new"; ' +
-      'done; ' +
-      'for f in "$st"/omacast-*; do ' +
-      '  new="$st/oxy-${f##*omacast-}"; [[ -e $new ]] || mv "$f" "$new"; ' +
-      'done; ' +
-      'for sub in "" extensions; do ' +
-      '  src="$cfg/omacast${sub:+/$sub}"; dst="$cfg/oxy${sub:+/$sub}"; ' +
-      '  [[ -d $src ]] || continue; mkdir -p "$dst"; ' +
-      '  for f in "$src"/*; do base="${f##*/}"; [[ -e $dst/$base ]] || mv "$f" "$dst/$base"; done; ' +
-      'done; ' +
-      '[[ -d $ca/omacast && ! -d $ca/oxy ]] && mv "$ca/omacast" "$ca/oxy"; ' +
-      // rmdir refuses a directory that still holds anything, so this only
-      // removes one the moves above fully emptied.
-      'rmdir "$cfg/omacast/extensions" "$cfg/omacast" 2>/dev/null; ' +
-      'true']
-    onExited: {
-      root.migrated = true
-      // An open that landed mid-migration may have probed the empty new
-      // directory already; clearing the signature forces the next scan to
-      // actually read what just arrived.
-      root.extSignature = ""
-      root.scanExtensions()
-    }
-    Component.onCompleted: running = true
-  }
-
   // `?` on its own is help. `?dogs` stays a web search, because the sigil is
   // worth more as the shorthand people already use than as a help key, and a
   // `?` with nothing after it has nothing to search for anyway.
@@ -2102,7 +2054,7 @@ Item {
 
   FileView {
     id: frecencyFile
-    path: root.migrated ? Quickshell.env("HOME") + "/.local/state/omarchy/oxy-frecency.json" : ""
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/oxy-frecency.json"
     printErrors: false
     atomicWrites: true
     // Not watched: this file is written from here, and reacting to our own
@@ -2134,7 +2086,7 @@ Item {
   // their formatting the first time they searched for anything.
   FileView {
     id: stateFile
-    path: root.migrated ? Quickshell.env("HOME") + "/.local/state/omarchy/oxy-state.json" : ""
+    path: Quickshell.env("HOME") + "/.local/state/omarchy/oxy-state.json"
     printErrors: false
     atomicWrites: true
     // Not watched, for the reason the frecency file is not watched: this is the
@@ -2161,7 +2113,7 @@ Item {
 
   FileView {
     id: configFile
-    path: root.migrated ? Quickshell.env("HOME") + "/.config/omarchy/oxy.json" : ""
+    path: Quickshell.env("HOME") + "/.config/omarchy/oxy.json"
     watchChanges: true
     printErrors: false
     onLoaded: {

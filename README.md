@@ -4,10 +4,6 @@ A launcher. One box that answers with apps, arithmetic, files, git, music, your
 notes and the web, and draws each of those the way it deserves rather than as
 one long list.
 
-Oxy began as omacast by pehcastro. Upgrading keeps everything that was yours:
-the first run moves `omacast.json`, your snippets, your custom extensions and
-the whole state directory over to the new names.
-
 ## Install
 
 On an Omarchy system, one line:
@@ -94,7 +90,7 @@ same. `Enter` on one of those rows types `keyword:` into the box, ready for the
 rest of the line, and runs nothing.
 
 `/` reaches files when what follows looks like a path: a slash, a dot or a
-tilde. `/~/Documents`, `//home/nkz` and `/report.pdf` all become file searches.
+tilde. `/~/Documents`, `//home/ada` and `/report.pdf` all become file searches.
 `/etc` does not, because it has none of the three; that one needs `file:etc`.
 
 ---
@@ -563,7 +559,7 @@ to text:
 
 ```json
 {
-  "sig": "Luiz\nhttps://nkz.md",
+  "sig": "Ada\nhttps://example.com",
   "addr": "1 Example Street\nLisbon"
 }
 ```

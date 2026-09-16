@@ -8,7 +8,7 @@
 # Snippets live in ~/.config/omarchy/oxy-snippets.json, a flat object of
 # name to text:
 #
-#   { "sig": "Luiz\nhttps://nkz.md", "addr": "..." }
+#   { "sig": "Ada\nhttps://example.com", "addr": "..." }
 #
 # No file means no snippets, which is not an error and not a row telling you
 # so. The extension's `when` keeps it out of the launcher entirely until you

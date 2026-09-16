@@ -380,19 +380,6 @@ else
   note "no shell to talk to — it will be picked up when Omarchy starts"
 fi
 
-# ------------------------------------------------------------------ omacast
-
-# Upgrading from omacast leaves the old plugin registered beside the new one.
-# The launcher itself migrates settings, snippets, extensions and state on its
-# first run; what it cannot do is unregister the old plugin id.
-for stale in "$PLUGINS_DIR/bo.omacast" "$PLUGINS_DIR/omacast"; do
-  if [[ -e $stale || -L $stale ]]; then
-    warn "omacast is still installed at $stale"
-    note "your data migrates on first run; remove the old plugin with: bo remove omacast"
-    note "or by hand: rm $stale && omarchy-shell shell rescanPlugins"
-  fi
-done
-
 # ------------------------------------------------------------------ done
 
 step "Verify"

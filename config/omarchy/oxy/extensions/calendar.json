@@ -14,5 +14,6 @@
   "debounceMs": 60,
   "maxRows": 12,
   "tier": "prefix",
-  "view": "calendar"
+  "view": "calendar",
+  "native": "cal"
 }

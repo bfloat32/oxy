@@ -18,5 +18,6 @@
   "maxRows": 12,
   "refreshMs": 1500,
   "tier": "substring",
-  "view": "processes"
+  "view": "processes",
+  "native": "kill"
 }

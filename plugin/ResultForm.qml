@@ -96,6 +96,13 @@ Item {
     if (!view.row) return
     var collected = view.values()
 
+    // A row carrying `ext` is the daemon's own settings form: the answers go
+    // back to it rather than through a command line, because writing oxy.json
+    // is the engine's job and a command that could do it could do anything.
+    if (view.row.ext !== undefined && typeof view.launcher.saveSettings === "function") {
+      return view.launcher.saveSettings(String(view.row.ext), collected)
+    }
+
     // Built as an action and handed to the launcher, so a form lands in a
     // follow-up query the same way pressing play does, and the trail back is
     // kept by the one piece of code that keeps it.
@@ -116,7 +123,7 @@ Item {
       return
     }
 
-    view.launcher.runAction(action)
+    view.launcher.runAction(action, view.row)
   }
 
   Component.onCompleted: Qt.callLater(function () { view.focusField(0) })

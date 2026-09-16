@@ -12,7 +12,7 @@
   ],
   "keepLoaded": true,
   "entryPoints": {
-    "overlay": "Launcher.qml",
-    "menu": "Launcher.qml"
+    "overlay": "Shell.qml",
+    "menu": "Shell.qml"
   }
 }

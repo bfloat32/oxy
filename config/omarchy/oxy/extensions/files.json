@@ -13,5 +13,6 @@
   "debounceMs": 180,
   "maxRows": 8,
   "tier": "file",
-  "view": "files"
+  "view": "files",
+  "native": "file"
 }

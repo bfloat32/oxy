@@ -211,12 +211,30 @@ if [[ -f $SELF_DIR/unit.toml && -f $SELF_DIR/plugin/manifest.json ]]; then
 else
   step "Getting the source"
   if [[ -d $INSTALL_DIR/.git ]]; then
-    git -C "$INSTALL_DIR" fetch --quiet origin ||
-      die "could not reach the remote — check your network and try again"
+    fetch_err=$(git -C "$INSTALL_DIR" fetch origin 2>&1)
+    if [[ -n $fetch_err ]]; then
+      # A fetch that fails naming an object or a pack is not a network problem
+      # and retrying is not a fix: an interrupted clone leaves empty files in
+      # .git/objects that nothing will rewrite. Move the checkout aside — never
+      # delete it — and clone again. Links point at the same path, so the
+      # moment the new clone lands everything resolves again.
+      if [[ $fetch_err == *object* || $fetch_err == *pack* || $fetch_err == *corrupt* ]]; then
+        broken_dir="$INSTALL_DIR.broken.$(date +%s)"
+        warn "the checkout at $INSTALL_DIR is corrupt:"
+        printf '%s\n' "$fetch_err" | head -3 | sed 's/^/      /'
+        mv "$INSTALL_DIR" "$broken_dir" ||
+          die "could not move $INSTALL_DIR aside — do it by hand and re-run"
+        note "moved to $broken_dir — delete it once you know you do not need it"
+        git clone --quiet --depth 1 --branch "$BRANCH" "$REPO_URL" "$INSTALL_DIR" ||
+          die "clone failed — check the URL ($REPO_URL) and your network"
+        ok "fresh clone at $INSTALL_DIR"
+      else
+        die "could not reach the remote — $fetch_err"
+      fi
     # Fast-forward only: a clone you edited (the keys.lua preset, say) is not
     # yours to throw away on what looked like an update. Everything still
     # links from whatever the checkout holds.
-    if git -C "$INSTALL_DIR" merge --quiet --ff-only "origin/$BRANCH" 2>/dev/null; then
+    elif git -C "$INSTALL_DIR" merge --quiet --ff-only "origin/$BRANCH" 2>/dev/null; then
       ok "updated $INSTALL_DIR"
     else
       warn "$INSTALL_DIR has local changes or diverged — left as it is."

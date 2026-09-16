@@ -344,14 +344,16 @@ install_body() {
         else
           die "could not reach the remote — $fetch_err"
         fi
-      # Fast-forward only: a clone you edited (the keys.lua preset, say) is
-      # not yours to throw away on what looked like an update. Everything
-      # still links from whatever the checkout holds.
-      elif git -C "$INSTALL_DIR" merge --quiet --ff-only "origin/$BRANCH" 2>/dev/null; then
+      # Rebase with autostash: editing keys.lua in place is the supported way
+      # to set the keybind, so a dirty tree is the expected state on every
+      # update, not an error — stash, fast-forward, put the edits back. A
+      # genuine conflict fails the pull and leaves the stash to pop by hand.
+      elif git -C "$INSTALL_DIR" pull --quiet --rebase --autostash origin "$BRANCH" 2>/dev/null; then
         ok "updated $INSTALL_DIR"
       else
-        warn "$INSTALL_DIR has local changes or diverged — left as it is."
-        note "git -C $INSTALL_DIR pull --rebase to update it, or reset --hard to start over."
+        warn "$INSTALL_DIR has changes that conflict with the update — left as it is."
+        note "update it by hand:  git -C $INSTALL_DIR stash pop; git -C $INSTALL_DIR pull --rebase"
+        note "or start clean:     $INSTALL_DIR/install.sh --fresh"
       fi
     elif [[ -e $INSTALL_DIR ]]; then
       if checkout_looks_ours "$INSTALL_DIR"; then
@@ -582,12 +584,19 @@ SELF_CHECKOUT=0
 RECOVERABLE=$((!SELF_CHECKOUT))
 
 if ((FRESH)); then
-  if ((RECOVERABLE)) && [[ -e $INSTALL_DIR ]]; then
+  if ((SELF_CHECKOUT)); then
+    # --fresh means delete the checkout, and the checkout is this script's own
+    # repo — the one delete nothing here may do. Copy the script somewhere
+    # neutral and run the copy, so the clone is just a directory again.
+    tmp=$(mktemp 2>/dev/null)
+    if [[ -n $tmp && -f ${BASH_SOURCE[0]} ]] && cp "${BASH_SOURCE[0]}" "$tmp"; then
+      exec bash "$tmp" "$@"
+    fi
+    die "--fresh needs to delete this checkout, and this script lives inside it — run the curl | bash -s -- --fresh form instead"
+  elif [[ -e $INSTALL_DIR ]]; then
     wipe_checkout "$INSTALL_DIR" &&
       ok "removed the old checkout at $INSTALL_DIR" ||
       die "--fresh could not remove $INSTALL_DIR — it does not look like a disposable clone"
-  elif ((SELF_CHECKOUT)); then
-    note "--fresh ignored: this script is inside the checkout it would delete"
   fi
 fi
 

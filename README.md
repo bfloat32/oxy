@@ -21,6 +21,12 @@ rather than overwritten. Running the same line again updates; running
 `install.sh --uninstall` from the clone takes it back out and leaves your
 settings, pins and history.
 
+If an install ever misbehaves: a corrupt checkout repairs itself on the next
+run (the broken clone is moved aside, never deleted), and any other failure
+offers to wipe the checkout and try again clean. `install.sh --fresh` forces
+that clean slate without asking, and `install.sh --purge` uninstalls *and*
+deletes the clone.
+
 `Super+K` opens it. To change that, edit the one line at the top of
 `hypr/keys.lua`:
 

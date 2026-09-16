@@ -1,5 +1,11 @@
 # Ωᵡ₄Y
 
+> **This is the `experimental/rust-core` branch** — the same launcher with its
+> engine rebuilt in Rust behind a daemon, installed beside the script build
+> rather than over it. See **[README-RS.md](README-RS.md)** for what changed,
+> how to install it, and how to work on it. Everything below still applies:
+> the keywords, the views and the file formats are unchanged.
+
 A launcher. One box that answers with apps, arithmetic, files, git, music, your
 notes and the web, and draws each of those the way it deserves rather than as
 one long list.

@@ -11,9 +11,13 @@ below are being worked through in the order §6 gives:
 | proposal | status |
 |---|---|
 | P1.3 memoize `search_text`/`acronym` | **landed** (`4b9c36f`) — 417–444 µs → 72 µs on the new `score400` bench, 156-case parity table unchanged |
-| P7 corrupt-file recovery + save-path fixes | **landed** (`d6f4ce9`) — `support/store.rs`, `state.recovered`/`settings.recovered` log lines, no more silent reset, no more panic on a non-object `oxy.json` |
-| P4 retry / `Retry-After` | **landed** (`840b1f3`) — `provider/llm/retry.rs`, capped at 60 s, verified against a stub that 429s once |
-| P3 provider metadata · P2 `ask doctor` · P5 budget · P1 positions · P6 command risk | next |
+| P7 corrupt-file recovery + save-path fixes | **landed** (`d6f4ce9`) — `support/store.rs`, `state.recovered`/`settings.recovered` log lines, no more silent reset, no more panic on a non-object `oxy.json`; secret hardening still waits for the key store |
+| P4 retry / `Retry-After` | **landed** (`840b1f3`) — `provider/llm/retry.rs`, capped at 60 s, verified against a stub that 429s once; the fallback chain landed with the probe below |
+| P2 `ask doctor` | **landed** (`db84e8b`) — `oxy ask doctor --tier offline\|catalog [--json]`, checkpoints PASS/FAIL/skip, verdict + next step, non-zero exit |
+| P3 provider metadata | **partly** — `ask.key` (`env:NAME` or a literal), the credential checkpoint, and the chip's "what to do" hint are in; the tables-as-code half is not |
+| §3's small ideas | **landed**: setup hints in `?` (live facts, so no dismissal file), keybinding conflicts in `shortcuts:`, soft interrupt, the model usage ledger, `/stats` slowest-three, the Windows paste row |
+| §4's process ideas | **landed**: `oxy extensions --coverage` and `tests/bench_oxy.py` (90 ms cold start, 0.3 ms p50, 10.2 MB RSS on this box) |
+| P5 budget · P1 positions/typo band · P6 command risk · herdr state · install channels · hooks | next |
 
 Method: crate map and sizes first, then the crates and docs that overlap what
 we are actually building — the `ask:` track (`docs/LLM-INTEGRATION.md`), the

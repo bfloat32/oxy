@@ -2,7 +2,7 @@ name: check
 
 on:
   push:
-    branches: [main]
+    branches: [main, experimental/rust-core]
   pull_request:
 
 jobs:

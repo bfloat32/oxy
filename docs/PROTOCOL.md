@@ -43,7 +43,9 @@ it for three seconds rather than dropping it.
 ## Events out
 
 ```jsonc
-{"op": "hello", "version": "0.1.0", "keywords": ["apps", "calc", …]}
+{"op": "hello", "version": "0.7.0", "keywords": ["apps", "calc", …]}
+  — the keyword set as it stands at connect time, rebuilt on every reload,
+  so a client that joins mid-session is told the live set, not the boot one
 
 {"op": "registry", "extensions": [{"id","title","keyword","aliases","glyph","accent","view"}],
                    "ask": {"available": true, "model": "Claude"}}

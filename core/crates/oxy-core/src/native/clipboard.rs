@@ -142,7 +142,7 @@ fn query_blocking(cache: Arc<Mutex<Option<ClipCache>>>, arg: &str) -> NativeOutc
             "title": title,
             "subtitle": "",
             "preview": preview,
-            "art": if is_image { format!("file://{path}") } else { String::new() },
+            "art": if is_image { crate::native::file::file_url(path) } else { String::new() },
             "exec": exec,
             "score": 95000 - (i as i64) * 100,
         }));

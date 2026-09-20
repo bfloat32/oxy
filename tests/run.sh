@@ -102,6 +102,16 @@ for path in sorted(glob.glob("config/**/*.json", recursive=True)):
 sys.exit(1 if bad else 0)
 PY
 
+say "rust core"
+# The same steps the workflow's rust job runs — skipped where cargo is not
+# installed rather than failed, the way shellcheck degrades.
+if command -v cargo >/dev/null 2>&1; then
+  (cd core && cargo check --workspace) || bad "cargo check"
+  (cd core && cargo test --workspace) || bad "cargo test"
+else
+  echo "   cargo not installed — CI runs it; skipping"
+fi
+
 say "logic tests"
 node --test tests/logic.test.mjs || bad "logic tests"
 

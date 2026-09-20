@@ -44,11 +44,15 @@ fn as_entry(link: &Quicklink, index: usize) -> Entry {
     }
 }
 
-/// Does a loaded extension answer for this keyword, by name or alias?
+/// Does a loaded extension answer for this keyword, by name or alias? The
+/// quicklinks extension itself is skipped — it claims every link keyword as
+/// an alias so the router can find it, and counting that claim would shadow
+/// the very link being asked about.
 fn extension_claims(ctx: &Ctx, keyword: &str) -> bool {
-    ctx.registry
-        .iter()
-        .any(|ext| ext.keyword == keyword || ext.aliases.iter().any(|a| a == keyword))
+    ctx.registry.iter().any(|ext| {
+        ext.id != "quicklinks"
+            && (ext.keyword == keyword || ext.aliases.iter().any(|a| a == keyword))
+    })
 }
 
 pub struct Quicklinks;

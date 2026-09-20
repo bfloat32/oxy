@@ -231,7 +231,20 @@ async fn main() {
         }
     }
     #[cfg(unix)]
-    let _ = std::fs::remove_file(dirs::socket_name());
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let sock_path = dirs::socket_name();
+        if let Some(parent) = std::path::Path::new(&sock_path).parent() {
+            let _ = std::fs::create_dir_all(parent);
+            // The state-dir fallback is ours — owner-only traversal. The
+            // XDG_RUNTIME_DIR case is already 0700 by spec and is never
+            // ours to chmod, so it is deliberately skipped.
+            if parent.starts_with(dirs::state_home()) {
+                let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+            }
+        }
+        let _ = std::fs::remove_file(&sock_path);
+    }
     let listener = match ListenerOptions::new().name(name).create_tokio() {
         Ok(l) => l,
         Err(e) => {
@@ -239,6 +252,15 @@ async fn main() {
             std::process::exit(1);
         }
     };
+    // The socket file is the access boundary — 0600 means only this user can
+    // drive the launcher, whichever directory the address fell back into.
+    // (Windows has no socket file; the named pipe's session ACL stands in.)
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ =
+            std::fs::set_permissions(dirs::socket_name(), std::fs::Permissions::from_mode(0o600));
+    }
 
     let (cmd_tx, cmd_rx) = mpsc::channel::<EngineCmd>(256);
     let (evt_tx, mut evt_rx) = mpsc::channel::<EngineEvent>(512);
@@ -272,18 +294,11 @@ async fn main() {
     })
     .await;
 
-    // The engine's keywords, for the hello it owes each new client.
-    let hello = {
-        let known = engine.keywords();
-        json!({
-            "op": "hello",
-            "version": env!("CARGO_PKG_VERSION"),
-            "keywords": known,
-        })
-        .to_string()
-            + "\n"
-    };
-    let hello = Arc::new(hello);
+    // The hello each new client is owed — built per connect, not once at
+    // boot: a reload changes the keyword set, and a client joining after one
+    // must hear the set as it stands. Version is the plugin's, because the
+    // log's `sess` line is what a bug report is read from.
+    let hello_src = engine.shared();
 
     // Watch the extensions dir and oxy.json: a file landing or changing
     // reloads the registry and settings, the way the FileView +
@@ -338,11 +353,23 @@ async fn main() {
         };
         let cmd_tx = engine_cmd.clone();
         let events = bcast.subscribe();
-        let hello = hello.clone();
+        let hello_src = hello_src.clone();
         tokio::spawn(async move {
             let (reader, mut writer) = stream.split();
             // The hello first: a client that knows the keyword set parses the
             // first query correctly even before the registry event lands.
+            let known = hello_src
+                .hello_keywords
+                .read()
+                .map(|k| (**k).clone())
+                .unwrap_or_default();
+            let hello = json!({
+                "op": "hello",
+                "version": oxy_core::PLUGIN_VERSION,
+                "keywords": known,
+            })
+            .to_string()
+                + "\n";
             if writer.write_all(hello.as_bytes()).await.is_err() {
                 return;
             }

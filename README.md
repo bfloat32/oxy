@@ -64,8 +64,9 @@ Lua and reaching into JSON from there would be worse than a variable. The
 Omarchy menu keeps its bar icon and `Super+Shift+F12` in all three, so `full` is
 recoverable without editing config.
 
-**Type `?` to see every keyword your machine actually has.** That list is built
-from what is loaded, so it is always true, and this file explains what is in it.
+**Type `?` to see every keyword your machine loaded.** That list is built
+from the extensions on disk — a keyword whose `when` test fails is listed but
+answers nothing, so what you lack never pretends to work.
 
 ---
 
@@ -158,8 +159,8 @@ beside the frecency file rather than in your settings, which stay yours to edit.
 ## Every keyword
 
 Aliases are listed with each one; any of them opens the same thing. A keyword
-whose requirement is missing is not loaded at all, so it costs nothing and
-appears in neither `?` nor your results.
+whose requirement is missing still loads and still appears in `?` — its `when`
+test simply answers nothing, so it costs nothing to leave listed.
 
 ### Finding things on this machine
 

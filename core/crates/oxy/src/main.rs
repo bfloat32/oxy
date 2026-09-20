@@ -85,7 +85,8 @@ async fn query(args: &[String]) -> i32 {
     let _ = tx
         .send(EngineCmd::Query {
             text: text.clone(),
-            opened: true,
+            // Not a summon: no refresh timers arm for an answer nobody sees.
+            opened: false,
         })
         .await;
 
@@ -192,8 +193,17 @@ async fn query_daemon(text: &str) -> std::io::Result<i32> {
 
     let stream = connect_daemon().await?;
     let (reader, mut writer) = tokio::io::split(stream);
+    // `opened:false`: a CLI ask is not a summon — without it the engine
+    // stays open after this process exits and every answered provider's
+    // refreshMs timer keeps firing in the daemon forever.
     writer
-        .write_all(format!("{{\"op\":\"query\",\"text\":{}}}\n", json!(text)).as_bytes())
+        .write_all(
+            format!(
+                "{{\"op\":\"query\",\"text\":{},\"opened\":false}}\n",
+                json!(text)
+            )
+            .as_bytes(),
+        )
         .await?;
     let mut lines = BufReader::new(reader).lines();
     let deadline = std::time::Instant::now() + Duration::from_secs(8);

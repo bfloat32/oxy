@@ -34,11 +34,9 @@ Item {
 
   property var rows: []
 
-  // Provider ids still owed an answer, and provider ids whose visible rows are
-  // older than the question — both arrive on every results event and are kept
-  // as maps because lookup is all this side ever does with them.
+  // Provider ids still owed an answer — arrives on every results event and is
+  // kept as a map because lookup is all this side ever does with it.
   property var waiting: ({})
-  property var staleMap: ({})
 
   readonly property bool busy: {
     for (var key in root.waiting) {
@@ -360,11 +358,6 @@ Item {
     for (var i = 0; i < waitingList.length; i++) wait[String(waitingList[i])] = true
     root.waiting = wait
 
-    var stale = {}
-    var staleList = ev.stale || []
-    for (var s = 0; s < staleList.length; s++) stale[String(staleList[s])] = true
-    root.staleMap = stale
-
     var merged = ev.rows || []
     root.tagSources(merged)
     root.rows = merged
@@ -514,7 +507,6 @@ Item {
     // should not see: last visit's rows, the trail, the answer card.
     root.rows = []
     root.waiting = ({})
-    root.staleMap = ({})
     root.flowStack = []
     root.actionPanelOpen = false
     pollTimer.stop()

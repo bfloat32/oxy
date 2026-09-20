@@ -41,6 +41,9 @@ pub enum WorkerCmd {
         ok: bool,
         replay: Option<Arc<Query>>,
     },
+    /// The extension changed or left on reload: the task exits, and a fresh
+    /// worker built from the new definition takes the next ask.
+    Shutdown,
 }
 
 /// What a worker tells the engine.
@@ -73,6 +76,10 @@ pub struct Shared {
     /// keystroke, and a deep `Settings` clone each time is not cheap.
     pub settings: tokio::sync::RwLock<Arc<crate::settings::Settings>>,
     pub registry: tokio::sync::RwLock<Arc<Vec<Extension>>>,
+    /// The parser's current keyword set, sorted — what `hello` reports to a
+    /// client that connects after a reload. A std lock: the daemon's accept
+    /// loop reads it without an await.
+    pub hello_keywords: std::sync::RwLock<Arc<Vec<String>>>,
 }
 
 /// A run's output, whichever route produced it.
@@ -578,6 +585,7 @@ pub async fn run(
                         debounce = None;
                         cancel_run!();
                     }
+                    WorkerCmd::Shutdown => return,
                 }
             }
 

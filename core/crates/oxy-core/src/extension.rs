@@ -394,6 +394,18 @@ pub fn known_keywords(extensions: &[Extension], extra: &HashSet<String>) -> Hash
     out
 }
 
+/// A fingerprint of the whole definition. `cache::ext_stamp` covers only the
+/// fields `to_row` reads; the worker also gates on `when`, `search`,
+/// `socket`, `debounce_ms` and friends, and a field added later would have
+/// to be remembered by hand. The `Debug` text hashes every field including
+/// future ones — it is a fingerprint, never parsed back.
+pub fn def_stamp(ext: &Extension) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    h.write(format!("{ext:?}").as_bytes());
+    h.finish()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

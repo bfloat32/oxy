@@ -90,10 +90,21 @@ fn short_age(secs: u64) -> String {
     }
 }
 
-/// A path as a file:// URL: the characters that make a URL mean something
-/// else are percent-encoded, so `report #2 (final)?.txt` draws its thumbnail.
-fn file_url(path: &str) -> String {
-    let mut out = String::with_capacity(path.len() + 8);
+/// A path as a file:// URL, canonical on both platforms: separators flip on
+/// Windows so `C:\icons\x.svg` reads `file:///C:/icons/x.svg`, and the
+/// characters that make a URL mean something else are percent-encoded, so
+/// `report #2 (final)?.txt` draws its thumbnail.
+pub(crate) fn file_url(path: &str) -> String {
+    #[cfg(windows)]
+    let path = &path.replace('\\', "/");
+    #[cfg(not(windows))]
+    let path = path;
+    let mut out = String::with_capacity(path.len() + 9);
+    out.push_str(if path.starts_with('/') {
+        "file://"
+    } else {
+        "file:///"
+    });
     for c in path.chars() {
         match c {
             '%' => out.push_str("%25"),
@@ -308,7 +319,7 @@ fn walk(root: &Path, query_lower: &str, format: &str, home: &Path) -> Vec<Hit> {
             };
             let kind = kind_of(&ext);
             let art = if kind == "image" {
-                format!("file://{}", file_url(&path))
+                file_url(&path)
             } else {
                 String::new()
             };

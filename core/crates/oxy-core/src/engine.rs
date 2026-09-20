@@ -202,6 +202,9 @@ pub struct Engine {
     /// Arc'd twice over: the worker's Rows message, the cache entry, and this
     /// bucket can all be the same allocation, and merging clones handles.
     buckets: HashMap<Arc<str>, (u64, crate::row::SharedRows)>,
+    /// The definition each running worker was built with — a reload compares
+    /// stamps, because a worker answers with the extension it was born as.
+    worker_defs: HashMap<Arc<str>, u64>,
     waiting: HashSet<Arc<str>>,
     /// The merged list as it stands — what `activate` resolves keys against.
     rows: Vec<Arc<Row>>,
@@ -212,8 +215,13 @@ pub struct Engine {
     pending_activate: Option<(String, Option<usize>, Instant)>,
     /// The action armed by a `confirm`, keyed by its namespaced id.
     pending_confirm: Option<String>,
-    /// The row whose `previewExec` ran, and the `revertExec` that undoes it.
-    previewed: Option<(String, String)>,
+    /// The row whose `previewExec` last ran — landing on it again does not
+    /// run it twice.
+    previewed: Option<String>,
+    /// The first previewed row's `revertExec`, kept across later previews:
+    /// the state to return to is the one you arrived in, not the one you
+    /// last previewed — `Launcher.qml`'s `previewRevert`.
+    preview_revert: String,
 
     /// A URL found on the clipboard at open, offered by `paste`.
     clipboard_url: Option<String>,
@@ -246,7 +254,7 @@ impl Engine {
             let _ = evt_tx
                 .send(EngineEvent::Log {
                     ev: "sess".into(),
-                    fields: json!({ "v": env!("CARGO_PKG_VERSION") }),
+                    fields: json!({ "v": crate::PLUGIN_VERSION }),
                 })
                 .await;
             let _ = evt_tx
@@ -270,13 +278,14 @@ impl Engine {
             }
         }
         let mut extensions = report.extensions;
-        extensions.extend(builtin_extensions());
+        extensions.extend(builtin_extensions(&settings.quicklinks));
 
         let shared = Arc::new(Shared {
             cache: std::sync::Mutex::new(crate::cache::Cache::default()),
             availability: std::sync::Mutex::new(crate::availability::Availability::default()),
             settings: RwLock::new(Arc::new(settings.clone())),
             registry: RwLock::new(Arc::new(Vec::new())),
+            hello_keywords: std::sync::RwLock::new(Arc::new(Vec::new())),
         });
         *shared.registry.write().await = Arc::new(extensions.clone());
         let extensions = Arc::new(extensions);
@@ -303,11 +312,13 @@ impl Engine {
             opened_at: None,
             showing: HashSet::new(),
             buckets: HashMap::new(),
+            worker_defs: HashMap::new(),
             waiting: HashSet::new(),
             rows: Vec::new(),
             pending_activate: None,
             pending_confirm: None,
             previewed: None,
+            preview_revert: String::new(),
             clipboard_url: None,
             ask_task: None,
             ask_provider: None,
@@ -319,10 +330,43 @@ impl Engine {
         engine
     }
 
-    /// One worker per extension that can answer. A file that gained a way to
-    /// answer since the last load gets a worker here; a file that lost one
-    /// leaves its worker answering nothing, and its cache survives in Shared.
+    /// One worker per extension that can answer, and no worker for one that
+    /// changed or left. A worker answers with the `Extension` it was built
+    /// with, so a reload that only *added* workers would leave an edited
+    /// extension answering with its old definition forever — the QML's
+    /// Instantiator rebuilt every provider on registry change.
     async fn spawn_workers(&mut self, extensions: &Arc<Vec<Extension>>) {
+        // The definitions this reload wants running, stamped so "same id,
+        // new file" is a change, not a match.
+        let wanted: HashMap<&str, u64> = extensions
+            .iter()
+            .filter(|e| !(e.native.is_empty() && e.search.is_empty() && e.socket.is_empty()))
+            .map(|e| (e.id.as_str(), crate::extension::def_stamp(e)))
+            .collect();
+
+        // Departed or redefined: tell the task to exit, drop the handle and
+        // the rows it built — a changed extension's stale answer is the old
+        // definition's, which is exactly what the reload replaced.
+        let stale: Vec<Arc<str>> = self
+            .workers
+            .keys()
+            .filter(|id| {
+                wanted
+                    .get(id.as_ref())
+                    .is_none_or(|stamp| self.worker_defs.get(*id) != Some(stamp))
+            })
+            .cloned()
+            .collect();
+        for id in stale {
+            if let Some(tx) = self.workers.remove(&id) {
+                let _ = tx.send(WorkerCmd::Shutdown);
+            }
+            self.worker_defs.remove(&id);
+            self.showing.remove(&id);
+            self.waiting.remove(&id);
+            self.buckets.remove(&id);
+        }
+
         for ext in extensions.iter() {
             if self.workers.contains_key(ext.id.as_str()) {
                 continue;
@@ -351,30 +395,52 @@ impl Engine {
             if !self.opened {
                 let _ = tx.send(WorkerCmd::Opened(false));
             }
-            self.workers.insert(Arc::from(ext.id.as_str()), tx);
+            let id: Arc<str> = Arc::from(ext.id.as_str());
+            self.worker_defs
+                .insert(id.clone(), crate::extension::def_stamp(ext));
+            self.workers.insert(id, tx);
         }
+    }
+
+    /// The daemon's handle for `hello`: reads the live keyword slot, so a
+    /// client connecting after a reload is told the set as it stands.
+    pub fn shared(&self) -> Arc<crate::provider::worker::Shared> {
+        self.shared.clone()
     }
 
     /// The keyword set the parser validates against, for the hello a new
-    /// client is owed.
+    /// client is owed — live: a reload updates the shared slot, so a client
+    /// that connects later hears the set as it stands, not as it was at boot.
     pub fn keywords(&self) -> Vec<String> {
-        self.known.iter().cloned().collect()
+        self.shared
+            .hello_keywords
+            .read()
+            .map(|k| (**k).clone())
+            .unwrap_or_default()
     }
 
-    /// The keyword set the parser validates against.
+    /// The keyword set the parser validates against. Quicklink keywords
+    /// arrive through the quicklinks extension's aliases — one routing table,
+    /// not two — so this is exactly `known_keywords`.
     fn rebuild_known(&mut self) {
         self.known = known_keywords(&self.extensions, &builtin_keywords());
-        // The user's own quicklink keywords parse as filters too.
-        for link in &self.settings.quicklinks {
-            if !link.keyword.is_empty() {
-                self.known.insert(link.keyword.to_lowercase());
-            }
-        }
+        // `hello` tells a freshly connected client the set as it stands now,
+        // not as it stood at boot — reloads land here.
+        let mut sorted: Vec<String> = self.known.iter().cloned().collect();
+        sorted.sort();
+        *self.shared.hello_keywords.write().unwrap() = Arc::new(sorted);
     }
 
     /// The main loop: one select over the command channel and the worker
     /// channel, so all the ordering is visible in one place.
     pub async fn run(mut self, mut worker_rx: mpsc::Receiver<WorkerMsg>) {
+        // First contact, the same line the daemon writes per connect — an
+        // in-process client gets the same wire shape a socket client does.
+        self.emit(EngineEvent::Hello {
+            version: crate::PLUGIN_VERSION.to_string(),
+            keywords: self.keywords(),
+        })
+        .await;
         loop {
             tokio::select! {
                 cmd = self.cmd_rx.recv() => {
@@ -446,7 +512,12 @@ impl Engine {
             } => self.on_activate(&key, action, shift, ctrl).await,
             EngineCmd::Pin { key } => self.on_pin(&key).await,
             EngineCmd::Select { key } => self.on_select(&key),
-            EngineCmd::CommitPreview => self.previewed = None,
+            EngineCmd::CommitPreview => {
+                // Enter on a previewed row commits it: no revert on the way
+                // out, whatever it changed stays changed.
+                self.previewed = None;
+                self.preview_revert.clear();
+            }
             EngineCmd::Set { key, value } => self.on_set(&key, value).await,
             EngineCmd::SaveSettings { id, values } => self.on_save_settings(&id, values).await,
             EngineCmd::Reload => self.on_reload().await,
@@ -596,6 +667,7 @@ impl Engine {
                     accessory: &format!("{name}:"),
                     glyph,
                     fill: &format!("{name}:"),
+                    verb: "Use Keyword",
                 });
                 // Listed in the order the list was built, so the rank only
                 // preserves it.
@@ -657,6 +729,7 @@ impl Engine {
                     accessory: "",
                     glyph: "",
                     fill: entry,
+                    verb: "Search Again",
                 });
                 row.score = rank::score(rank::TIER_FORCED, 90000 - i as i64 * 200, 0);
                 row
@@ -679,7 +752,7 @@ impl Engine {
         row.accessory = "Open".into();
         // A link glyph, so the row reads as something you copied before the
         // URL itself has been read at all.
-        row.icon_glyph = "".into();
+        row.icon_glyph = "\u{f0c1}".into();
         row.score = rank::score(rank::TIER_FORCED, 95000, 0);
         row.exec = format!("omarchy-launch-browser {}", crate::shellquote::quote(&url));
         let search = self
@@ -999,19 +1072,23 @@ impl Engine {
 
         // `refreshMs`'s gate: a worker re-asks only while its rows are on
         // screen. Sent on transitions only — a resend per publish would be a
-        // message per provider per keystroke for nothing.
-        let mut visible: HashSet<&str> = HashSet::new();
-        for row in &self.rows {
-            visible.insert(row.provider_id.as_str());
-        }
-        for (id, tx) in &self.workers {
-            let on = visible.contains(id.as_ref());
-            if on != self.showing.contains(id) {
-                let _ = tx.send(WorkerCmd::Showing(on));
-                if on {
-                    self.showing.insert(id.clone());
-                } else {
-                    self.showing.remove(id);
+        // message per provider per keystroke for nothing. Closed is closed:
+        // a `query` op with `opened:false` (the CLI) must not flip a worker's
+        // showing bit for rows nobody is looking at.
+        if self.opened {
+            let mut visible: HashSet<&str> = HashSet::new();
+            for row in &self.rows {
+                visible.insert(row.provider_id.as_str());
+            }
+            for (id, tx) in &self.workers {
+                let on = visible.contains(id.as_ref());
+                if on != self.showing.contains(id) {
+                    let _ = tx.send(WorkerCmd::Showing(on));
+                    if on {
+                        self.showing.insert(id.clone());
+                    } else {
+                        self.showing.remove(id);
+                    }
                 }
             }
         }
@@ -1205,6 +1282,7 @@ impl Engine {
         )
         .await;
         self.previewed = None;
+        self.preview_revert.clear();
 
         // A row that behaves like a chat: Enter sends, and the box is emptied
         // for the next thing while what was sent stays on the card.
@@ -1246,14 +1324,17 @@ impl Engine {
         if !action.confirm.is_empty() && self.pending_confirm.as_deref() != Some(action.id.as_str())
         {
             self.pending_confirm = Some(action.id.clone());
+            let text = format!("/{} ", action.id);
             self.emit(EngineEvent::Type {
-                text: format!("/{} ", action.id),
+                text: text.clone(),
                 flow: false,
                 poll: false,
             })
             .await;
-            // Re-ask so the row's confirm prompt is what the list shows.
-            self.on_query(&self.raw.clone()).await;
+            // Re-ask the text the box will hold, not the text that fired the
+            // action: on_query's walking-away rule clears an arm whose text
+            // differs, and a client that ignores `type` still sees the prompt.
+            self.on_query(&text).await;
             return;
         }
         self.pending_confirm = None;
@@ -1410,20 +1491,23 @@ impl Engine {
         if row.preview_exec.is_empty() {
             return;
         }
-        // Leaving a previewed row undoes what it did; landing on it again
-        // does not run it twice.
-        if self.previewed.as_ref().is_some_and(|(k, _)| *k == row.key) {
+        // Landing on the same row again does not run it twice. Moving to a
+        // different preview does not undo the last one — a preview chain is
+        // undone once, from the state you arrived in.
+        if self.previewed.as_deref() == Some(row.key.as_str()) {
             return;
         }
-        self.unpreview();
+        if self.preview_revert.is_empty() && !row.revert_exec.is_empty() {
+            self.preview_revert = row.revert_exec.clone();
+        }
         crate::provider::process::run_detached(&row.preview_exec);
-        self.previewed = Some((row.key.clone(), row.revert_exec.clone()));
+        self.previewed = Some(row.key.clone());
     }
 
     fn unpreview(&mut self) {
-        if let Some((_, revert)) = self.previewed.take()
-            && !revert.is_empty()
-        {
+        self.previewed = None;
+        if !self.preview_revert.is_empty() {
+            let revert = std::mem::take(&mut self.preview_revert);
             crate::provider::process::run_detached(&revert);
         }
     }
@@ -1571,6 +1655,7 @@ impl Engine {
         let Ok(text) = std::fs::read_to_string(&path) else {
             return;
         };
+        let trailing_newline = text.ends_with('\n');
         let Ok(mut raw) = serde_json::from_str::<Value>(&text) else {
             return;
         };
@@ -1586,7 +1671,12 @@ impl Engine {
             .as_object_mut()
             .unwrap()
             .insert(id.to_string(), Value::Object(values));
-        let text = serde_json::to_string_pretty(&raw).unwrap_or_default();
+        let mut text = serde_json::to_string_pretty(&raw).unwrap_or_default();
+        // Keep the file's ending: a trailing newline stays, its absence
+        // stays absent — the write changes one subtree, not the file shape.
+        if trailing_newline && !text.ends_with('\n') {
+            text.push('\n');
+        }
         // Atomic, the way every file this launcher owns is written.
         let tmp = path.with_extension("tmp");
         if std::fs::write(&tmp, &text).is_ok() {
@@ -1628,12 +1718,14 @@ impl Engine {
             .await;
         }
         let mut extensions = report.extensions;
-        extensions.extend(builtin_extensions());
+        extensions.extend(builtin_extensions(&self.settings.quicklinks));
         self.extensions = Arc::new(extensions);
         *self.shared.registry.write().await = self.extensions.clone();
         self.rebuild_known();
-        // New workers for arrivals; departed extensions' workers are left to
-        // answer nothing, and their cache survives in `Shared`.
+        // Reconcile workers with the new definitions: arrivals spawn,
+        // departures and redefinitions are shut down and respawned — the
+        // cache survives in `Shared`, keyed by command, so an unchanged
+        // answer still hits.
         self.spawn_workers(&self.extensions.clone()).await;
         // The ask probe's answer may have changed with the settings.
         self.ask_probed = false;
@@ -1741,6 +1833,9 @@ struct FillSpec<'a> {
     accessory: &'a str,
     glyph: &'a str,
     fill: &'a str,
+    /// What Enter is called — "Use Keyword" for help rows, "Search Again"
+    /// for recents, matching `Launcher.qml`'s two fill sites.
+    verb: &'a str,
 }
 
 /// A row whose only business is putting text in the box.
@@ -1755,7 +1850,7 @@ fn fill_row(spec: FillSpec<'_>) -> Row {
     // A self-reference, so the footer names what Enter does and Ctrl+K on the
     // row leads back through activate.
     let mut act = Action {
-        title: "Use Keyword".into(),
+        title: spec.verb.into(),
         shortcut: "↵".into(),
         ..Action::default()
     };
@@ -1792,7 +1887,14 @@ fn builtin_keywords() -> HashSet<String> {
 
 /// The built-ins, declared as extensions so one set of rules routes them —
 /// including the worker's debounce/timeout/cache machinery.
-fn builtin_extensions() -> Vec<Extension> {
+///
+/// `links` supplies the quicklink keywords: a link's own keyword addresses
+/// it — `later:hi` scopes to `later` and the provider answers for that link,
+/// the way `Quicklinks.js` treated `query.scope === link.keyword`. The
+/// keywords ride on the extension as aliases, so one routing table covers
+/// both the engine's `claims` and the worker's gate — and a quicklinks edit
+/// is an `aliases` change, which the worker reconcile picks up.
+fn builtin_extensions(links: &[crate::settings::Quicklink]) -> Vec<Extension> {
     let mut out = Vec::new();
     let synth = |id: &str,
                  title: &str,
@@ -1898,6 +2000,13 @@ fn builtin_extensions() -> Vec<Extension> {
         "list",
         true,
     ));
+    if let Some(ql) = out.iter_mut().find(|e| e.id == "quicklinks") {
+        ql.aliases = links
+            .iter()
+            .map(|l| l.keyword.to_lowercase())
+            .filter(|k| !k.is_empty())
+            .collect();
+    }
     out.push(synth(
         "web",
         "Web",
@@ -2002,4 +2111,195 @@ fn builtin_actions() -> Vec<Action> {
     config.exec = "omarchy-launch-editor ~/.config/omarchy/oxy.json".into();
     out.push(config);
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::extension::known_keywords;
+    use crate::settings::Quicklink;
+
+    fn link(keyword: &str) -> Quicklink {
+        Quicklink {
+            title: format!("link {keyword}"),
+            subtitle: String::new(),
+            keyword: keyword.into(),
+            tags: vec![],
+            url: format!("https://{keyword}.example/{{}}"),
+            open: String::new(),
+            glyph: String::new(),
+        }
+    }
+
+    /// N1: a quicklink answers under its own keyword — `later:hi` scopes to
+    /// `later`, which the quicklinks extension claims through its aliases, so
+    /// the worker is asked and `arg_for` hands it `hi`.
+    #[test]
+    fn quicklink_keyword_routes_to_provider() {
+        let links = vec![link("later")];
+        let exts = builtin_extensions(&links);
+        let ql = exts.iter().find(|e| e.id == "quicklinks").unwrap();
+        assert!(
+            ql.aliases.iter().any(|a| a == "later"),
+            "the link's keyword must ride the extension's aliases"
+        );
+
+        let known = known_keywords(&exts, &builtin_keywords());
+        let q = Query::parse("later:hi", 1, Some(&known));
+        assert_eq!(q.scope, "later");
+        assert!(q.routes_to(&ql.keyword, &ql.aliases));
+        assert_eq!(q.arg_for(&ql.keyword, &ql.aliases), "hi");
+    }
+
+    /// The engine's half of N1: `claims` consults the same aliases, so the
+    /// dispatcher and the worker gate can never disagree about a link scope.
+    #[test]
+    fn quicklink_alias_survives_reload_and_disable() {
+        // Editing quicklinks changes the synthetic extension's aliases, which
+        // def_stamp fingerprints — a reload must see it as a redefinition.
+        let before = builtin_extensions(&[link("later")]);
+        let after = builtin_extensions(&[link("other")]);
+        let ql_before = before.iter().find(|e| e.id == "quicklinks").unwrap();
+        let ql_after = after.iter().find(|e| e.id == "quicklinks").unwrap();
+        assert_ne!(
+            crate::extension::def_stamp(ql_before),
+            crate::extension::def_stamp(ql_after),
+            "a quicklinks edit must read as a changed definition"
+        );
+    }
+
+    /// A minimal engine for the in-process flows — no workers, and state
+    /// paths under the temp dir so `save_state`'s writes land nowhere real.
+    fn bare_engine() -> Engine {
+        let scratch = std::env::temp_dir().join(format!("oxy-core-test-{}", std::process::id()));
+        let (_cmd_tx, cmd_rx) = mpsc::channel(8);
+        let (evt_tx, _evt_rx) = mpsc::channel(64);
+        let (worker_tx, _worker_rx) = mpsc::channel(64);
+        let shared = Arc::new(Shared {
+            cache: std::sync::Mutex::new(crate::cache::Cache::default()),
+            availability: std::sync::Mutex::new(crate::availability::Availability::default()),
+            settings: RwLock::new(Arc::new(Settings::default())),
+            registry: RwLock::new(Arc::new(Vec::new())),
+            hello_keywords: std::sync::RwLock::new(Arc::new(Vec::new())),
+        });
+        let mut engine = Engine {
+            cmd_rx,
+            evt_tx,
+            shared,
+            settings: Settings::default(),
+            extensions: Arc::new(builtin_extensions(&[])),
+            workers: HashMap::new(),
+            natives: HashMap::new(),
+            native_for: Box::new(|_| None),
+            worker_tx,
+            state: crate::state::State {
+                frecency: HashMap::new(),
+                recents: Vec::new(),
+                pins: HashMap::new(),
+            },
+            state_path: scratch.join("oxy-state.json"),
+            frecency_path: scratch.join("oxy-frecency.json"),
+            epoch: 0,
+            raw: String::new(),
+            query: Arc::new(Query::parse("", 0, None)),
+            opened: true,
+            opened_at: None,
+            showing: HashSet::new(),
+            buckets: HashMap::new(),
+            worker_defs: HashMap::new(),
+            waiting: HashSet::new(),
+            rows: Vec::new(),
+            pending_activate: None,
+            pending_confirm: None,
+            previewed: None,
+            preview_revert: String::new(),
+            clipboard_url: None,
+            ask_task: None,
+            ask_provider: None,
+            ask_probed: true,
+            known: HashSet::new(),
+        };
+        engine.rebuild_known();
+        engine
+    }
+
+    /// N13: the first Enter on `/clear-all` arms the confirm, and the engine's
+    /// own re-ask of `/clear-all ` must not clear it — that re-ask used to
+    /// run the old text through the walking-away rule and the arm died one
+    /// line after it was set.
+    #[tokio::test]
+    async fn confirmed_action_arms_and_confirms() {
+        let mut engine = bare_engine();
+        let action = builtin_actions()
+            .into_iter()
+            .find(|a| a.id == "clear-all")
+            .unwrap();
+        let row = Row::new("action:clear-all", "actions");
+
+        engine.on_query("/clear").await;
+        engine.run_action(&row, &action).await;
+        assert_eq!(
+            engine.pending_confirm.as_deref(),
+            Some("clear-all"),
+            "the arm must survive the engine re-asking the confirm text"
+        );
+        assert_eq!(engine.raw, "/clear-all ");
+
+        // The second Enter is the answer: the action runs and disarms.
+        engine.run_action(&row, &action).await;
+        assert!(engine.pending_confirm.is_none());
+    }
+
+    /// N16: a preview chain reverts to the state you arrived in — the first
+    /// row's `revertExec`, not the last previewed row's. Moving between
+    /// previews runs nothing but the next preview.
+    #[tokio::test]
+    async fn preview_revert_is_the_first_rows() {
+        let mut engine = bare_engine();
+        let mut a = Row::new("a", "probe");
+        a.preview_exec = "test-nop preview-a".into();
+        a.revert_exec = "test-nop revert-a".into();
+        let mut b = Row::new("b", "probe");
+        b.preview_exec = "test-nop preview-b".into();
+        b.revert_exec = "test-nop revert-b".into();
+        engine.rows = vec![Arc::new(a), Arc::new(b)];
+
+        engine.on_select("a");
+        assert_eq!(engine.preview_revert, "test-nop revert-a");
+        engine.on_select("b");
+        assert_eq!(
+            engine.preview_revert, "test-nop revert-a",
+            "the revert to run is the first previewed row's — the state you \
+             arrived in, not the one you last previewed"
+        );
+        engine.unpreview();
+        assert!(engine.preview_revert.is_empty());
+        assert!(engine.previewed.is_none());
+    }
+
+    /// N2's fingerprint: any field a gate or a row build reads flips it —
+    /// spot-check the ones the audit measured (search, when, keyword).
+    #[test]
+    fn def_stamp_covers_gate_fields() {
+        let exts = builtin_extensions(&[]);
+        let base = exts.iter().find(|e| e.id == "commands").unwrap();
+        let mut changed = base.clone();
+        changed.search = "echo different".into();
+        assert_ne!(
+            crate::extension::def_stamp(base),
+            crate::extension::def_stamp(&changed)
+        );
+        let mut changed = base.clone();
+        changed.when = "command -v definitely-absent-thing".into();
+        assert_ne!(
+            crate::extension::def_stamp(base),
+            crate::extension::def_stamp(&changed)
+        );
+        let mut changed = base.clone();
+        changed.debounce_ms += 1;
+        assert_ne!(
+            crate::extension::def_stamp(base),
+            crate::extension::def_stamp(&changed)
+        );
+    }
 }

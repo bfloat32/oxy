@@ -29,6 +29,11 @@ pub use extension::Extension;
 pub use query::Query;
 pub use row::{Action, Row};
 
+/// The version the wire and the log report — the plugin manifest's, not the
+/// crate's: a bug report reads `sess`, and `sess` must name what the user
+/// installed. Kept in step with `plugin/manifest.json`.
+pub const PLUGIN_VERSION: &str = "0.7.0";
+
 /// A field that could be arbitrarily long (a query, a command, a title) is
 /// truncated before it is logged — the log explains behavior, and a
 /// ten-thousand-character paste explains nothing more than its head does.

@@ -48,6 +48,12 @@ struct Scan {
     apps: Vec<App>,
     icons: IconIndex,
     scanned: bool,
+    /// The entry set the icon index was built against. The QML re-scanned
+    /// the icon dirs off `DesktopEntries.onValuesChanged` — here the same
+    /// edge is a changed fingerprint of the `.desktop` set: a package
+    /// install or removal alters both, and a fresh summon that finds the
+    /// same entries keeps the index it already paid for.
+    icons_fp: u64,
 }
 
 impl Default for Apps {
@@ -80,11 +86,13 @@ impl NativeExt for Apps {
                 // First ask, or the first ask of a fresh open: whatever was
                 // installed while the launcher was away is worth one rescan.
                 if !scan.scanned || fresh {
-                    scan.apps = scan_applications();
-                    // The icon index re-arms on the same edge the app scan
-                    // does — a package install changes both, and the QML
-                    // rebuilt it off DesktopEntries.onValuesChanged.
-                    scan.icons = scan_icons();
+                    let apps = scan_applications();
+                    let fp = apps_fingerprint(&apps);
+                    if !scan.scanned || fp != scan.icons_fp {
+                        scan.icons = scan_icons();
+                        scan.icons_fp = fp;
+                    }
+                    scan.apps = apps;
                     scan.scanned = true;
                 }
                 let query = arg.trim();
@@ -466,6 +474,21 @@ fn collect_pixmaps(ext: &str, idx: &mut IconIndex) {
     }
 }
 
+/// The set the icon index was built for, fingerprinted order-independently:
+/// a changed `.desktop` set is the signal that re-scans the icon dirs, so
+/// `scan_icons` does not run on every summon.
+fn apps_fingerprint(apps: &[App]) -> u64 {
+    use std::hash::Hasher;
+    let mut mix = apps.len() as u64;
+    for app in apps {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        h.write(app.entry.id.as_bytes());
+        h.write(app.icon.as_bytes());
+        mix ^= h.finish();
+    }
+    mix
+}
+
 /// The two ext passes the script ran: svg everywhere before png anywhere, so
 /// a scalable icon beats a raster one no matter which dir it lives in.
 fn scan_icons() -> IconIndex {
@@ -491,7 +514,7 @@ fn resolve_icon(icon: &str, icons: &IconIndex) -> String {
         icons
             .any
             .get("application-x-executable")
-            .map(|p| format!("file://{p}"))
+            .map(|p| crate::native::file::file_url(p))
             .unwrap_or_default()
     };
     if value.is_empty() {
@@ -500,11 +523,12 @@ fn resolve_icon(icon: &str, icons: &IconIndex) -> String {
     if value.starts_with("file://") || value.starts_with("image://") {
         return value.to_string();
     }
-    if let Some(rest) = value.strip_prefix('/') {
-        return format!("file:///{rest}");
+    if value.starts_with('/') || (value.len() > 2 && value.as_bytes()[1] == b':') {
+        // An absolute path — `/usr/…` on Unix, `C:\…` on Windows.
+        return crate::native::file::file_url(value);
     }
     if let Some(path) = icons.app.get(value).or_else(|| icons.any.get(value)) {
-        return format!("file://{path}");
+        return crate::native::file::file_url(path);
     }
     fallback()
 }

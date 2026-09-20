@@ -297,7 +297,7 @@ fn query_blocking(cache: Arc<Mutex<Option<RecentCache>>>, arg: &str) -> NativeOu
             (ext.to_uppercase(), kind, size)
         };
         let art = if kind == "image" {
-            format!("file://{path}")
+            crate::native::file::file_url(path)
         } else {
             String::new()
         };

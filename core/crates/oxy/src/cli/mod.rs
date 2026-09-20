@@ -1,4 +1,5 @@
 pub(crate) mod extensions;
+pub(crate) mod manifest;
 pub(crate) mod query;
 pub(crate) mod send;
 pub(crate) mod test;

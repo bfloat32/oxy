@@ -41,5 +41,12 @@ pub(crate) fn case_view(row: &oxy_core::model::row::Row, ext_id: &str) -> Value 
     {
         obj.insert("icon".into(), i);
     }
+    // The scripts emit a bare 0–99999 score; the wire's is
+    // `tier * 100000 + local`. The cases were written against the scripts, so
+    // the runner hands them the local part — the same number, in the same
+    // scale, whichever leg answered. (A native that computes 87999 and a
+    // script that prints 87999 are then compared as equals, which is the
+    // point.)
+    obj.insert("score".into(), json!(row.local));
     v
 }

@@ -422,7 +422,8 @@ A case is a query and a set of assertions about one row of the answer.
 | | |
 |---|---|
 | `why` | what this is protecting. Printed when it fails |
-| `requires` | a shell probe, like the manifest's `when`: the case is skipped where it fails |
+| `setup` | a shell command run before the case, for the fixture it needs. Its failure **fails** the case |
+| `requires` | a shell probe, like the manifest's `when`: the case is skipped where it fails. A probe only — side effects belong in `setup` |
 | `query` | the one argument the command is called with |
 | `minRows`, `maxRows` | how many rows the answer must have |
 | `row` | which row the rest of the case is about, default 0 |
@@ -441,6 +442,12 @@ Three things to know about the shape:
   `"requires": "command -v hyprctl"` is how the window cases skip on a box with
   no compositor instead of failing there. The manifest's `when` is the
   file-level version of the same idea.
+- a case that needs something *built* says so with `setup`, and builds it
+  every time: `"setup": "mkdir -p … && printf … > …/standup-notes.md"`. The
+  two are different on purpose — a probe that fails skips, a fixture that
+  fails fails — and writing a fixture through `requires` is how the notes
+  suite came to depend on the order it ran in. The `score` a case asserts is
+  the script's own 0–99999 number, whichever leg answered.
 - `matches` takes a negative lookahead, which is how you say a field must not
   be something: `{ "zoneid": "^(?!UTC$)" }`.
 - `fields` and `absent` turn on emptiness, not on truth. A field is absent when

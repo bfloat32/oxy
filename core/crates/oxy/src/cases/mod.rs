@@ -97,9 +97,28 @@ pub(crate) async fn run(only: Option<String>, json: bool) -> i32 {
         let mut problems = 0usize;
         let mut skipped_cases = 0usize;
         for case in &cases {
-            // A case can name a probe the way a manifest names `when` — a
-            // window case needs a compositor, and asserting rows without one
-            // is not a failure, it is a case that cannot run here.
+            let why = case.get("why").and_then(|w| w.as_str()).unwrap_or("");
+            let query = case.get("query").and_then(|q| q.as_str()).unwrap_or("");
+            // A case can build what it needs first: `setup` is the fixture,
+            // its failure is a failure. `requires` is a probe, and failing it
+            // skips — the two are different, and a fixture written through
+            // `requires` made the notes suite depend on its own order.
+            if let Some(setup) = case.get("setup").and_then(|s| s.as_str())
+                && !setup.trim().is_empty()
+            {
+                let ok = matches!(
+                    oxy_core::provider::process::run(setup, Duration::from_secs(15)).await,
+                    Some(f) if f.code == Some(0)
+                );
+                if !ok {
+                    problems += 1;
+                    lines.push(format!("FAIL {} case: setup failed", ext.id));
+                    failures.push(json!({
+                        "ext": ext.id, "query": query, "problem": "setup failed", "why": why,
+                    }));
+                    continue;
+                }
+            }
             if let Some(requires) = case.get("requires").and_then(|r| r.as_str())
                 && !requires.trim().is_empty()
                 && !oxy_core::provider::process::check(requires).await
@@ -107,7 +126,6 @@ pub(crate) async fn run(only: Option<String>, json: bool) -> i32 {
                 skipped_cases += 1;
                 continue;
             }
-            let query = case.get("query").and_then(|q| q.as_str()).unwrap_or("");
             let text = format!("{}:{query}", ext.keyword);
             // Results queued by the previous case are its answer, not this
             // one's — drain them so the loop below only sees this epoch.
@@ -154,7 +172,6 @@ pub(crate) async fn run(only: Option<String>, json: bool) -> i32 {
             for prob in check_case(case, &rows) {
                 problems += 1;
                 lines.push(format!("FAIL {} case: {prob}", ext.id));
-                let why = case.get("why").and_then(|w| w.as_str()).unwrap_or("");
                 if !why.is_empty() {
                     lines.push(format!("        ({why})"));
                 }

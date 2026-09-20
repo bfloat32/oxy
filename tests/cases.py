@@ -289,9 +289,18 @@ def run_extension(ext_file: Path, env: dict, verbose: bool):
     skipped_here = 0
     problems = []
     for case in cases:
-        # A case can name a probe the way a manifest names `when`: a window
-        # case needs a compositor, and asserting rows on a machine without one
-        # is not a failure, it is a case that cannot run here.
+        # A case can build what it needs before it runs. `setup` is the
+        # fixture — side effects, and a failure is a failure, because a case
+        # whose notes were never written would otherwise pass by seeing
+        # nothing.
+        setup = str(case.get("setup", "")).strip()
+        if setup and run(["bash", "-c", setup], env=env).returncode != 0:
+            problems.append(("setup failed", case.get("why", "")))
+            continue
+        # `requires` is a probe, never a side effect: a window case needs a
+        # compositor, and asserting rows on a machine without one is not a
+        # failure, it is a case that cannot run here. (It used to be both,
+        # which made the notes suite depend on the order it ran in.)
         requires = str(case.get("requires", "")).strip()
         if requires and run(["bash", "-c", requires], env=env).returncode != 0:
             skipped_here += 1

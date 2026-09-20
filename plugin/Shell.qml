@@ -94,11 +94,16 @@ Item {
   property string answerModel: ""
 
   // Say what happened without closing. A notice with nothing to show would
-  // otherwise look like a key that did nothing at all.
+  // otherwise look like a key that did nothing at all. The same query is
+  // re-asked on the poll cadence, because what just ran — a copied value, a
+  // track that started — can take a moment to show in the answer.
   property string notice: ""
   function notify(text) {
     root.notice = String(text)
     noticeTimer.restart()
+    pollText.text = root.queryText
+    pollText.round = 0
+    pollTimer.restart()
   }
   Timer {
     id: noticeTimer

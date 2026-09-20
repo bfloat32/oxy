@@ -259,6 +259,11 @@ impl NativeExt for Commands {
         _progress: UnboundedSender<Vec<Value>>,
     ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
         Box::pin(async move {
+            // The empty box is recents', not a full command list — `run:`
+            // with nothing after it browses, but a blank launcher does not.
+            if ctx.query.empty {
+                return NativeOutcome::Empty;
+            }
             let arg = ctx.arg.trim();
             let mut out = Vec::new();
             for (cmd, entry) in COMMANDS.iter().zip(self.entries.iter()) {

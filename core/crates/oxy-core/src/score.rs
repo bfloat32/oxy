@@ -125,18 +125,24 @@ pub fn fuzzy(entry: &Entry, query: &str) -> i64 {
 
     let name = entry.entry_name().to_lowercase();
     let id = entry.id.to_lowercase();
+    // `String.length` is UTF-16 units — the band lengths the script build
+    // scored against, so a non-ASCII name orders identically on both builds.
+    let name_len = name.encode_utf16().count() as i64;
+    let id_len = id.encode_utf16().count() as i64;
 
+    // Prefix before infix, name before id — the order Score.js checks, so an
+    // id-prefix match outranks a name that merely contains the query.
+    if name.starts_with(&q) {
+        return 10000 - name_len;
+    }
+    if id.starts_with(&q) {
+        return 9500 - id_len;
+    }
     if let Some(at) = name.find(&q) {
-        if at == 0 {
-            return 10000 - name.len() as i64;
-        }
-        return 8000 - at as i64 * 10 - name.len() as i64;
+        return 8000 - at as i64 * 10 - name_len;
     }
     if let Some(at) = id.find(&q) {
-        if at == 0 {
-            return 9500 - id.len() as i64;
-        }
-        return 7600 - at as i64 * 10 - id.len() as i64;
+        return 7600 - at as i64 * 10 - id_len;
     }
 
     if let Some(at) = search_text.find(&q) {
@@ -145,12 +151,12 @@ pub fn fuzzy(entry: &Entry, query: &str) -> i64 {
 
     if let Some(at) = acro.find(&q) {
         if at == 0 {
-            return 5000 - acro.len() as i64;
+            return 5000 - acro.encode_utf16().count() as i64;
         }
-        return 4600 - at as i64 * 10 - acro.len() as i64;
+        return 4600 - at as i64 * 10 - acro.encode_utf16().count() as i64;
     }
 
-    4000 - name.len() as i64
+    4000 - name_len
 }
 
 #[cfg(test)]

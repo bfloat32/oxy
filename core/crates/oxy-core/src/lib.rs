@@ -28,3 +28,16 @@ pub use engine::{Engine, EngineCmd, EngineEvent};
 pub use extension::Extension;
 pub use query::Query;
 pub use row::{Action, Row};
+
+/// A field that could be arbitrarily long (a query, a command, a title) is
+/// truncated before it is logged — the log explains behavior, and a
+/// ten-thousand-character paste explains nothing more than its head does.
+pub(crate) fn clip(s: &str, max: usize) -> String {
+    if s.chars().count() > max {
+        let mut t: String = s.chars().take(max).collect();
+        t.push('…');
+        t
+    } else {
+        s.to_string()
+    }
+}

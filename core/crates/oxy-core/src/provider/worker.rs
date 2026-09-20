@@ -138,13 +138,18 @@ pub async fn run(
     let mut stale_shown_key = String::new();
     let mut debounce: Option<std::pin::Pin<Box<Sleep>>> = None;
     let mut refresh_at: Option<std::pin::Pin<Box<Sleep>>> = None;
-    let mut proc_run: Option<JoinHandle<Option<String>>> = None;
+    let mut proc_run: Option<JoinHandle<Option<process::Finished>>> = None;
     let mut native_run: Option<JoinHandle<NativeOutcome>> = None;
     let mut native_partial: Option<mpsc::UnboundedReceiver<Vec<Value>>> = None;
     let mut run_epoch: u64 = 0;
     let mut run_key = String::new();
     let mut run_pending: Option<Pending> = None;
     let mut refreshing_run = false;
+    // The log's `ms` and `via`: when the run started and which route asked.
+    let mut run_start = Instant::now();
+    let mut run_via = "proc";
+    // When the in-flight `when` probe began — `avail` reports the wait.
+    let mut avail_start = Instant::now();
     // The socket connection is an actor of its own, so a run can borrow it
     // without borrowing the worker — and every line the daemon pushes lands
     // on the push channel, not only the one answering the last question.
@@ -164,6 +169,7 @@ pub async fn run(
         if let Some(ok) = shared.availability.lock().unwrap().get(&ext.when) {
             available = ok;
         } else {
+            avail_start = Instant::now();
             let when = ext.when.clone();
             let shared2 = shared.clone();
             let self2 = self_tx.clone();
@@ -214,7 +220,8 @@ pub async fn run(
                     || (!stale_shown_key.is_empty() && stale_shown_key == run_key));
             if keep_stale {
                 run_pending = None;
-                plog!("prov.stale", {"ep": run_epoch, "refresh": was_refresh});
+                plog!("prov.stale", {"ep": run_epoch, "refresh": was_refresh,
+                    "ms": run_start.elapsed().as_millis() as u64});
                 arm_refresh!();
             } else {
                 match out {
@@ -224,6 +231,9 @@ pub async fn run(
                     }
                     RunOut::Raw(mut raw) => {
                         raw.truncate(ext.max_rows);
+                        plog!("prov.done", {"ep": run_epoch, "via": run_via,
+                            "refresh": was_refresh, "rows": raw.len(),
+                            "ms": run_start.elapsed().as_millis() as u64});
                         // Built once, owned: this delivery, the cache entry,
                         // and every later hit share the same Arc'd row set —
                         // to_row never runs twice on one answer.
@@ -244,6 +254,9 @@ pub async fn run(
                         emit!(run_epoch, rows, true);
                     }
                     RunOut::Built(rows) => {
+                        plog!("prov.done", {"ep": run_epoch, "via": run_via,
+                            "refresh": was_refresh, "rows": rows.len(),
+                            "ms": run_start.elapsed().as_millis() as u64});
                         if let Some(p) = run_pending.take() {
                             live = Some(Live { epoch: p.epoch, pending: p });
                         }
@@ -319,7 +332,11 @@ pub async fn run(
             run_key = p.key.clone();
             refreshing_run = $refresh;
             run_pending = Some(p.clone());
+            run_start = Instant::now();
             if let Some(n) = native.clone() {
+                run_via = "native";
+                plog!("prov.start", {"ep": p.epoch, "via": "native",
+                    "q": crate::clip(&p.arg, 240)});
                 let (ptx, prx) = mpsc::unbounded_channel();
                 native_partial = Some(prx);
                 let ctx = Ctx {
@@ -347,6 +364,9 @@ pub async fn run(
                     })
                     .is_ok();
                 if sent {
+                    run_via = "sock";
+                    plog!("prov.start", {"ep": p.epoch, "via": "sock",
+                        "q": crate::clip(&p.arg, 240)});
                     sock_pending = Some(p.clone());
                     sock_waiting = true;
                     sock_deadline = Some(Box::pin(tokio::time::sleep_until(
@@ -360,6 +380,9 @@ pub async fn run(
                     socket = None;
                     sock_pending = None;
                     if !p.command.is_empty() {
+                        run_via = "proc";
+                        plog!("prov.start", {"ep": p.epoch, "via": "proc",
+                            "cmd": crate::clip(&p.command, 240)});
                         let cmd = p.command.clone();
                         let tmo = Duration::from_millis(ext.timeout_ms);
                         proc_run = Some(tokio::spawn(async move { process::run(&cmd, tmo).await }));
@@ -372,6 +395,9 @@ pub async fn run(
                     }
                 }
             } else if !p.command.is_empty() {
+                run_via = "proc";
+                plog!("prov.start", {"ep": p.epoch, "via": "proc",
+                    "cmd": crate::clip(&p.command, 240)});
                 let cmd = p.command.clone();
                 let tmo = Duration::from_millis(ext.timeout_ms);
                 proc_run = Some(tokio::spawn(async move { process::run(&cmd, tmo).await }));
@@ -405,6 +431,7 @@ pub async fn run(
                 let due = shared.availability.lock().unwrap().get(&ext.when).is_none();
                 if !ext.when.is_empty() && q.routes_to(&ext.keyword, &ext.aliases) && due {
                     recheck = Some(q.clone());
+                    avail_start = Instant::now();
                     let when = ext.when.clone();
                     let shared2 = shared.clone();
                     let self2 = self_tx.clone();
@@ -454,6 +481,8 @@ pub async fn run(
                                 epoch: q.epoch,
                                 pending: p.clone(),
                             });
+                            plog!("prov.done", {"ep": q.epoch, "via": "cache",
+                                "ms": 0u64, "rows": hit.len()});
                             emit!(q.epoch, hit, true);
                             arm_refresh!();
                             answered = true;
@@ -466,6 +495,8 @@ pub async fn run(
                                 .get_stale(&id, &p.key, ext_stamp);
                             if let Some(stale) = stale {
                                 stale_shown_key = p.key.clone();
+                                plog!("prov.done", {"ep": q.epoch, "via": "stale",
+                                    "ms": 0u64, "rows": stale.len()});
                                 emit!(q.epoch, stale, false);
                             }
                         }
@@ -482,6 +513,7 @@ pub async fn run(
                                 &ext.socket,
                                 Duration::from_millis(2000)
                                     .min(Duration::from_millis(ext.timeout_ms.max(1))),
+                                Some((id.clone(), tx.clone())),
                             )
                             .await
                             {
@@ -512,6 +544,9 @@ pub async fn run(
                     WorkerCmd::Ask(q) => handle_ask!(q),
                     WorkerCmd::Available { ok, replay } => {
                         available = ok;
+                        plog!("avail", {"ok": ok,
+                            "recheck": recheck.is_some(),
+                            "ms": avail_start.elapsed().as_millis() as u64});
                         if ok {
                             let q = replay.or_else(|| recheck.take());
                             if let Some(q) = q
@@ -558,9 +593,31 @@ pub async fn run(
 
             out = async { proc_run.as_mut().unwrap().await }, if proc_run.is_some() => {
                 proc_run = None;
+                let ms = run_start.elapsed().as_millis() as u64;
                 let out = match out.ok().flatten() {
-                    Some(t) => RunOut::Raw(crate::row::parse_rows(&t)),
-                    None => RunOut::Failed,
+                    // The deadline killed it — the timeout line carries the
+                    // configured limit, the way the QML's killer reported it.
+                    Some(f) if f.timed_out => {
+                        plog!("prov.timeout", {"ep": run_epoch,
+                            "ms": ext.timeout_ms, "via": "proc",
+                            "refresh": refreshing_run});
+                        RunOut::Failed
+                    }
+                    Some(f) => {
+                        // A nonzero exit whose answer arrives anyway is not a
+                        // failure worth a line — exiting badly AND saying
+                        // nothing is the case that used to pass for "no
+                        // results", so it is logged and the rows still land.
+                        if let Some(code) = f.code.filter(|c| *c != 0) {
+                            plog!("prov.fail", {"ep": run_epoch, "code": code,
+                                "ms": ms});
+                        }
+                        RunOut::Raw(crate::row::parse_rows(&f.stdout))
+                    }
+                    None => {
+                        plog!("prov.fail", {"ep": run_epoch, "ms": ms});
+                        RunOut::Failed
+                    }
                 };
                 if run_epoch == current_epoch {
                     deliver!(out);
@@ -592,7 +649,10 @@ pub async fn run(
                             .unwrap_or_default();
                         deliver!(RunOut::Raw(p.rows));
                     }
-                    Some(_) => {}
+                    Some(p) => {
+                        plog!("prov.drop", {"at": "push", "got": p.epoch,
+                            "ep": current_epoch});
+                    }
                     // The daemon hung up. The deadline, if a question is
                     // owed, still resolves it; the next ask reconnects.
                     None => socket = None,
@@ -605,6 +665,9 @@ pub async fn run(
                 sock_deadline = None;
                 if sock_waiting {
                     sock_waiting = false;
+                    plog!("prov.timeout", {"ep": run_epoch,
+                        "ms": ext.timeout_ms, "via": "sock",
+                        "refresh": refreshing_run});
                     // The old killer: a refresh keeps its rows, stale keeps
                     // stale, anything else is an empty answer.
                     deliver!(RunOut::Failed);
@@ -641,6 +704,10 @@ pub async fn run(
                                     deliver!(RunOut::Raw(Vec::new()));
                                 }
                             } else if !p.command.is_empty() {
+                                run_via = "proc";
+                                run_start = Instant::now();
+                                plog!("prov.start", {"ep": p.epoch, "via": "proc",
+                                    "cmd": crate::clip(&p.command, 240)});
                                 let cmd = p.command.clone();
                                 let tmo = Duration::from_millis(ext.timeout_ms);
                                 proc_run = Some(tokio::spawn(async move {
@@ -659,6 +726,10 @@ pub async fn run(
                                     })
                                     .is_ok();
                                 if sent {
+                                    run_via = "sock";
+                                    run_start = Instant::now();
+                                    plog!("prov.start", {"ep": p.epoch, "via": "sock",
+                                        "q": crate::clip(&p.arg, 240)});
                                     sock_pending = Some(p.clone());
                                     sock_waiting = true;
                                     sock_deadline =

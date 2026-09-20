@@ -253,7 +253,14 @@ impl Settings {
                 })
                 .collect();
             if !parsed.is_empty() {
-                out.engines = parsed;
+                // The user's entries merge over the built-ins by id — adding
+                // one engine does not mean restating Google, DuckDuckGo, …
+                for engine in parsed {
+                    match out.engines.iter_mut().find(|e| e.id == engine.id) {
+                        Some(slot) => *slot = engine,
+                        None => out.engines.push(engine),
+                    }
+                }
             }
         }
         if let Some(list) = obj.get("engineActions") {
@@ -395,4 +402,33 @@ pub fn url_encode(text: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `engines` in oxy.json merge over the defaults by id: adding Kagi must
+    /// not make Google disappear, and a same-id entry overrides in place —
+    /// the QML semantics, which replacing the list did not share.
+    #[test]
+    fn engines_merge_by_id() {
+        let s = Settings::merge(&serde_json::json!({
+            "engines": [
+                {"id": "kagi", "title": "Kagi", "url": "https://kagi.com/search?q={}"},
+                {"id": "google", "title": "G", "url": "https://g.example/{}"}
+            ]
+        }));
+        let kagi = s.engine("kagi").expect("added engine");
+        assert_eq!(kagi.title, "Kagi");
+        let google = s.engine("google").expect("default engine survives");
+        assert_eq!(google.url, "https://g.example/{}");
+        assert!(s.engine("ddg").is_some());
+    }
+
+    #[test]
+    fn url_encode_leaves_the_uri_mark_set() {
+        assert_eq!(url_encode("a b&c=1"), "a%20b%26c%3D1");
+        assert_eq!(url_encode("~-._*'()!"), "~-._*'()!");
+    }
 }

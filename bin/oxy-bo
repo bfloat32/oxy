@@ -118,7 +118,10 @@ CACHE="$RUN_DIR/oxy-bo.json"
 CACHE_STATE="$RUN_DIR/oxy-bo.linked"
 LOG="$STATE_DIR/oxy-bo.log"
 SEEN="$RUN_DIR/oxy-bo.seen"
-PLUGIN_ID="oma.oxy"
+# Which launcher to summon back. The daemon exports OXY_PLUGIN_ID=oma.oxyrs
+# into every command it runs, so whichever build asked is the one that comes
+# back; the script build never set it and stays the stable plugin's id.
+PLUGIN_ID="${OXY_PLUGIN_ID:-oma.oxy}"
 
 command -v bo >/dev/null 2>&1 || exit 0
 

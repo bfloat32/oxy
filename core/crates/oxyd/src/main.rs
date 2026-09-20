@@ -71,7 +71,7 @@ async fn read_clipboard() -> Option<String> {
         std::time::Duration::from_secs(2),
     )
     .await?;
-    url_in_clipboard(&out)
+    url_in_clipboard(&out.stdout)
 }
 
 #[cfg(not(unix))]
@@ -79,9 +79,27 @@ async fn read_clipboard() -> Option<String> {
     None
 }
 
-/// One line of the event log: `{ts, ev, ...fields}` — the shape Logger.qml
-/// wrote, appended by whichever daemon holds the file.
-fn log_line(ev: &str, fields: &Value) -> String {
+/// One daemon boot's id — `Date.now().toString(36)` the way Logger.qml
+/// minted it, so one log file can tell two sessions' lines apart.
+fn new_sid() -> String {
+    let mut n = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    if n == 0 {
+        return "0".into();
+    }
+    let mut buf = Vec::new();
+    while n > 0 {
+        buf.push(char::from_digit((n % 36) as u32, 36).unwrap_or('0'));
+        n /= 36;
+    }
+    buf.iter().rev().collect()
+}
+
+/// One line of the event log: `{ts, sid, ev, ...fields}` — the shape
+/// Logger.qml wrote, appended by whichever daemon holds the file.
+fn log_line(sid: &str, ev: &str, fields: &Value) -> String {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as u64)
@@ -91,6 +109,7 @@ fn log_line(ev: &str, fields: &Value) -> String {
         _ => Default::default(),
     };
     obj.insert("ts".into(), json!(ts));
+    obj.insert("sid".into(), json!(sid));
     obj.insert("ev".into(), json!(ev));
     Value::Object(obj).to_string() + "\n"
 }
@@ -99,6 +118,16 @@ fn append_log(path: &Path, line: &str) {
     use std::io::Write;
     if let Some(parent) = path.parent() {
         let _ = std::fs::create_dir_all(parent);
+    }
+    // Logger.qml rotated at 1MB into a single `.old`: the file can hold at
+    // most ~2MB of history, and a tail-of-tails is still on disk for forensics.
+    if std::fs::metadata(path)
+        .map(|m| m.len() > 1_048_576)
+        .unwrap_or(false)
+    {
+        let mut old = path.as_os_str().to_os_string();
+        old.push(".old");
+        let _ = std::fs::rename(path, old);
     }
     if let Ok(mut f) = std::fs::OpenOptions::new()
         .create(true)
@@ -222,10 +251,11 @@ async fn main() {
     // the file the same way Logger.qml wrote them.
     let bcast_tx = bcast.clone();
     let log_path = dirs::log_file();
+    let sid = new_sid();
     tokio::spawn(async move {
         while let Some(event) = evt_rx.recv().await {
             if let EngineEvent::Log { ev, fields } = &event {
-                append_log(&log_path, &log_line(ev, fields));
+                append_log(&log_path, &log_line(&sid, ev, fields));
             }
             // `to_vec` writes straight into the buffer; `into_boxed_slice` +
             // `Arc::from` share that allocation — no second copy per event.
@@ -255,21 +285,46 @@ async fn main() {
     };
     let hello = Arc::new(hello);
 
-    // Watch the extensions dir: a file landing or changing reloads the
-    // registry, the way FileView did — and faster than the signature poll it
-    // replaced.
+    // Watch the extensions dir and oxy.json: a file landing or changing
+    // reloads the registry and settings, the way the FileView +
+    // Settings.qml watchers did. `settings.json` writes (form saves) change
+    // the signature too — one extra reload is harmless.
     let reload_tx = cmd_tx.clone();
     let watch_dir = extensions_dir.clone();
+    let settings_path = dirs::settings_file();
     tokio::spawn(async move {
-        let mut last = signature(&watch_dir);
+        let mut last_ext = signature(&watch_dir);
+        let mut last_cfg = file_signature(&settings_path);
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(400)).await;
             let sig = signature(&watch_dir);
-            if sig != last {
-                last = sig;
+            if sig != last_ext {
+                last_ext = sig;
+                let _ = reload_tx.send(EngineCmd::Reload).await;
+                continue;
+            }
+            let csig = file_signature(&settings_path);
+            if csig != last_cfg {
+                last_cfg = csig;
                 let _ = reload_tx.send(EngineCmd::Reload).await;
             }
         }
+    });
+
+    // The login environment, captured once and replayed onto every command
+    // the daemon ever spawns — profile PATH/mise/nix survive the session env
+    // the frontend handed us. Runs beside the engine boot; commands spawned
+    // in the first few ms fall back to the inherited env.
+    let env_tx = cmd_tx.clone();
+    tokio::spawn(async move {
+        let t0 = std::time::Instant::now();
+        let vars = oxy_core::provider::process::capture_login_env().await;
+        let _ = env_tx
+            .send(EngineCmd::Log {
+                ev: "env".into(),
+                fields: json!({"vars": vars, "ms": t0.elapsed().as_millis() as u64}),
+            })
+            .await;
     });
 
     // The engine runs on its own task so accept() never waits on it.
@@ -351,6 +406,27 @@ async fn serve_with<R, W>(
             }
         }
     }
+}
+
+/// A single file's change signature — len + mtime, so an edit or a delete
+/// (None metadata → 0) both register. Same fixed-key hasher as `signature`.
+fn file_signature(path: &Path) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    match std::fs::metadata(path) {
+        Ok(meta) => {
+            h.write_u64(meta.len());
+            h.write_u64(
+                meta.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            );
+        }
+        Err(_) => h.write_u64(u64::MAX),
+    }
+    h.finish()
 }
 
 /// What a reload watches: every extension file's name, size and mtime. A

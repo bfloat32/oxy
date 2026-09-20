@@ -12,11 +12,14 @@
 //! launcher being closed.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
+
+use crate::provider::worker::WorkerMsg;
 
 #[cfg(unix)]
 use interprocess::local_socket::{GenericFilePath, ToFsName, tokio::prelude::*};
@@ -73,7 +76,15 @@ pub struct SocketChan {
 /// the daemon hangs up or the request channel closes; the worker sees the
 /// push channel close and reconnects on the next ask, throttled the way the
 /// QML was.
-pub async fn connect(path: &str, timeout: Duration) -> std::io::Result<SocketChan> {
+///
+/// `log` is the worker's id and the engine's message channel: a line that is
+/// not JSON lands as a `sock.bad` event — the diagnostic that used to be a
+/// silent `continue`.
+pub async fn connect(
+    path: &str,
+    timeout: Duration,
+    log: Option<(Arc<str>, mpsc::Sender<WorkerMsg>)>,
+) -> std::io::Result<SocketChan> {
     let stream = tokio::time::timeout(timeout, connect_pipe(path))
         .await
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "connect timed out"))??;
@@ -107,7 +118,16 @@ pub async fn connect(path: &str, timeout: Duration) -> std::io::Result<SocketCha
                     let Ok(payload) = serde_json::from_str::<Value>(line.trim()) else {
                         // A daemon that writes garbage should not take the
                         // launcher down with it — the line is dropped, not
-                        // the connection.
+                        // the connection, but the log hears about it.
+                        if let Some((id, tx)) = &log {
+                            let head: String =
+                                line.trim().chars().take(120).collect();
+                            let _ = tx.try_send(WorkerMsg::Log {
+                                id: id.clone(),
+                                ev: "sock.bad".into(),
+                                fields: json!({ "head": head }),
+                            });
+                        }
                         continue;
                     };
                     let Some(epoch) = payload.get("epoch").and_then(|e| e.as_u64()) else {
@@ -172,7 +192,7 @@ mod tests {
             .create_tokio()
             .expect("listener");
 
-        let mut chan = connect(&path, Duration::from_secs(5))
+        let mut chan = connect(&path, Duration::from_secs(5), None)
             .await
             .expect("connects");
 

@@ -192,6 +192,12 @@ pub struct Engine {
     /// text on every provider answer.
     query: Arc<Query>,
     opened: bool,
+    /// When the current open began — the log's `close` reports the summon.
+    opened_at: Option<std::time::Instant>,
+    /// Workers whose rows are on screen right now — `refreshMs` re-asks only
+    /// a question whose answer is showing, so the engine tells each worker
+    /// on the transition, not per publish.
+    showing: HashSet<Arc<str>>,
     /// provider → the rows it last answered, and the epoch they belong to.
     /// Arc'd twice over: the worker's Rows message, the cache entry, and this
     /// bucket can all be the same allocation, and merging clones handles.
@@ -232,14 +238,36 @@ impl Engine {
         native_for: impl Fn(&str) -> Option<Box<dyn NativeExt>> + Send + Sync + 'static,
     ) -> Engine {
         let settings = Settings::load(&crate::dirs::settings_file());
+        let load_t0 = std::time::Instant::now();
         let report = crate::extension::load_dir(extensions_dir, &settings.extensions);
-        for (path, why) in &report.bad {
+        // The two birth events go through the same `log` gate every other
+        // line does — emit_log does not exist yet, so the check is open.
+        if settings.log {
             let _ = evt_tx
                 .send(EngineEvent::Log {
-                    ev: "ext.bad".into(),
-                    fields: json!({ "f": path.to_string_lossy(), "why": why }),
+                    ev: "sess".into(),
+                    fields: json!({ "v": env!("CARGO_PKG_VERSION") }),
                 })
                 .await;
+            let _ = evt_tx
+                .send(EngineEvent::Log {
+                    ev: "ext.load".into(),
+                    fields: json!({
+                        "n": report.extensions.len(),
+                        "ms": load_t0.elapsed().as_millis() as u64,
+                    }),
+                })
+                .await;
+        }
+        if settings.log {
+            for (path, why) in &report.bad {
+                let _ = evt_tx
+                    .send(EngineEvent::Log {
+                        ev: "ext.bad".into(),
+                        fields: json!({ "f": path.to_string_lossy(), "why": why }),
+                    })
+                    .await;
+            }
         }
         let mut extensions = report.extensions;
         extensions.extend(builtin_extensions());
@@ -272,6 +300,8 @@ impl Engine {
             raw: String::new(),
             query: Arc::new(Query::parse("", 0, None)),
             opened: false,
+            opened_at: None,
+            showing: HashSet::new(),
             buckets: HashMap::new(),
             waiting: HashSet::new(),
             rows: Vec::new(),
@@ -353,7 +383,21 @@ impl Engine {
                 }
                 msg = worker_rx.recv() => {
                     let Some(msg) = msg else { continue };
-                    self.handle_worker(msg).await;
+                    // One keystroke's answers land in a burst — apply what has
+                    // already arrived, then publish once. The QML collected a
+                    // pass the same way: 46 merges and broadcasts for a single
+                    // character was the measured cost of publishing per answer.
+                    let mut dirty = self.handle_worker(msg).await;
+                    for _ in 0..256 {
+                        match worker_rx.try_recv() {
+                            Ok(m) => dirty |= self.handle_worker(m).await,
+                            Err(_) => break,
+                        }
+                    }
+                    if dirty {
+                        let q = self.query.clone();
+                        self.publish(self.epoch, &q).await;
+                    }
                 }
             }
         }
@@ -375,6 +419,12 @@ impl Engine {
                     }
                 }
                 self.opened = true;
+                self.opened_at = Some(std::time::Instant::now());
+                self.emit_log(
+                    "open",
+                    json!({ "q": crate::clip(&text, 120), "ep": self.epoch + 1 }),
+                )
+                .await;
                 self.emit_registry().await;
                 self.on_query(&text).await;
             }
@@ -441,6 +491,11 @@ impl Engine {
         self.raw = text.to_string();
         let query = Arc::new(Query::parse(text, self.epoch, Some(&self.known)));
         self.query = query.clone();
+        self.emit_log(
+            "query",
+            json!({ "ep": query.epoch, "q": crate::clip(text, 240), "s": query.scope }),
+        )
+        .await;
 
         // The inline answerers are the launcher asking itself: synchronous,
         // in the same pass, so their rows are never late.
@@ -489,6 +544,15 @@ impl Engine {
 
     async fn on_close(&mut self) {
         self.opened = false;
+        self.emit_log(
+            "close",
+            json!({
+                "ms": self.opened_at.map(|t| t.elapsed().as_millis() as u64).unwrap_or(0),
+                "ep": self.epoch,
+            }),
+        )
+        .await;
+        self.opened_at = None;
         self.clipboard_url = None;
         self.stop_ask();
         // A held Enter must not fire into the next summon.
@@ -496,7 +560,9 @@ impl Engine {
         self.pending_confirm = None;
         for tx in self.workers.values() {
             let _ = tx.send(WorkerCmd::Opened(false));
+            let _ = tx.send(WorkerCmd::Showing(false));
         }
+        self.showing.clear();
         // Whatever a preview changed goes back.
         self.unpreview();
     }
@@ -611,6 +677,8 @@ impl Engine {
         row.title = url.clone();
         row.detail = "On the clipboard".into();
         row.accessory = "Open".into();
+        // A link glyph, so the row reads as something you copied before the
+        // URL itself has been read at all.
         row.icon_glyph = "".into();
         row.score = rank::score(rank::TIER_FORCED, 95000, 0);
         row.exec = format!("omarchy-launch-browser {}", crate::shellquote::quote(&url));
@@ -836,8 +904,9 @@ impl Engine {
         );
     }
 
-    /// A worker answered: write its bucket, clear its wait, rebuild.
-    async fn handle_worker(&mut self, msg: WorkerMsg) {
+    /// A worker answered: write its bucket, clear its wait. Returns whether a
+    /// publish is owed — `run` batches a keystroke's burst and publishes once.
+    async fn handle_worker(&mut self, msg: WorkerMsg) -> bool {
         match msg {
             WorkerMsg::Rows {
                 id,
@@ -848,24 +917,25 @@ impl Engine {
                 if epoch != self.epoch {
                     self.emit_log("drop", json!({ "id": id, "got": epoch, "ep": self.epoch }))
                         .await;
-                    return;
+                    return false;
                 }
                 self.buckets.insert(id.clone(), (epoch, rows));
                 if last {
                     self.waiting.remove(&*id);
                 }
-                let query = self.query.clone();
-                self.publish(epoch, &query).await;
+                true
             }
             WorkerMsg::Waiting { id, epoch } => {
                 if epoch == self.epoch {
                     self.waiting.insert(id);
                 }
+                false
             }
             WorkerMsg::Log { id, ev, fields } => {
                 let mut f = fields.as_object().cloned().unwrap_or_default();
                 f.insert("id".into(), json!(id));
                 self.emit_log(ev, Value::Object(f)).await;
+                false
             }
         }
     }
@@ -875,6 +945,7 @@ impl Engine {
     /// question — publish runs once per provider answer, so re-parsing the
     /// same text each time would be per-keystroke waste.
     async fn publish(&mut self, epoch: u64, query: &Query) {
+        let t0 = std::time::Instant::now();
         let buckets: Vec<(&str, &[Arc<Row>])> = self
             .buckets
             .iter()
@@ -925,11 +996,32 @@ impl Engine {
             .unwrap_or_default();
 
         self.rows = rows;
+
+        // `refreshMs`'s gate: a worker re-asks only while its rows are on
+        // screen. Sent on transitions only — a resend per publish would be a
+        // message per provider per keystroke for nothing.
+        let mut visible: HashSet<&str> = HashSet::new();
+        for row in &self.rows {
+            visible.insert(row.provider_id.as_str());
+        }
+        for (id, tx) in &self.workers {
+            let on = visible.contains(id.as_ref());
+            if on != self.showing.contains(id) {
+                let _ = tx.send(WorkerCmd::Showing(on));
+                if on {
+                    self.showing.insert(id.clone());
+                } else {
+                    self.showing.remove(id);
+                }
+            }
+        }
+
         // Rows arriving without a single `previewExec` among them are the
         // preview leaving: whatever it changed goes back.
         if self.previewed.is_some() && !self.rows.iter().any(|r| !r.preview_exec.is_empty()) {
             self.unpreview();
         }
+        let row_count = self.rows.len();
         let _ = self
             .evt_tx
             .send(EngineEvent::Results {
@@ -945,6 +1037,11 @@ impl Engine {
                 confirm,
             })
             .await;
+        self.emit_log(
+            "rebuild",
+            json!({ "ep": epoch, "ms": t0.elapsed().as_millis() as u64, "rows": row_count }),
+        )
+        .await;
 
         // A queued Enter fires as soon as its placeholder resolves — and a
         // held one expires rather than firing against a query the user has
@@ -970,6 +1067,10 @@ impl Engine {
 
     /// What the active filter is called, for the header chip.
     fn scope_label(&self, query: &Query) -> String {
+        // Help mode's chip names what the list is, not the filter it parsed.
+        if matches!(self.raw.trim(), "?" | ":" | "h:" | "help:") {
+            return "Keywords".into();
+        }
         if query.scope.is_empty() {
             return String::new();
         }
@@ -1127,10 +1228,14 @@ impl Engine {
             return;
         }
 
+        // Close first: launching while an exclusive-focus layer surface is
+        // still mapped puts the new window behind it, and Omarchy's launch
+        // OSD would render underneath this overlay. The socket write is
+        // ordered, so the unmap starts at worst one frame before the spawn.
+        self.emit(EngineEvent::Close).await;
         if !row.exec.is_empty() {
             crate::provider::process::run_detached(&row.exec);
         }
-        self.emit(EngineEvent::Close).await;
     }
 
     /// An action on a row: the panel's choice, or Enter on a row that carries
@@ -1504,8 +1609,17 @@ impl Engine {
     async fn on_reload(&mut self) {
         self.settings = Settings::load(&crate::dirs::settings_file());
         *self.shared.settings.write().await = Arc::new(self.settings.clone());
+        let load_t0 = std::time::Instant::now();
         let report =
             crate::extension::load_dir(&crate::dirs::extensions_dir(), &self.settings.extensions);
+        self.emit_log(
+            "ext.load",
+            json!({
+                "n": report.extensions.len(),
+                "ms": load_t0.elapsed().as_millis() as u64,
+            }),
+        )
+        .await;
         for (path, why) in &report.bad {
             self.emit_log(
                 "ext.bad",
@@ -1577,7 +1691,10 @@ impl Engine {
         self.save_state();
     }
 
-    fn save_state(&self) {
+    fn save_state(&mut self) {
+        // What decayed to nothing goes now, on the same cadence the QML used:
+        // the file holds only keys that still mean a launch.
+        crate::state::frecency_prune(&mut self.state.frecency, now_ms());
         let _ = self.state.save(&self.frecency_path, &self.state_path);
     }
 
@@ -1732,6 +1849,11 @@ fn builtin_extensions() -> Vec<Extension> {
         "hero",
         true,
     ));
+    // `min_chars: 0` makes the bare keyword a browse mode — `apps:` lists
+    // apps alphabetically, `run:` lists every command — the way the script
+    // build's scoped query functions behaved on an empty argument. The
+    // providers still decline a truly empty query (`query.empty`), so the
+    // unscoped empty box stays recents-only.
     out.push(synth(
         "apps",
         "Applications",
@@ -1739,13 +1861,15 @@ fn builtin_extensions() -> Vec<Extension> {
         &["app", "launch"],
         "apps",
         true,
-        1,
+        0,
         0,
         20,
         "substring",
         "list",
         true,
     ));
+    // The script build capped commands and quicklinks only at the merge
+    // limit — all 24 commands and every link are reachable.
     out.push(synth(
         "commands",
         "Commands",
@@ -1753,9 +1877,9 @@ fn builtin_extensions() -> Vec<Extension> {
         &["commands"],
         "commands",
         true,
-        1,
         0,
-        20,
+        0,
+        60,
         "substring",
         "list",
         true,
@@ -1767,9 +1891,9 @@ fn builtin_extensions() -> Vec<Extension> {
         &[],
         "quicklinks",
         true,
-        1,
         0,
-        8,
+        0,
+        60,
         "substring",
         "list",
         true,

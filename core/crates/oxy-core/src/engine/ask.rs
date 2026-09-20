@@ -111,13 +111,11 @@ impl Engine {
         self.ask_task = Some(tokio::spawn(async move {
             let mut error = String::new();
             let mut pending = String::new();
-            let mut answered = false;
 
             macro_rules! flush {
                 ($force:expr) => {
                     while let Some(i) = pending.find('\n') {
                         let line: String = pending.drain(..=i).collect();
-                        answered = true;
                         if evt
                             .send(EngineEvent::Answer {
                                 line: line.trim_end_matches(['\n', '\r']).to_string(),
@@ -129,7 +127,6 @@ impl Engine {
                         }
                     }
                     if $force && !pending.is_empty() {
-                        answered = true;
                         if evt
                             .send(EngineEvent::Answer {
                                 line: std::mem::take(&mut pending),
@@ -181,7 +178,6 @@ impl Engine {
             // An error after some text is reported, not thrown away: the card
             // keeps what arrived and shows why it stopped.
             let _ = evt.send(EngineEvent::AnswerDone { error }).await;
-            let _ = answered;
         }));
     }
 

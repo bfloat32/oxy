@@ -42,10 +42,10 @@ starts from a measured state:
 
 | fact | value |
 |---|---|
-| Rust files | 92 (37 before the restructure; +3 for `provider/llm/`) |
-| total lines | 16 316 |
+| Rust files | 100 (37 before the restructure; +3 for `provider/llm/`, +8 for the batch A scaffold) |
+| total lines | 16 562 |
 | largest file | 600 lines (`provider/worker/state.rs`); nothing above the 800 target |
-| tests | 60 passing (`cargo test --workspace`): 47 engine, 13 for the LLM slice |
+| tests | 62 passing (`cargo test --workspace`): 47 engine, 13 LLM, 2 for `util::on_path` |
 | lints | `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean |
 | guards | the file budget and the `model/` layering check in `tests/run.sh`; clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
 | extensions | 40 (15 native, 30 script-backed, 27 scripts) — the marketplace was removed |
@@ -90,7 +90,7 @@ scripts, because `pr`, `issue` and `ci` are nine-line wrappers that set
 - **The script stays as the fallback.** A native provider answers first and
   returns `Fallback` where it declines, so a wrong port is a slower answer,
   never a missing one.
-- **A port is not done without a case file.** 17 of the 31 have none
+- **A port is not done without a case file.** 17 of the 30 have none
   (`note`, `radio`, `spotify-library`, `herdr`, `docker`, `shortcuts`,
   `omarchy`, `bt`, `wifi`, `theme`, `spotify`, `win`, `vol`, `pass`, `img`,
   `snip`, `bri`).
@@ -118,7 +118,11 @@ command and socket legs … A native provider is its own answer: it runs
 regardless and declines through Fallback, at which point the check matters
 again."* So a native provider is asked even when its `when` fails — if it does
 not re-check for itself, the keyword starts answering on machines where the
-script stayed silent. Every port must reproduce its gate internally.
+script stayed silent. Every port must reproduce its gate internally — and the
+helper for it exists: `native/util.rs`'s `on_path` walks PATH instead of
+spawning a shell, so a port writes `if !util::on_path("nmcli") { return
+NativeOutcome::Fallback }` and pays a `stat` per PATH entry rather than a
+process per keystroke.
 
 | extension | gate (the script's `when`) | what the native must check |
 |---|---|---|
@@ -210,6 +214,14 @@ oxy-core/src/
 oxyd/src/     main, server, wire, logfile, watch, clipboard
 oxy/src/      main, engine_local, cli/{query,send,test,extensions}, cases/{mod,check,view}
 ```
+
+**The batch A scaffold is in place** (commit `41b319a`): the seven stub
+files (`system/{vol,bri,bt,wifi,win}.rs`, `desktop/theme.rs`,
+`time/alarm.rs`), the `native/util.rs` gate helper, and the `construct`
+arms all exist, and each stub declines every question — so a port lands
+file-local, in its own file, with the manifest's script answering until the
+last line is written. Each port is done in its own git worktree under
+`.worktrees/`, which is why nothing collides.
 
 Two notes on the shape:
 
@@ -797,21 +809,30 @@ confirm bug.
    acceptance suite.
 8. **In parallel, not in a batch**: `oxy test`'s missing layers + fixtures
    (§4.2) and the case files (§4.7).
+9. **The LLM track runs alongside all of it** (§4.4) and touches nothing the
+   batches touch: its next steps are autodetect, token framing with the
+   frontend change that needs, then the session file and multi-turn.
 
 ### 5.1 Definition of done for one port
 
 1. `oxy test --cases <id>` is green (all existing assertions).
-2. The `when` gate is reproduced inside the provider (§1.3).
-3. The rows carry exactly the fields the view reads (§6.2), and nothing the
+2. **The manifest declares it**: `"native": "<name>"` in the extension's
+   JSON, and that name is an arm in `native::construct`. Nothing else makes
+   the provider load — a typo here is a port that silently never runs, and
+   the script answers exactly as before, which is the one failure this wave
+   can hide from every other check.
+3. The `when` gate is reproduced inside the provider (§1.3) — with
+   `util::on_path` where the gate is a `command -v`.
+4. The rows carry exactly the fields the view reads (§6.2), and nothing the
    view needs is missing.
-4. The `exec`/`setExec` strings are unchanged, or the callbacks they name are
+5. The `exec`/`setExec` strings are unchanged, or the callbacks they name are
    implemented (§6.1).
-5. The state files it shares stay byte-compatible (§6.4).
-6. It declines (`Fallback`/`Empty`) exactly where the script printed nothing —
+6. The state files it shares stay byte-compatible (§6.4).
+7. It declines (`Fallback`/`Empty`) exactly where the script printed nothing —
    the "silent" cases are the spec for this.
-7. New cases cover the behaviours the port adds, and the 17 extensions with no
+8. New cases cover the behaviours the port adds, and the 17 extensions with no
    cases get their first ones.
-8. The budget in §1.2 is measured and met.
+9. The budget in §1.2 is measured and met.
 
 ---
 
@@ -941,7 +962,7 @@ list.
 they read the machine every time (which is also why so many of them are in
 batch A: the reading is the whole cost).
 
-### 6.5 The remaining 31, measured
+### 6.5 The remaining 30, measured
 | id | keyword | view | script | lines | CLI/tools | refreshMs | cacheMs | cases | size |
 |---|---|---|---|---|---|---|---|---|---|
 | agent | do | agent | oxy-agent | 2167 | hyprctl, systemctl, python3, git, gh | 600 | – | yes | XL |
@@ -1009,6 +1030,10 @@ header, and is the kind of thing a clean rewrite quietly loses.
 | A row with an empty title is dropped, and `maxRows` counts it before it goes | `model/row.rs` | a blank row, or one fewer answer than asked for |
 | `fill` wins over everything on a row: Enter types, runs nothing | `engine/activate.rs` | picking a keyword from `?` launches something |
 | `escExec` belongs to the frontend: Escape runs it before the ladder | `Shell.qml` | a running row is never told to stop |
+| The `answer` event is **one line per event** — the card appends a newline between them | `Shell.qml`'s `case "answer"` | a token per event renders one word per line; deltas must be buffered into lines until the framing changes |
+| The LLM endpoint is `http://` and nothing else, on purpose | `provider/llm/http.rs` | a launcher quietly sending a question to a remote host in plaintext |
+| A configured endpoint replaces the CLI list rather than joining it | `engine/ask.rs`'s `probe_ask` | four probes spawned to ignore their answers |
+| A manifest's `native:` name must be an arm in `construct` | `provider/native/mod.rs` | the port never loads and the script answers as before — indistinguishable from success |
 
 ### 6.7 Verifying a port
 

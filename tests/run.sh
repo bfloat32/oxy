@@ -157,8 +157,10 @@ say "no legacy name"
 # the workflow file in .github does the same. Build outputs are skipped too:
 # every artifact under core/target embeds the checkout path, so a clone in a
 # directory still called `omacast` would match its own binaries and fail a
-# check that is about source files.
-grep -ri omacast --exclude-dir=.git --exclude-dir=.github --exclude-dir=tests --exclude-dir=target . && bad "an omacast reference survives"
+# check that is about source files. The same goes for `.worktrees/`: each
+# worktree's `.git` file records the path it was created from, and the
+# worktrees are other checkouts of this same repo besides.
+grep -ri omacast --exclude-dir=.git --exclude-dir=.github --exclude-dir=tests --exclude-dir=target --exclude-dir=.worktrees . && bad "an omacast reference survives"
 
 if ((failed)); then
   printf '\n\033[31m%s\033[0m\n\n' "checks failed"

@@ -1066,16 +1066,24 @@ header, and is the kind of thing a clean rewrite quietly loses.
 
 ```sh
 bash tests/run.sh                     # every check CI runs (static, behaviour, cases, cargo, guards)
-cd core && cargo test --workspace     # the engine suite (60 tests)
+cd core && cargo test --workspace     # the engine suite (325 tests)
 cd core && cargo clippy --workspace --all-targets -- -D warnings
 
+oxy test --only manifest              # every manifest: ids, keywords, views, tiers, `native:` in `construct`
+oxy extensions --coverage             # the porting ledger: leg, cases, gate per extension
 oxy test --cases <id>                 # that extension's assertions, through the engine (native first)
+oxy test --cases <id> --json          # the same, for a CI job
 python3 tests/cases.py <id>           # the same assertions against the script alone (the reference)
 oxy test <id>                         # its testQuery through the engine
 oxy query --local '<query>'           # one question through the in-process engine
 
 printf '{"op":"query","text":"run:","opened":true}\n' | oxy send   # the wire, by hand
 ```
+
+A case can build what it needs (`setup`) and skip where it cannot run
+(`requires`) — see `docs/EXTENSIONS.md` for which is which. The `score` a case
+asserts is the script's own 0–99999 number, so the same assertion means the
+same thing whichever leg answered.
 
 When a port is of a **JS or QML module**, the strongest check is the original
 itself: `plugin/Score.js` and `plugin/Query.js` both run under node (strip the
@@ -1088,7 +1096,11 @@ against a stub server inside `cargo test`, so no network and no model are
 needed:
 
 ```sh
-cd core && cargo test -p oxy-core llm    # url, framing, deltas, request shape
+cd core && cargo test -p oxy-core llm    # url, framing, deltas, retry, request shape
+oxy ask doctor --tier offline            # wiring only: no socket, no spend
+oxy ask doctor --tier catalog --json     # + connect and read /v1/models, for CI
+oxy ask "what is 2+2"                    # the same client without the card
+python3 tests/bench_oxy.py               # cold start, per-keystroke p50/p95, RSS
 ```
 
 To check it end to end by hand, run any streaming OpenAI-compatible server

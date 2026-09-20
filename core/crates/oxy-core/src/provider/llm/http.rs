@@ -56,6 +56,9 @@ impl Url {
 /// A response whose body is read as it arrives.
 pub struct Response {
     pub status: u16,
+    /// The server's own delay before a retry, when it sent one. The policy
+    /// lives in `retry`; this is only the header, parsed.
+    pub retry_after: Option<std::time::Duration>,
     reader: BufReader<OwnedReadHalf>,
     chunked: bool,
     buf: Vec<u8>,
@@ -158,10 +161,12 @@ pub async fn post_json(url: &Url, body: &str) -> io::Result<Response> {
         .and_then(|s| s.parse::<u16>().ok())
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bad status line"))?;
 
-    // Headers: only `Transfer-Encoding` decides how the body is framed; a
+    // Headers: `Transfer-Encoding` decides how the body is framed; a
     // `Content-Length` body is read to EOF, which is what a streamed answer
-    // with `Connection: close` does anyway.
+    // with `Connection: close` does anyway. `Retry-After` is kept for the
+    // caller that decides whether to send the question again.
     let mut chunked = false;
+    let mut retry_after = None;
     loop {
         let mut line = String::new();
         if reader.read_line(&mut line).await? == 0 {
@@ -171,15 +176,18 @@ pub async fn post_json(url: &Url, body: &str) -> io::Result<Response> {
         if trimmed.is_empty() {
             break;
         }
-        if let Some((name, value)) = trimmed.split_once(':')
-            && name.eq_ignore_ascii_case("transfer-encoding")
-        {
-            chunked = value.to_ascii_lowercase().contains("chunked");
+        if let Some((name, value)) = trimmed.split_once(':') {
+            if name.eq_ignore_ascii_case("transfer-encoding") {
+                chunked = value.to_ascii_lowercase().contains("chunked");
+            } else if name.eq_ignore_ascii_case("retry-after") {
+                retry_after = crate::provider::llm::retry::parse_retry_after(value);
+            }
         }
     }
 
     Ok(Response {
         status,
+        retry_after,
         reader,
         chunked,
         buf: Vec::new(),

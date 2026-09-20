@@ -12,6 +12,7 @@
 //! be the thing that quietly sends a question to a remote host in plaintext.
 
 pub mod http;
+pub mod retry;
 pub mod stream;
 
 pub use http::Url;

@@ -84,6 +84,16 @@ impl Response {
                 return Ok(Some(line));
             }
             if !self.read_more().await? {
+                // A body whose last line has no newline is still a line: a
+                // JSON reply from a server that does not end it with one
+                // would otherwise read as empty.
+                if self.pos < self.buf.len() {
+                    let rest = String::from_utf8_lossy(&self.buf[self.pos..])
+                        .trim_end_matches('\r')
+                        .to_string();
+                    self.pos = self.buf.len();
+                    return Ok(Some(rest));
+                }
                 return Ok(None);
             }
         }
@@ -135,19 +145,59 @@ impl Response {
 
 /// POST a JSON body and return the response with its body still streaming.
 pub async fn post_json(url: &Url, body: &str) -> io::Result<Response> {
+    post_json_with(url, body, &[]).await
+}
+
+/// The same POST with extra request headers — a `Authorization: Bearer …`
+/// for a server that wants a key.
+pub async fn post_json_with(
+    url: &Url,
+    body: &str,
+    headers: &[(&str, &str)],
+) -> io::Result<Response> {
+    send(url, "POST", Some(body), headers).await
+}
+
+/// A GET, for the model list the doctor reads. Same reader, no body.
+pub async fn get_json(url: &Url, headers: &[(&str, &str)]) -> io::Result<Response> {
+    send(url, "GET", None, headers).await
+}
+
+/// One request. `body` present means POST with a JSON content type; absent
+/// means GET, which wants a JSON `Accept` instead of an event stream.
+async fn send(
+    url: &Url,
+    method: &str,
+    body: Option<&str>,
+    headers: &[(&str, &str)],
+) -> io::Result<Response> {
     let stream = TcpStream::connect((url.host.as_str(), url.port)).await?;
     stream.set_nodelay(true).ok();
     let (read, mut write) = stream.into_split();
 
-    let head = format!(
-        "POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n\
-         Accept: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+    let mut head = format!(
+        "{method} {} HTTP/1.1\r\nHost: {}\r\n",
         url.path,
-        url.authority(),
-        body.len()
+        url.authority()
     );
+    for (name, value) in headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    if let Some(body) = body {
+        head.push_str(&format!(
+            "Content-Type: application/json\r\nAccept: text/event-stream\r\n\
+             Content-Length: {}\r\n",
+            body.len()
+        ));
+    } else {
+        head.push_str("Accept: application/json\r\n");
+    }
+    head.push_str("Connection: close\r\n\r\n");
+
     write.write_all(head.as_bytes()).await?;
-    write.write_all(body.as_bytes()).await?;
+    if let Some(body) = body {
+        write.write_all(body.as_bytes()).await?;
+    }
     write.flush().await?;
 
     let mut reader = BufReader::new(read);
@@ -272,6 +322,43 @@ mod tests {
             lines.push(line);
         }
         assert_eq!(lines, vec!["{\"x\":1}", "{}"]);
+    }
+
+    #[tokio::test]
+    async fn extra_headers_ride_along() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 2048];
+            let n = sock.read(&mut buf).await.unwrap();
+            let head = String::from_utf8_lossy(&buf[..n]).to_string();
+            let auth = head
+                .lines()
+                .find(|l| l.to_ascii_lowercase().starts_with("authorization:"))
+                .unwrap_or("no header")
+                .to_string();
+            let body = format!("{{\"echo\":\"{auth}\"}}");
+            let reply = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            sock.write_all(reply.as_bytes()).await.unwrap();
+            sock.flush().await.unwrap();
+        });
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/v1/chat")).unwrap();
+        let mut resp = post_json_with(&url, "{}", &[("Authorization", "Bearer sekrit")])
+            .await
+            .unwrap();
+        let line = resp.next_line().await.unwrap().unwrap();
+        assert_eq!(line, r#"{"echo":"Authorization: Bearer sekrit"}"#);
+
+        // …and no header at all when the caller passes none, rather than an
+        // empty bearer.
+        let port2 = serve("HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n{}").await;
+        let url2 = Url::parse(&format!("http://127.0.0.1:{port2}/v1/chat")).unwrap();
+        assert!(post_json(&url2, "{}").await.is_ok());
     }
 
     #[tokio::test]

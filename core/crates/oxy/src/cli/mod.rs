@@ -1,3 +1,5 @@
+pub(crate) mod ask;
+pub(crate) mod doctor;
 pub(crate) mod extensions;
 pub(crate) mod manifest;
 pub(crate) mod query;

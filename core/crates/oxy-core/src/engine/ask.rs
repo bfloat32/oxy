@@ -5,7 +5,7 @@
 use serde_json::json;
 
 use super::{Engine, EngineEvent};
-use crate::provider::llm::{Delta, Local, retry};
+use crate::provider::llm::Local;
 
 impl Engine {
     // ----------------------------------------------------------------- ask
@@ -106,122 +106,54 @@ impl Engine {
         })
         .await;
 
-        let body = llm.chat_request(&[], question);
+        let mut pieces = crate::provider::llm::turn::spawn(llm, Vec::new(), question.to_string());
         let evt = self.evt_tx.clone();
         self.ask_task = Some(tokio::spawn(async move {
-            let mut error = String::new();
+            // Deltas are buffered into whole lines because the wire's `answer`
+            // event is one line per event — the card appends a newline
+            // between them, so a token per event would render one word per
+            // line. Token-level framing is the design's next step, and it
+            // needs the frontend to change with it.
             let mut pending = String::new();
-
-            macro_rules! flush {
-                ($force:expr) => {
-                    while let Some(i) = pending.find('\n') {
-                        let line: String = pending.drain(..=i).collect();
-                        if evt
-                            .send(EngineEvent::Answer {
-                                line: line.trim_end_matches(['\n', '\r']).to_string(),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    if $force && !pending.is_empty() {
-                        if evt
-                            .send(EngineEvent::Answer {
-                                line: std::mem::take(&mut pending),
-                            })
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                    }
-                };
-            }
-
-            // Send, and send again while the failure is the kind that goes
-            // away — a server still loading a model (503) or a rate limit
-            // (429). Nothing is re-sent once the answer has started: a stream
-            // that breaks mid-way is the card's problem, not the retry's.
-            let mut attempt = 1u32;
-            let mut response = None;
-            loop {
-                match crate::provider::llm::http::post_json(&llm.url, &body).await {
-                    Ok(resp) if resp.status == 200 => {
-                        response = Some(resp);
-                        break;
-                    }
-                    Ok(resp) if retry::retryable(resp.status) && attempt < retry::MAX_ATTEMPTS => {
-                        let wait = retry::wait_before(attempt, resp.retry_after);
-                        // A quiet card for a minute looks like a hang, so a
-                        // wait long enough to notice says what it is waiting
-                        // for — the same way a CLI provider's warnings stream.
-                        if wait >= std::time::Duration::from_secs(2)
-                            && evt
+            let mut error = String::new();
+            while let Some(piece) = pieces.recv().await {
+                match piece {
+                    crate::provider::llm::turn::Piece::Text(text) => {
+                        pending.push_str(&text);
+                        while let Some(i) = pending.find('\n') {
+                            let line: String = pending.drain(..=i).collect();
+                            if evt
                                 .send(EngineEvent::Answer {
-                                    line: format!(
-                                        "· {} answered {} — trying again in {}s",
-                                        llm.url.authority(),
-                                        resp.status,
-                                        wait.as_secs()
-                                    ),
+                                    line: line.trim_end_matches(['\n', '\r']).to_string(),
                                 })
                                 .await
                                 .is_err()
-                        {
+                            {
+                                return;
+                            }
+                        }
+                    }
+                    crate::provider::llm::turn::Piece::Notice(line) => {
+                        if evt.send(EngineEvent::Answer { line }).await.is_err() {
                             return;
                         }
-                        tokio::time::sleep(wait).await;
                     }
-                    Ok(resp) => {
-                        error = format!("{} answered {}.", llm.url.authority(), resp.status);
-                        break;
-                    }
-                    Err(_) if attempt < retry::MAX_ATTEMPTS => {
-                        // A refused or dropped connection is worth one more
-                        // try: a server starting up refuses for a moment, and
-                        // half a second later it does not. The wait is short
-                        // enough that saying so would be noise.
-                        let wait = retry::wait_before(attempt, None);
-                        tokio::time::sleep(wait).await;
-                    }
-                    Err(e) => {
-                        error = format!(
-                            "Could not reach {} ({e}). Is the model server running?",
-                            llm.url.authority()
-                        );
+                    crate::provider::llm::turn::Piece::Error(why) => {
+                        error = why;
                         break;
                     }
                 }
-                attempt += 1;
             }
-
-            if let Some(mut response) = response {
-                loop {
-                    match response.next_line().await {
-                        Ok(Some(line)) => match crate::provider::llm::stream::parse_line(&line) {
-                            Some(Delta::Text(text)) => {
-                                pending.push_str(&text);
-                                flush!(false);
-                            }
-                            Some(Delta::Error(why)) => error = why,
-                            Some(Delta::Done) => {
-                                flush!(true);
-                                break;
-                            }
-                            None => {}
-                        },
-                        Ok(None) => {
-                            flush!(true);
-                            break;
-                        }
-                        Err(e) => {
-                            error = format!("The stream broke: {e}");
-                            break;
-                        }
-                    }
-                }
+            // Whatever is left of the last line is a line too.
+            if !pending.is_empty()
+                && evt
+                    .send(EngineEvent::Answer {
+                        line: std::mem::take(&mut pending),
+                    })
+                    .await
+                    .is_err()
+            {
+                return;
             }
             // An error after some text is reported, not thrown away: the card
             // keeps what arrived and shows why it stopped.

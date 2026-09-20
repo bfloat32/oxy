@@ -15,6 +15,7 @@ pub(super) fn default_local_ask() -> LocalAsk {
         system: "Answer briefly; this renders in a launcher card, not a terminal.".into(),
         max_tokens: 800,
         temperature: 0.4,
+        key: String::new(),
     }
 }
 

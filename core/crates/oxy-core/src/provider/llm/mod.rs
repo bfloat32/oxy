@@ -12,8 +12,10 @@
 //! be the thing that quietly sends a question to a remote host in plaintext.
 
 pub mod http;
+pub mod models;
 pub mod retry;
 pub mod stream;
+pub mod turn;
 
 pub use http::Url;
 pub use stream::Delta;
@@ -30,6 +32,20 @@ pub struct Local {
     pub system: String,
     pub max_tokens: u64,
     pub temperature: f64,
+    /// Resolved at load: `env:NAME` reads the variable, anything else is the
+    /// literal. Empty means no header is sent.
+    pub key: String,
+}
+
+/// `env:NAME` → the variable's value; anything else is the literal.
+///
+/// An empty variable is an empty key, and an empty key sends no header — the
+/// same as not setting one. Saying so is the doctor's job, not this one's.
+pub fn resolve_key(raw: &str) -> String {
+    match raw.trim().strip_prefix("env:") {
+        Some(name) => std::env::var(name.trim()).unwrap_or_default(),
+        None => raw.trim().to_string(),
+    }
 }
 
 impl Local {
@@ -46,6 +62,7 @@ impl Local {
             system: ask.system.clone(),
             max_tokens: ask.max_tokens,
             temperature: ask.temperature,
+            key: resolve_key(&ask.key),
         })
     }
 
@@ -110,7 +127,22 @@ mod tests {
             system: "Answer briefly.".into(),
             max_tokens: 800,
             temperature: 0.4,
+            key: String::new(),
         }
+    }
+
+    #[test]
+    fn a_key_is_a_literal_or_an_environment_lookup() {
+        assert_eq!(resolve_key("sk-abc"), "sk-abc");
+        assert_eq!(resolve_key("  spaced  "), "spaced");
+        assert_eq!(resolve_key(""), "");
+        // `env:NAME` reads the variable; PATH is the one that always exists.
+        assert_eq!(
+            resolve_key("env:PATH"),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        assert!(!resolve_key("env:PATH").is_empty());
+        assert_eq!(resolve_key("env:OXY_SURELY_NOT_SET_XYZ"), "");
     }
 
     #[test]

@@ -39,6 +39,10 @@ pub struct LocalAsk {
     pub system: String,
     pub max_tokens: u64,
     pub temperature: f64,
+    /// `Authorization: Bearer …` for a server that wants one — a literal, or
+    /// `env:NAME` to read it from the environment so the value never has to
+    /// live in a file that gets committed.
+    pub key: String,
 }
 
 #[derive(Debug, Clone)]
@@ -292,6 +296,9 @@ impl Settings {
             if let Some(v) = a.get("temperature").and_then(|v| v.as_f64()) {
                 out.ask.temperature = v;
             }
+            if let Some(v) = s("key") {
+                out.ask.key = v.to_string();
+            }
         }
         if let Some(v) = obj.get("extensions").and_then(|v| v.as_object()) {
             out.extensions = v.clone();
@@ -350,6 +357,24 @@ mod tests {
     /// `engines` in oxy.json merge over the defaults by id: adding Kagi must
     /// not make Google disappear, and a same-id entry overrides in place —
     /// the QML semantics, which replacing the list did not share.
+    #[test]
+    fn the_ask_block_merges_field_by_field() {
+        let s = Settings::merge(&serde_json::json!({
+            "ask": {"endpoint": "http://127.0.0.1:11434/v1/chat/completions",
+                    "model": "llama3.2", "key": "env:OPENAI_API_KEY", "maxTokens": 64}
+        }));
+        assert_eq!(s.ask.model, "llama3.2");
+        assert_eq!(s.ask.key, "env:OPENAI_API_KEY");
+        assert_eq!(s.ask.max_tokens, 64);
+        // Untouched fields keep their defaults.
+        assert_eq!(s.ask.temperature, 0.4);
+        assert!(!s.ask.system.is_empty());
+        // No `ask` block at all leaves the endpoint empty, so the CLI answers.
+        let bare = Settings::merge(&serde_json::json!({}));
+        assert!(bare.ask.endpoint.is_empty());
+        assert!(bare.ask.key.is_empty());
+    }
+
     #[test]
     fn a_corrupt_settings_file_is_moved_aside_and_reported() {
         let d = std::env::temp_dir().join(format!("oxy-settings-{}", std::process::id()));

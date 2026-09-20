@@ -7,12 +7,48 @@ use crate::engine_local::local_engine;
 
 /// Every extension's `testQuery`, run through the in-process engine — the
 /// Rust counterpart of `tests/cases.py`'s live checks.
+///
+/// `--only manifest` swaps the question for a read-only look at the manifests
+/// themselves, and `--only cases` is the same as `--cases`. The layer's own
+/// value is not an extension name, so the positional argument is read around
+/// it rather than by "first thing that is not a flag".
 pub(crate) async fn run(args: &[String]) -> i32 {
-    if args.iter().any(|a| a == "--cases") {
-        let only = args.iter().find(|a| !a.starts_with("--")).cloned();
-        return crate::cases::run(only).await;
+    let mut layer: Option<String> = None;
+    let mut only: Option<String> = None;
+    let mut cases = false;
+    let mut json = false;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--only" => {
+                layer = args.get(i + 1).cloned();
+                i += 2;
+                continue;
+            }
+            "--cases" => cases = true,
+            "--json" => json = true,
+            other if !other.starts_with("--") => {
+                // The first positional is the extension to test; a second is
+                // ignored, the way every other verb takes one name.
+                only.get_or_insert_with(|| other.to_string());
+            }
+            _ => {}
+        }
+        i += 1;
     }
-    let only = args.first().cloned();
+    if let Some(layer) = layer {
+        return match layer.as_str() {
+            "manifest" => crate::cli::manifest::run(only.as_deref(), json).await,
+            "cases" => crate::cases::run(only, json).await,
+            other => {
+                eprintln!("oxy test: --only {other} is not implemented (manifest, cases are)");
+                2
+            }
+        };
+    }
+    if cases {
+        return crate::cases::run(only, json).await;
+    }
     let settings = oxy_core::settings::Settings::load(&dirs::settings_file());
     let report = extension::load_dir(&dirs::extensions_dir(), &settings.extensions);
     let mut failures = 0;

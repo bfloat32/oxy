@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use oxy_core::engine::{EngineCmd, EngineEvent};
 use oxy_core::{registry as extension, settings::paths as dirs};
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use self::check::check_case;
 use self::view::{case_preflight, case_view};
@@ -16,12 +16,17 @@ use crate::engine_local::local_engine;
 /// made against the rows the merged pipeline actually returns. The same
 /// contract holds: cases whose extension cannot run here skip rather than
 /// fail, and a row assertion only checks when the row exists.
-pub(crate) async fn run(only: Option<String>) -> i32 {
+///
+/// `--json` swaps the human lines for one object, so a CI job can read the
+/// result instead of parsing prose.
+pub(crate) async fn run(only: Option<String>, json: bool) -> i32 {
     let settings = oxy_core::settings::Settings::load(&dirs::settings_file());
     let report = extension::load_dir(&dirs::extensions_dir(), &settings.extensions);
     let mut held = 0usize;
     let mut failed = 0usize;
     let mut skipped = 0usize;
+    let mut lines: Vec<String> = Vec::new();
+    let mut failures: Vec<Value> = Vec::new();
 
     // One engine for the whole run — each case is just the next query.
     let (tx, mut rx, _task) = local_engine().await;
@@ -32,8 +37,17 @@ pub(crate) async fn run(only: Option<String>) -> i32 {
     let mut epoch = 0u64;
 
     for ext in &report.extensions {
+        // The filter takes the id or the file's own name: `windows.json`
+        // holds `"id": "win"`, `tests/cases.py` has always matched the file,
+        // and both are names a person would type.
+        let stem = ext
+            .source
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
         if let Some(only) = &only
             && ext.id != *only
+            && stem != only.as_str()
         {
             continue;
         }
@@ -44,7 +58,8 @@ pub(crate) async fn run(only: Option<String>) -> i32 {
         let cases: Vec<Value> = match serde_json::from_str(&text) {
             Ok(c) => c,
             Err(e) => {
-                println!("FAIL {} cases: {e}", ext.id);
+                lines.push(format!("FAIL {} cases: {e}", ext.id));
+                failures.push(json!({ "ext": ext.id, "problem": e.to_string() }));
                 failed += 1;
                 continue;
             }
@@ -57,7 +72,7 @@ pub(crate) async fn run(only: Option<String>) -> i32 {
         // lacks the script.
         if ext.native.is_empty() {
             if !ext.when.is_empty() && !oxy_core::provider::process::check(&ext.when).await {
-                println!("skip {} cases (when fails here)", ext.id);
+                lines.push(format!("skip {} cases (when fails here)", ext.id));
                 skipped += 1;
                 continue;
             }
@@ -65,16 +80,16 @@ pub(crate) async fn run(only: Option<String>) -> i32 {
             if cmd.is_empty()
                 || !oxy_core::provider::process::check(&format!("command -v {cmd}")).await
             {
-                println!("skip {} cases ({cmd} not on PATH)", ext.id);
+                lines.push(format!("skip {} cases ({cmd} not on PATH)", ext.id));
                 skipped += 1;
                 continue;
             }
         }
         if !case_preflight(&ext.id).await {
-            println!(
+            lines.push(format!(
                 "skip {} cases (its data service is unreachable here)",
                 ext.id
-            );
+            ));
             skipped += 1;
             continue;
         }
@@ -138,17 +153,23 @@ pub(crate) async fn run(only: Option<String>) -> i32 {
 
             for prob in check_case(case, &rows) {
                 problems += 1;
-                println!("FAIL {} case: {prob}", ext.id);
+                lines.push(format!("FAIL {} case: {prob}", ext.id));
                 let why = case.get("why").and_then(|w| w.as_str()).unwrap_or("");
                 if !why.is_empty() {
-                    println!("        ({why})");
+                    lines.push(format!("        ({why})"));
                 }
+                failures.push(json!({
+                    "ext": ext.id,
+                    "query": query,
+                    "problem": prob,
+                    "why": why,
+                }));
             }
         }
         if problems > 0 {
             failed += problems;
         } else if skipped_cases == cases.len() {
-            println!("skip {} cases (requires not met here)", ext.id);
+            lines.push(format!("skip {} cases (requires not met here)", ext.id));
             skipped += 1;
         } else {
             held += 1;
@@ -157,13 +178,30 @@ pub(crate) async fn run(only: Option<String>) -> i32 {
             } else {
                 String::new()
             };
-            println!(
+            lines.push(format!(
                 "ok   {} cases  {} held{tail}",
                 ext.id,
                 cases.len() - skipped_cases
-            );
+            ));
         }
     }
-    println!("{held} held, {failed} broke, {skipped} skipped");
+
+    if json {
+        let summary = json!({
+            "held": held,
+            "broke": failed,
+            "skipped": skipped,
+            "failures": failures,
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&summary).unwrap_or_default()
+        );
+    } else {
+        for line in &lines {
+            println!("{line}");
+        }
+        println!("{held} held, {failed} broke, {skipped} skipped");
+    }
     if failed > 0 { 1 } else { 0 }
 }

@@ -15,8 +15,7 @@ mod cases;
 mod cli;
 mod engine_local;
 
-const USAGE: &str =
-    "oxy query [--local] TEXT | oxy test [--cases] [EXT] | oxy extensions | oxy send";
+const USAGE: &str = "oxy query [--local] TEXT | oxy test [--cases|--only manifest|cases] [EXT]      | oxy extensions [--coverage] | oxy send";
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
@@ -24,7 +23,7 @@ async fn main() {
     let code = match args.first().map(String::as_str) {
         Some("query") => cli::query::run(&args[1..]).await,
         Some("test") => cli::test::run(&args[1..]).await,
-        Some("extensions") => cli::extensions::run().await,
+        Some("extensions") => cli::extensions::run(&args[1..]).await,
         Some("send") => cli::send::run().await,
         _ => {
             eprintln!("{USAGE}");

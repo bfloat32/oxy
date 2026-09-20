@@ -19,6 +19,55 @@ pub struct Setting {
     pub secret: bool,
 }
 
+/// Every view a manifest may name — the frontends' `knownViews` minus their
+/// own two (`answer` and `loading` are drawn by the launcher, never by an
+/// extension).
+///
+/// It lives here so `oxy test --only manifest` can check a manifest against
+/// the real list, and `tests/run.sh` fails if this drifts from
+/// `plugin/Shell.qml` — a name the frontend does not know falls back to
+/// `list` silently, which is exactly the kind of thing a check should catch.
+pub const KNOWN_VIEWS: &[&str] = &[
+    "list",
+    "hero",
+    "cards",
+    "split",
+    "grid",
+    "dashboard",
+    "calendar",
+    "player",
+    "slider",
+    "form",
+    "timegrid",
+    "zones",
+    "gitrepo",
+    "gitbranches",
+    "gitstashes",
+    "agent",
+    "ghrepo",
+    "ghpr",
+    "docker",
+    "notes",
+    "processes",
+    "emoji",
+    "themes",
+    "windows",
+    "hosts",
+    "radios",
+    "radioplayer",
+    "files",
+    "repos",
+    "menutree",
+    "snippets",
+    "vault",
+    "shortcuts",
+    "herdr",
+];
+
+pub fn known_view(name: &str) -> bool {
+    KNOWN_VIEWS.contains(&name)
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct Extension {
     pub id: String,

@@ -102,6 +102,25 @@ for path in sorted(glob.glob("config/**/*.json", recursive=True)):
 sys.exit(1 if bad else 0)
 PY
 
+say "view list, core vs frontend"
+# `KNOWN_VIEWS` is what `oxy test --only manifest` checks a manifest against,
+# and the frontends are what actually draws a view. A name in one and not the
+# other is a manifest that passes a check and falls back to `list` on screen.
+python3 - <<'PY' || bad "KNOWN_VIEWS and plugin/Shell.qml disagree"
+import pathlib, re, sys
+core = pathlib.Path("core/crates/oxy-core/src/registry/def.rs").read_text(encoding="utf-8")
+m = re.search(r"pub const KNOWN_VIEWS: &\[&str\] = &\[(.*?)\];", core, re.S)
+core_views = set(re.findall(r'"([a-z]+)"', m.group(1)))
+qml = pathlib.Path("plugin/Shell.qml").read_text(encoding="utf-8")
+m2 = re.search(r"readonly property var knownViews: \[(.*?)\]", qml, re.S)
+# `answer` and `loading` are the launcher's own views, never an extension's.
+front = set(re.findall(r'"([a-z]+)"', m2.group(1))) - {"answer", "loading"}
+if core_views != front:
+    print("in the core only:", sorted(core_views - front))
+    print("in the frontend only:", sorted(front - core_views))
+    sys.exit(1)
+PY
+
 say "rust core"
 # The same steps the workflow's rust job runs — skipped where cargo is not
 # installed rather than failed, the way shellcheck degrades.
@@ -109,6 +128,19 @@ if command -v cargo >/dev/null 2>&1; then
   (cd core && cargo check --workspace) || bad "cargo check"
   (cd core && cargo test --workspace) || bad "cargo test"
   (cd core && cargo clippy --workspace --all-targets -- -D warnings) || bad "cargo clippy"
+  # The launcher reads a manifest leniently — an unknown view falls back to
+  # `list`, a typo'd `native` name to the script — so the strict checks live
+  # in the CLI. It reads XDG paths, so it gets a sandbox holding this repo's
+  # extensions rather than whatever the machine has installed.
+  sandbox=$(mktemp -d)
+  mkdir -p "$sandbox/omarchy/oxy"
+  cp -r config/omarchy/oxy/extensions "$sandbox/omarchy/oxy/"
+  echo '{}' > "$sandbox/omarchy/oxy.json"
+  cfg="$sandbox"
+  command -v cygpath >/dev/null 2>&1 && cfg=$(cygpath -w "$sandbox")
+  (cd core && XDG_CONFIG_HOME="$cfg" cargo run -q -p oxy -- test --only manifest) \
+    || bad "oxy test --only manifest"
+  rm -rf "$sandbox"
 else
   echo "   cargo not installed — CI runs it; skipping"
 fi

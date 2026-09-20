@@ -1,0 +1,7 @@
+# Files allowed over the line-count budget, one per line:
+#   <path>  <why it is exempt>
+# Data tables are exempt by design — splitting a table makes it harder to
+# check against its source. Everything else must fit the budget.
+crates/oxy-core/src/provider/native/time/date/holidays.rs  the HOLIDAYS table is a dataset, not code
+crates/oxy-core/src/provider/native/desktop/emoji_data.rs  the emoji DEFAULTS + intents table is a dataset
+crates/oxy-core/src/provider/native/desktop/commands.rs    the built-in COMMANDS list is a dataset

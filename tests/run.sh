@@ -108,9 +108,40 @@ say "rust core"
 if command -v cargo >/dev/null 2>&1; then
   (cd core && cargo check --workspace) || bad "cargo check"
   (cd core && cargo test --workspace) || bad "cargo test"
+  (cd core && cargo clippy --workspace --all-targets -- -D warnings) || bad "cargo clippy"
 else
   echo "   cargo not installed — CI runs it; skipping"
 fi
+
+say "rust file budget + layering"
+# A file is a noun: 800 target, 1200 hard cap, data tables exempt via
+# core/.loc-allow. And model/ is the wire vocabulary — no IO may live there.
+python3 - <<'PY' || bad "a rust file is over budget, or model/ does IO"
+import glob, os, sys
+allow = {}
+af = "core/.loc-allow"
+if os.path.exists(af):
+    for line in open(af, encoding="utf-8"):
+        line = line.strip()
+        if line and not line.startswith("#"):
+            allow[line.split()[0]] = True
+bad = False
+for path in sorted(glob.glob("core/crates/**/*.rs", recursive=True)):
+    rel = os.path.relpath(path, "core").replace(os.sep, "/")
+    n = sum(1 for _ in open(path, encoding="utf-8"))
+    if rel in allow:
+        continue
+    if n > 1200:
+        print(f"{rel}: {n} lines — over the 1200 cap"); bad = True
+    elif n > 800:
+        print(f"{rel}: {n} lines — over the 800 target")
+for path in glob.glob("core/crates/oxy-core/src/model/*.rs"):
+    src = open(path, encoding="utf-8").read()
+    for banned in ("std::fs", "std::process", "tokio::process"):
+        if banned in src:
+            print(f"{path}: model/ may not use {banned}"); bad = True
+sys.exit(1 if bad else 0)
+PY
 
 say "logic tests"
 node --test tests/logic.test.mjs || bad "logic tests"

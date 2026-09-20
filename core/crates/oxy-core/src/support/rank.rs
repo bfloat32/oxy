@@ -71,12 +71,6 @@ pub fn score(tier: u32, local: i64, bias: i64) -> i64 {
     tier as i64 * TIER_WIDTH + (local + bias).clamp(0, 99999)
 }
 
-pub fn by_score(a: &Row, b: &Row) -> std::cmp::Ordering {
-    b.score
-        .cmp(&a.score)
-        .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
-}
-
 /// The total order as a key — `sort_by_cached_key` computes it once per row,
 /// so the lowercase happens n times instead of n·log n comparisons.
 pub fn sort_key(row: &Row) -> (std::cmp::Reverse<i64>, String) {
@@ -105,11 +99,6 @@ pub fn merge(buckets: &[(&str, &[Arc<Row>])], mode: &str, limit: usize) -> Vec<A
         rows.truncate(limit);
     }
     rows
-}
-
-/// Selection follows a row's identity, never its position.
-pub fn index_of_key(rows: &[Arc<Row>], key: &str) -> Option<usize> {
-    rows.iter().position(|r| r.key == key)
 }
 
 #[cfg(test)]

@@ -32,10 +32,6 @@ pub fn data_home() -> PathBuf {
     env_path("XDG_DATA_HOME", home().join(".local/share"))
 }
 
-pub fn cache_home() -> PathBuf {
-    env_path("XDG_CACHE_HOME", home().join(".cache"))
-}
-
 /// `~/.config/omarchy/oxy.json` — the user's settings.
 pub fn settings_file() -> PathBuf {
     config_home().join("omarchy/oxy.json")

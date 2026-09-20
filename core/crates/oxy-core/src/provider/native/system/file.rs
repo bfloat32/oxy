@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::provider::native::util::{human_size, short_age};
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::support::quote::quote;
 
@@ -60,33 +61,6 @@ fn kind_of(ext: &str) -> &'static str {
         "json" | "yaml" | "yml" | "toml" | "ini" | "conf" | "xml" | "html" | "css" | "scss"
         | "sql" => "data",
         _ => "file",
-    }
-}
-
-fn human_size(mut v: u64) -> String {
-    let units = ["B", "K", "M", "G", "T", "P"];
-    let mut i = 0;
-    let mut rem = 0u64;
-    while v >= 1024 && i < 5 {
-        rem = (v % 1024) * 10 / 1024;
-        v /= 1024;
-        i += 1;
-    }
-    if i > 0 && v < 10 {
-        format!("{v}.{rem}{}", units[i])
-    } else {
-        format!("{v}{}", units[i])
-    }
-}
-
-fn short_age(secs: u64) -> String {
-    match secs {
-        0..=59 => "now".to_string(),
-        60..=3599 => format!("{}m", secs / 60),
-        3600..=86399 => format!("{}h", secs / 3600),
-        86400..=2591999 => format!("{}d", secs / 86400),
-        2592000..=31535999 => format!("{}mo", secs / 2592000),
-        _ => format!("{}y", secs / 31536000),
     }
 }
 
@@ -302,7 +276,7 @@ fn walk(root: &Path, query_lower: &str, format: &str, home: &Path) -> Vec<Hit> {
                         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
                         .map(|d| d.as_secs())
                         .unwrap_or(now),
-                ),
+                ) as i64,
             );
 
             // A dot at the start is a hidden file, not an extension:

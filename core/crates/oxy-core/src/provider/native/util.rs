@@ -102,6 +102,38 @@ pub(crate) fn shq(s: &str) -> String {
     out
 }
 
+/// A byte count the way a list column says it: `1.4M`, `812K`, `97B`. Both
+/// the file and the recent providers draw one, and they had a copy each.
+pub(crate) fn human_size(mut v: u64) -> String {
+    let units = ["B", "K", "M", "G", "T", "P"];
+    let mut i = 0;
+    let mut rem = 0u64;
+    while v >= 1024 && i < 5 {
+        rem = (v % 1024) * 10 / 1024;
+        v /= 1024;
+        i += 1;
+    }
+    if i > 0 && v < 10 {
+        format!("{v}.{rem}{}", units[i])
+    } else {
+        format!("{v}{}", units[i])
+    }
+}
+
+/// An age the same way: `now`, `12m`, `3h`, `5d`, `2mo`, `1y`. Negative ages
+/// (a clock that moved) read as `now` rather than as a negative number.
+pub(crate) fn short_age(secs: i64) -> String {
+    let secs = secs.max(0);
+    match secs {
+        0..=59 => "now".to_string(),
+        60..=3599 => format!("{}m", secs / 60),
+        3600..=86399 => format!("{}h", secs / 3600),
+        86400..=2591999 => format!("{}d", secs / 86400),
+        2592000..=31535999 => format!("{}mo", secs / 2592000),
+        _ => format!("{}y", secs / 31536000),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,5 +169,26 @@ mod tests {
     fn an_absent_binary_is_not() {
         assert!(!on_path("definitely-not-a-real-tool-xyz"));
         assert!(!on_path(""));
+    }
+
+    #[test]
+    fn sizes_and_ages_read_the_way_the_columns_do() {
+        assert_eq!(human_size(0), "0B");
+        assert_eq!(human_size(97), "97B");
+        assert_eq!(human_size(1024), "1.0K");
+        assert_eq!(human_size(1536), "1.5K");
+        assert_eq!(human_size(20 * 1024 * 1024), "20M");
+        assert_eq!(human_size(1024u64.pow(4)), "1.0T");
+
+        assert_eq!(short_age(0), "now");
+        assert_eq!(short_age(59), "now");
+        assert_eq!(short_age(60), "1m");
+        assert_eq!(short_age(3599), "59m");
+        assert_eq!(short_age(3600), "1h");
+        assert_eq!(short_age(86400), "1d");
+        assert_eq!(short_age(2592000), "1mo");
+        assert_eq!(short_age(31536000), "1y");
+        // A clock that moved backwards is not an age of -3.
+        assert_eq!(short_age(-3), "now");
     }
 }

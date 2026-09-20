@@ -137,22 +137,6 @@ impl Cache {
     pub fn entries(&self) -> usize {
         self.store.values().map(|b| b.entries.len()).sum()
     }
-
-    pub fn drop_provider(&mut self, provider: &str, key: Option<&str>) {
-        match key {
-            None => {
-                self.store.remove(provider);
-            }
-            Some(key) => {
-                if let Some(bucket) = self.store.get_mut(provider) {
-                    bucket.entries.remove(key);
-                    if let Some(at) = bucket.keys.iter().position(|k| k == key) {
-                        bucket.keys.remove(at);
-                    }
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]

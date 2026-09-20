@@ -13,6 +13,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::provider::native::util::{human_size, short_age};
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::support::quote::quote;
 
@@ -159,22 +160,26 @@ fn kind_of(ext: &str) -> &'static str {
     }
 }
 
-fn human_size(mut v: u64) -> String {
-    let units = ["B", "K", "M", "G", "T", "P"];
-    let mut i = 0;
-    let mut rem = 0u64;
-    while v >= 1024 && i < 5 {
-        rem = (v % 1024) * 10 / 1024;
-        v /= 1024;
-        i += 1;
-    }
-    if i > 0 && v < 10 {
-        format!("{v}.{rem}{}", units[i])
-    } else {
-        format!("{v}{}", units[i])
+
+impl NativeExt for Recent {
+    fn query<'a>(
+        &'a mut self,
+        ctx: Ctx,
+        _progress: UnboundedSender<Vec<Value>>,
+    ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
+        let cache = self.cache.clone();
+        let arg = ctx.arg.clone();
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || query_blocking(cache, &arg))
+                .await
+                .unwrap_or(NativeOutcome::Empty)
+        })
     }
 }
 
+/// The long form the accessory column wants: "12 minutes ago". `short_age`
+/// is the compact one for the detail line; both exist because the two
+/// columns say different things.
 fn ago(d: i64) -> String {
     if d < 60 {
         return "just now".into();
@@ -191,39 +196,6 @@ fn ago(d: i64) -> String {
         (d / 31536000, "year")
     };
     format!("{n} {unit}{} ago", if n == 1 { "" } else { "s" })
-}
-
-fn short_age(d: i64) -> String {
-    let d = d.max(0);
-    if d < 60 {
-        "now".into()
-    } else if d < 3600 {
-        format!("{}m", d / 60)
-    } else if d < 86400 {
-        format!("{}h", d / 3600)
-    } else if d < 2592000 {
-        format!("{}d", d / 86400)
-    } else if d < 31536000 {
-        format!("{}mo", d / 2592000)
-    } else {
-        format!("{}y", d / 31536000)
-    }
-}
-
-impl NativeExt for Recent {
-    fn query<'a>(
-        &'a mut self,
-        ctx: Ctx,
-        _progress: UnboundedSender<Vec<Value>>,
-    ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
-        let cache = self.cache.clone();
-        let arg = ctx.arg.clone();
-        Box::pin(async move {
-            tokio::task::spawn_blocking(move || query_blocking(cache, &arg))
-                .await
-                .unwrap_or(NativeOutcome::Empty)
-        })
-    }
 }
 
 fn query_blocking(cache: Arc<Mutex<Option<RecentCache>>>, arg: &str) -> NativeOutcome {

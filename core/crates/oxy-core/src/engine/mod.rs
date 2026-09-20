@@ -438,10 +438,4 @@ impl Engine {
             EngineCmd::Ping => self.emit(EngineEvent::Pong).await,
         }
     }
-
-    /// The clipboard read, once per open. The daemon hands the engine a
-    /// oneshot this fills.
-    pub fn set_clipboard_url(&mut self, url: Option<String>) {
-        self.clipboard_url = url;
-    }
 }

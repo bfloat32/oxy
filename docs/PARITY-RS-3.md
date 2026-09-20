@@ -1,5 +1,15 @@
 # Third pass: the fix verification, and the core restructuring plan
 
+> **Status: implemented.** Part 1's nit (the `later:` scope chip naming the
+> transport instead of the link) is fixed in `d1d8cf6` with a regression
+> test. Part 2's plan is landed in full: the layer moves (`5c3eb43`), the
+> mains split (`0449e63`), `engine/` (`f18a7a1`), the 400–600 band
+> (`b45db79`), `date/`+`calc/` (`47e377c`), the `WorkerState` refactor
+> (`8129068`), and the guards (`44b831d` — budget + layering checks in
+> `tests/run.sh`, clippy in CI, `core/README.md`, `.loc-allow`). Every file
+> is under the 800-line target; 47/47 tests green; the 2.6.1 smoke list was
+> re-run live against the restructured daemon — all items pass.
+
 Two things in one file, as asked: **Part 1** verifies the fixes in `f5be64b`
 ("Close the second audit's gaps") against the findings in
 `docs/PARITY-RS-2.md`; **Part 2** is a proposal for splitting the oversized

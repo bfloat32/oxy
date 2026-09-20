@@ -1,17 +1,18 @@
 # The native-porting backlog: what is left to port, reimplement and create
 
-Status report while the file-split refactor runs. Nothing here is a code
-change — it is the full remaining surface between the script build and the
-Rust core, batch by batch, with what each port must reproduce and what it
-implies.
+The restructure is done (see §0), so this is the full remaining surface
+between the script build and the Rust core: batch by batch, with what each
+port must reproduce, what it implies, and the traps that were found by testing
+and are easy to lose. Nothing here is a code change.
 
-**Revision 3.** Revision 2 was a line-by-line check of the scripts; this one
-adds the four dimensions a port actually needs and that neither earlier pass
-covered: the **`when` gates** (which a native provider bypasses — §1.3), the
-**existing acceptance suites** (415 case assertions — §1.4), the **internal
-API surface** other scripts call (§3.12), and the **row contracts** (view →
-field, extension → view — §6.2, §6.3). It also corrects a few things the
-earlier passes got wrong:
+**Revision 4 (final).** Revision 2 checked the scripts line by line; revision
+3 added the four dimensions a port needs (gates, acceptance suites, internal
+APIs, row contracts); this one closes it out: the **baseline** the
+restructure left behind (§0), every Rust reference re-pointed at the
+post-split files, and two appendices a porter will actually work from —
+**the traps** (§6.6) and **the verification commands** (§6.7).
+
+The corrections from the earlier passes, worth knowing up front:
 
 - `tz` draws **four** views, not two: `hero` (a city), `zones` (a bare query,
   `noon`, a Discord timestamp), `timegrid` (people/places), `list` (fail rows).
@@ -26,8 +27,30 @@ earlier passes got wrong:
 - `def` also caps its cache at 500 entries; `oxy-date --iso` is called by
   `oxy-calendar` (the native `cal` already absorbed it in-process); and
   `oxy-emoji --used` has no callers left.
-- Two emitted fields have no reader at all: `dayline` on `tz` rows and
-  `wsRaw`/`focusOrder`/`address` on `win` rows (§4.8).
+- Fields nobody reads: `dayline` on `tz` rows and `width`/`height` on `win`
+  rows; the `win` intermediates (`wsRaw`, `focusOrder`, `address`) never
+  reach the wire at all (§4.8).
+
+---
+
+## 0. The baseline this backlog starts from
+
+The restructure is complete (all five splits merged), so the porting wave
+starts from a measured state:
+
+| fact | value |
+|---|---|
+| Rust files | 89 (was 37) |
+| total lines | 15 534 |
+| largest file | 600 lines (`provider/worker/state.rs`); nothing above the 800 target |
+| tests | 47 passing (`cargo test --workspace`) |
+| lints | `cargo clippy --workspace --all-targets -- -D warnings` clean |
+| guards | the file budget and the `model/` layering check in `tests/run.sh`; clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
+| unchanged by the restructure | the wire, the row shapes, the state files, the script contract, and all 41 extensions |
+
+That last row is the one that matters for this document: the restructure was
+a move, not a behaviour change, so every claim below — budgets, gates, view
+contracts, state files — still describes the code as it stands.
 
 ---
 
@@ -84,7 +107,7 @@ what a native port must beat, and the numbers to re-measure against:
 
 ### 1.3 The `when` gates — and why a native provider must reimplement them
 
-The worker's rule (`provider/worker/mod.rs:433-437`): *"`when` guards the
+The worker's rule (`provider/worker/state.rs:326`): *"`when` guards the
 command and socket legs … A native provider is its own answer: it runs
 regardless and declines through Fallback, at which point the check matters
 again."* So a native provider is asked even when its `when` fails — if it does
@@ -143,6 +166,54 @@ Two consequences worth stating plainly:
 
 ## 2. The batches
 
+### 2.0 Where a port lands
+
+The refactor's folders are real now, so each port has a home before it starts.
+The rule the layout follows: **a folder is the subsystem a provider reads or
+drives.**
+
+```
+provider/native/
+  desktop/    apps, apps_icons, commands, emoji, emoji_data, quicklinks, web   (exists)
+              + theme.rs, omarchy.rs, shortcuts.rs            (A, D — they read the desktop's config)
+  calc/       mod, money, units, numbers, answer                               (exists)
+              + unit.rs                                        (E — qalc's other face, same tables)
+  time/       calendar, days, date/{mod,holidays,words,parse,render,grammar}   (exists)
+              + alarm.rs, tz.rs   (tz may split: tz/{mod,names,zones,grid})    (A, E)
+  system/     clipboard, file, kill, kill_windows, recent, ssh, ssh_config, sys (exists)
+              + vol.rs, bri.rs, win.rs, bt.rs, wifi.rs, docker.rs, img.rs, pass.rs  (A, D, E)
+  text/       calchist                                                          (exists)
+              + snip.rs, note.rs, def.rs                       (E)
+  vcs/        repo.rs, git.rs, branch.rs, stash.rs             (B — new; git.rs holds the shared plumbing)
+  remote/     gh.rs (four modes), ci.rs, issue.rs, pr.rs       (C — new)
+  media/      radio.rs, spotify.rs, spotify_library.rs         (F — new)
+  agent/      mod.rs + its submodules                          (G — new; the largest)
+  marketplace/ bo.rs                                           (G — new; low value)
+```
+
+The rest of the crate, for orientation (all of it exists today):
+
+```
+oxy-core/src/
+  model/      action, event, query, row            — the wire shapes, no IO
+  registry/   def, command, mod                    — extension files on disk
+  settings/   defaults, paths, mod                 — oxy.json and every path we touch
+  state/      frecency, pins, recents, mru, mod    — what the launcher remembers
+  support/    availability, cache, quote, rank, score
+  provider/   process, socket, worker/{mod,route,state}, native/…
+  engine/     activate, ask, builtins, inline, persist, pipeline, workers, tests
+oxyd/src/     main, server, wire, logfile, watch, clipboard
+oxy/src/      main, engine_local, cli/{query,send,test,extensions}, cases/{mod,check,view}
+```
+
+Two notes on the shape:
+
+- `unit` goes beside `calc`, not in `text/`: it is the same qalc and the same
+  unit/money tables, and `calc/units.rs` already exists to share.
+- `tz` is the one provider likely to need submodules (`names.rs` for the loose
+  matching, `zones.rs` for the column, `grid.rs` for the timegrid rows) —
+  it draws four views and 45 cases pin the shapes.
+
 Each extension gets: where the data comes from, what the row carries, what
 `Enter`/the slider runs, the state it keeps, and the trap the script's own
 comments call out. Line counts are the script's.
@@ -186,13 +257,16 @@ comments call out. Line counts are the script's.
 - Reads: `hyprctl clients -j` **and** `hyprctl monitors -j` (the active
   workspace of every monitor, because a second screen has its own and nothing
   focused on it).
-- Rows carry: address, class, title, wsId, wsRaw, monitor name, floating,
-  fullscreen (0/1/2 — maximised-in-gaps vs covering-the-monitor are told
-  apart), xwayland, pinned, `grouped` (a tab group draws as one window and
-  answers as several), focusOrder, geometry, plus what the view reads:
-  `cls`, `title`, `wsId`, `wsActive`, `wsWindows`, `monitor`, `floating`,
-  `fullscreen`, `xwayland`, `pinned`, `grouped`, `focused`, `session`,
-  `iconGlyph`.
+- The row carries: `id` (the window address), `title` (the class when the
+  window has no title), `subtitle` (class · workspace), `cls`, `wsId`,
+  `wsName`, `wsActive`, `wsWindows`, `special`, `monitor`, `focused`,
+  `floating`, `fullscreen` (0/1/2 — maximised-in-gaps vs
+  covering-the-monitor are told apart), `xwayland`, `pinned`, `grouped` (a
+  tab group draws as one window and answers as several), `width`/`height`,
+  `session {windows, matched, workspaces, monitors}` and the actions (Focus,
+  Go to Workspace unless the window is on a special one, Close Window).
+  `iconGlyph` is read by the view but never emitted by the script — window
+  icons come from the frontend's app library (§4.6).
 - Order: workspace ascending, then screen position (left→right, top→bottom),
   floating after the tiled windows they sit over. Focus history is *not* the
   order, because the top row is the one Enter runs.
@@ -210,8 +284,12 @@ comments call out. Line counts are the script's.
   every property in a single message, which is where battery, kind and RSSI
   come from. `bluetoothctl` is the *fallback* for a machine without busctl or
   the BlueZ object manager, with the extra fields simply absent.
-- Rows: grouped connected → paired → nearby; `signal`, `signalLabel`,
-  `battery`, `deviceKind`, `known`, `mark`, `secure`, `iface`, `radioOn`.
+- Rows: grouped connected → paired → nearby; `joined`, `known`, `mark`,
+  `deviceKind`, `meta` (the address), `radioOn`/`radioLabel`, and
+  `signal`/`signalLabel`/`battery` **only when measured** — an absent field
+  and a field set to null read the same to the view, but only the absent one
+  leaves the meter and the battery cell undrawn, so nothing unmeasured gets a
+  zero drawn for it.
 - Acting: `omarchy-bluetooth-device` (connect/disconnect must survive the
   rfkill soft block Omarchy uses as the real on/off state — a bare
   `bluetoothctl connect` fails outright while the block is set) and
@@ -370,9 +448,10 @@ documents port as strings. A direct-REST port is a separate project.
 - Reads the same file Omarchy's menu reads, so a route that exists in the menu
   exists here. The tree is flattened: the path becomes context on one row
   ("Theme · Style"), and a submenu row is kept as well as its children.
-- `path`, `icon` and `acts`/`opens` travel as their own fields because the
-  view draws them; joining the path into a sentence here and splitting it
-  there would make a separator a wire format.
+- `trail` (the path as its own list), `kind` (`menu`/`action`/`link`),
+  `node`, `depth`, `children` and `mode` (`browse` vs `search`) travel as
+  their own fields because the view draws them; joining the path into a
+  sentence here and splitting it there would make a separator a wire format.
 - A bare `omarchy:` is browsing: the menu's root, in the menu's own order.
 - `cacheMs: 600000`.
 
@@ -468,8 +547,11 @@ is cached (an entry list is cheap; a stale one is a lie). `pass` wins over
 
 - radio-browser.info (keyless, name search), mpv for playback, and three
   subcommands behind the same script so rows can control the player without a
-  second binary: `play <url> <name> <subtitle> <art> <homepage>` and
-  `ctl toggle|stop|mute|volume up|volume down`.
+  second binary: `play <url> <name> <subtitle> <art> <homepage>`,
+  `ctl toggle|stop|mute|volume up|volume down`, and `status` — what is
+  playing and nothing else, for a bar widget, which must never touch the
+  network (nothing playing prints nothing, which is how the widget knows to
+  be absent).
 - **One radio**: `play` stops whatever it finds before it starts anything —
   pressing Enter twice used to play two stations over each other with no way
   back. The mpv IPC socket path is also how "the radio" is recognised.
@@ -520,9 +602,10 @@ is cached (an entry list is cheap; a stale one is a lie). `pass` wins over
 1. **CLI-parse helper** (`provider/cli.rs`): run one command with a timeout,
    capture stdout, parse a documented format. Every batch A–D port needs it,
    and the natives that already spawn hand-roll it — `tokio::process::Command`
-   in `calc`, `std::process::Command` in `kill`, `sys`, `calendar`, `date` —
-   while `provider/process.rs` exists for *scripts*. One helper with the login
-   env, the timeout and the `OXY_PLUGIN_ID` export would cover both.
+   in `calc/mod.rs`, `std::process::Command` in `system/kill_windows.rs`,
+   `system/sys.rs`, `time/calendar.rs` and `time/date/parse.rs` — while
+   `provider/process.rs` exists for *scripts*. One helper with the login env,
+   the timeout and the `OXY_PLUGIN_ID` export would cover both.
 2. **HTTP**: `def`, `radio`, `spotify-library`, `gh` (if direct) need a client.
    Keep `curl` as a subprocess (zero new deps, one spawn) or add `ureq`
    (`reqwest` is a large tree for four call sites). Decide once.
@@ -541,17 +624,38 @@ is cached (an entry list is cheap; a stale one is a lie). `pass` wins over
 9. **Native providers and `extensionSettings`**: `repo`, `tz`, `def` must read
    `ctx.settings.settings_for(id)` and honour the same key names the scripts
    read from `$OXY_*` (`roots`, `zones`, `cacheDays`). No native does this yet
-   — `repo` would be the first. Only six scripts read `OXY_*` at all:
+   — `repo` would be the first. Only seven scripts read `OXY_*` at all:
    `define` (`OXY_CACHEDAYS`), `repo` (`OXY_REPO_ROOTS`, `OXY_ROOTS`,
-   `OXY_REPO`), `timezone` (`OXY_ZONES`, plus `OXY_NAMES`/`OXY_HOME` for the
-   helper), `gh` (`OXY_GH_MODE`, `OXY_GH_OFFLINE`), `theme`
-   (`OXY_THEME_LIMIT`), `bo` (`OXY_BO_DETACHED`, `OXY_PLUGIN_ID`), and the
-   agent (`OXY_DESK_DRY`).
+   `OXY_REPO`), `timezone` (`OXY_ZONES`, plus `OXY_NAMES`/`OXY_HOME` in the
+   Python helper), `gh` (`OXY_GH_MODE`, `OXY_GH_OFFLINE`; the three
+   wrappers only set the mode), `theme` (`OXY_THEME_LIMIT`), `bo`
+   (`OXY_BO_DETACHED`, `OXY_PLUGIN_ID`), and the agent (Python:
+   `OXY_DESK_DRY`).
 10. **A port must not change the wire**: same row fields the view reads
     (§6.2), same `exec`/`setExec` strings, same state files (§6.4).
 11. **A port must reproduce its `when`** (§1.3) or it will answer where the
     script stayed silent.
 12. **The internal API surface is part of the contract** (§6.1).
+
+### 3.13 Dependency ledger
+
+The crate's dependency set is deliberately small — `serde`, `serde_json`
+(`preserve_order`), `tokio`, `interprocess`, `fancy-regex`, `sysinfo`,
+`ignore` — and most of the porting wave adds nothing to it:
+
+| batch | Cargo.toml delta |
+|---|---|
+| A | **none** if the ports spawn the CLIs they already call; optional `zbus` if `bt`/`wifi` move to D-Bus |
+| B | **none** (spawn `git`) |
+| C | **none** (spawn `gh`) — an HTTP client only if the direct-REST route is chosen |
+| D | **none** (spawn `docker`/`hyprctl`/`herdr`) |
+| E | **one**: a tz database for `tz` (`jiff` or `chrono-tz`). `def`/`unit`/`note`/`pass`/`snip` add nothing if `curl`/`qalc` stay the engines |
+| F | **none** if `curl` + `mpv` stay; optional `zbus` for MPRIS |
+| G | **none** (`tokio` is already a process supervisor); the agent's protocol is ours |
+
+That is the argument for the CLI-parse helper over per-tool crates: the
+wave's latency wins come from removing *bash, jq and awk*, not from removing
+the tools.
 
 ---
 
@@ -605,8 +709,8 @@ capability in the backlog and depends on nothing in the porting batches.
 
 ### 4.5 Windows gaps
 
-- `read_clipboard` is `#[cfg(unix)]`, so the `paste` row never appears on
-  Windows (the CLI and daemon otherwise work).
+- `read_clipboard` is `#[cfg(unix)]` (`oxyd/src/clipboard.rs`), so the `paste`
+  row never appears on Windows (the CLI and daemon otherwise work).
 - Extension sockets are Unix-only by design (`provider/socket.rs`).
 - Icon/art URLs are canonical now (`file_url`), which was the other
   platform-shaped gap.
@@ -627,9 +731,11 @@ confirm bug.
 ### 4.8 Dead wire fields (drop them in a port, they have no reader)
 
 - `dayline` on every `tz` row (no QML reads it; the tz cases do not assert it).
-- `wsRaw`, `focusOrder` and `address` on `win` rows — the script uses them
-  inside its jq to compute `focused` and the dispatcher exec, but the emitted
-  fields have no reader.
+- On `win` rows the intermediates (`wsRaw`, `focusOrder`, `address`, `w`/`h`/
+  `x`/`y`) never reach the wire at all — they are jq-local, and the row carries
+  `id`, `wsName`, `focused`, `width`/`height` instead. Of those, `width` and
+  `height` are emitted but no view reads them; `wsName` and `special` are read
+  by `ResultWindows` (the workspace heading and the SPECIAL marker).
 - `oxy-emoji --used` has no caller left (the native emoji provider records
   through the engine's `remember`), so the subcommand is dead weight in the
   script, not a contract.
@@ -638,9 +744,10 @@ confirm bug.
 
 ## 5. Suggested sequence, with a definition of done
 
-1. **Finish the refactor first** — every port lands inside
-   `provider/native/<area>/`, and landing them mid-move means rebasing them.
-2. **Batch A next**, as planned: it is the one typed most and it pays for the
+1. **Start from the finished tree** (§0): the refactor is merged, so every port
+   lands straight into the folder §2.0 names for it — no rebasing, and the
+   guards (file budget, layering, clippy) hold the line while it does.
+2. **Batch A first**, as planned: it is the one typed most and it pays for the
    shared CLI/Hyprland helpers. Order inside: `bri` (S) → `vol` → `win` →
    `theme` → `bt`/`wifi` → `alarm`.
 3. **Then the cheap jq-removals**: `herdr`, `img` (D), `snip`, `note`, `pass`
@@ -690,11 +797,13 @@ confirm bug.
 | `oxy-alarm --cancel <unit>` | its own rows | stop a reminder |
 | `oxy-note --save\|--open\|--edit\|--trash` | its own rows | the note operations |
 | `oxy-spotify play\|queue <uri>` | its own rows | playback |
-| `oxy-search-radio play\|ctl …` | its own rows | the one-radio control |
+| `oxy-search-radio play\|ctl\|status` | its own rows; `status` has no in-repo caller (a bar widget) | the one-radio control |
 | `oxy-gh` modes via `OXY_GH_MODE` | the three wrappers, the cases runner | repos/prs/issues/runs |
 | `oxy-agent send\|serve\|plan\|stop\|new\|desk` | its own rows and the model's tool calls | the agent protocol |
 
 ### 6.2 Row contracts: what each view reads
+
+`*` marks a field the view reads off the **first row** — the header object (`machine` for `processes`, `counts`/`offline` for `herdr`, `mode` for `menutree`, `repo` for `gitbranches`/`gitstashes`, `hostCores`/`hostMem` for `docker`). Putting such a field on every row would be the same object a dozen times; a port must put it on row zero.
 
 | view | fields the view reads |
 |---|---|
@@ -718,24 +827,26 @@ confirm bug.
 | `agent` | agentName allows answer blocked cwd denies did direct draft earlier hints kind note now plan state subtitle text title turns why you |
 | `docker` | band cpu fraction health hostCores hostMem label loud memBytes quiet reading scale value |
 | `notes` | excerpt fresh kind subtitle title words |
-| `processes` | age count cpu mem memShare own pid stopped title user windowed |
+| `processes` | age count cpu mem memShare own pid stopped title user windowed machine\* |
 | `emoji` | iconGlyph subtitle title |
 | `themes` | accent bg current fg surface swatches title |
-| `windows` | cls floating focused fullscreen grouped iconGlyph monitor pinned session title wsActive wsId wsWindows xwayland |
+| `windows` | cls floating focused fullscreen grouped iconGlyph monitor pinned session special title width height wsActive wsId wsName wsWindows xwayland |
 | `hosts` | alias hostName identity known port proxyJump sourceFile title user |
 | `radios` | battery deviceKind iconGlyph iface known mark meta radioOn secure signal signalLabel title |
-| `radioplayer` | art at controls danger exec glyph iconGlyph key kind on primary row subtitle title |
+| `radioplayer` | actions art at controls danger exec glyph iconGlyph key kind on primary row subtitle title |
 | `files` | age art dir ext kind size title |
 | `repos` | ahead behind dirty drifted index path repo selected slug upstream |
-| `menutree` | children iconGlyph kind title trail |
+| `menutree` | children iconGlyph kind title trail mode\* |
 | `snippets` | chars lines preview text title |
 | `vault` | folder name title |
 | `shortcuts` | accessory keys title |
-| `herdr` | band here kind n name note path session since tabCount tabLabel what wsLabel |
+| `herdr` | band here kind n name note path session since tabCount tabLabel what wsLabel counts\* offline\* |
 | `marketplacehome` | kindWord meta subtitle title |
 | `marketplaceunit` | backLabel claims consequence facts path queued runsLines self state subtitle title |
 
 ### 6.3 Extension → view(s)
+
+Script-backed extensions (the porting targets):
 
 | extension | view(s) |
 |---|---|
@@ -748,7 +859,7 @@ confirm bug.
 | `ci`, `issue`, `pr` | list |
 | `docker` | docker |
 | `gh` | list, ghrepo, ghpr |
-| `git` | list → gitrepo (row) |
+| `git` | list → gitrepo (row-level) |
 | `herdr` | herdr |
 | `img` | grid |
 | `note` | notes |
@@ -765,30 +876,46 @@ confirm bug.
 | `tz` | hero, zones, timegrid, list |
 | `unit` | list |
 | `win` | windows |
-| `def`, `ch` | split |
-| `date`, `bri`? | hero |
+| `def` | split |
 
-*(Only the script-backed half is listed; `def` and `ch` are the two `split`
-users, and `hero` belongs to `date` among the natives.)*
+Already native, for reference: `date` → hero, `ch` → split, `cal` → calendar,
+`emoji` → emoji, `file`/`recent` → files, `kill` → processes, `sys` →
+dashboard, `ssh` → hosts, `apps`/`commands`/`quicklinks`/`web`/`calchist` →
+list.
 
-### 6.4 State files a port must keep compatible
+### 6.4 State a port must keep compatible
 
-`oxy-gh/` (cache, 200 files, `.lock` beside each), `oxy-repos.list` +
-`oxy-repo` (discovery cache, 120s TTL; the pin), `oxy-spotify.json` (token),
-`oxy-herdr-seen.json`, `oxy-bo.json`/`.log`/`.seen`, `oxy-note-saved`,
-`oxy-volume/`, `oxy-date/`, `oxy-docker-stats.tsv` (runtime, under a lock),
-`oxy-agent.sock` + `oxy-agent-previews.json`, `oxy-calc-history.json`,
-`oxy-emoji-recent`, `~/.cache/oxy/define` (500 entries, 30 days),
-`~/.cache/oxy/zones` (the tz zone-name cache).
+| path | owner | what it is |
+|---|---|---|
+| `$XDG_STATE_HOME/omarchy/oxy-gh/` | `gh`/`pr`/`issue`/`ci` | the answer cache: `CACHE_KEEP=200`, a `.lock` beside each file, `FP-<hash>.json` naming |
+| `$XDG_STATE_HOME/omarchy/oxy-repos.list` | `repo` (and its callers) | the discovery cache, 120s TTL |
+| `$XDG_STATE_HOME/omarchy/oxy-repo` | `repo` | the pinned repo |
+| `$XDG_STATE_HOME/omarchy/oxy-spotify.json` | `spotify-library` | the OAuth token (deliberately not in `oxy.json`) |
+| `$XDG_STATE_HOME/better-omarchy/oxy-bo.log` | `bo` | the marketplace log (`bo`'s own state dir, not ours) |
+| `$XDG_STATE_HOME/omarchy/oxy-agent.sock`, `oxy-agent-previews.json` | `agent` | the socket and the preview registry |
+| `$XDG_STATE_HOME/omarchy/oxy-calc-history.json` | `calc`/`calchist` (native) | the accepted answers |
+| `$XDG_STATE_HOME/omarchy/oxy-emoji-recent` | `emoji` (native) | the picker's MRU, written through `remember` |
+| `$XDG_RUNTIME_DIR/oxy-docker-stats.tsv` (+`.lock`) | `docker` | the 1s `stats` reading, cached with an age check |
+| `$XDG_RUNTIME_DIR/oxy-note-saved` | `note` | the write stamp |
+| `$XDG_RUNTIME_DIR/oxy-herdr-seen.json` | `herdr` | the seen-tab bookkeeping (runtime, so a reboot clears it) |
+| `$XDG_RUNTIME_DIR/omarchy-reminders/` | `alarm` | the message files behind the systemd timers |
+| `$XDG_RUNTIME_DIR/oxy-bo.json`, `.linked`, `.seen` | `bo` | the runtime cache, the link state, the summon-readiness marker |
+| `~/.cache/oxy/define` | `def` | 500 entries, 30 days (`cacheDays`) |
+| `~/.cache/oxy/zones` | `tz` | the resolved zone-name cache |
+
+`oxy-date`, `oxy-volume`, `oxy-theme`, `oxy-bri`, `oxy-win`, `oxy-wifi`,
+`oxy-bt`, `oxy-pass`, `oxy-snip`, `oxy-unit`, `oxy-radio`, `oxy-shortcuts`,
+`oxy-omarchy`, `oxy-img` and the git trio keep **no state of their own** —
+they read the machine every time (which is also why so many of them are in
+batch A: the reading is the whole cost).
 
 ### 6.5 The remaining 31, measured
-
 | id | keyword | view | script | lines | CLI/tools | refreshMs | cacheMs | cases | size |
 |---|---|---|---|---|---|---|---|---|---|
 | agent | do | agent | oxy-agent | 2167 | hyprctl, systemctl, python3, git, gh | 600 | – | yes | XL |
 | gh | gh | list + ghrepo/ghpr | oxy-gh | 1047 | gh (GraphQL), jq, stat | 900 | – | yes | L |
 | bo | bo | marketplace + unit | oxy-bo | 891 | bo, hyprctl, python3 | – | – | yes | L |
-| tz | tz | hero/zones/timegrid | oxy-timezone | 838 | python3, date, timedatectl | – | – | yes | L |
+| tz | tz | hero/zones/timegrid/list | oxy-timezone | 838 | python3, date, timedatectl | – | – | yes | L |
 | unit | unit | list | oxy-unit | 838 | qalc, cal | – | 60000 | yes | L |
 | repo | repo | repos | oxy-repo | 776 | git, fd, stat | – | – | yes | L |
 | alarm | alarm | hero + list | oxy-alarm | 612 | omarchy reminder, date | 15000 | – | yes | M |
@@ -816,3 +943,61 @@ users, and `hero` belongs to `date` among the natives.)*
 | ci | ci | list | oxy-gh-ci | 9 | wrapper → oxy-gh (runs) | – | – | yes | in C |
 | issue | issue | list | oxy-gh-issue | 9 | wrapper → oxy-gh (issues) | – | – | yes | in C |
 | pr | pr | list | oxy-gh-pr | 9 | wrapper → oxy-gh (prs) | 900 | – | yes | in C |
+
+### 6.6 The traps: rules a port must not "fix"
+
+Every one of these was found by testing, is written down in the script's own
+header, and is the kind of thing a clean rewrite quietly loses.
+
+| rule | where it comes from | what breaks if a port ignores it |
+|---|---|---|
+| A tier is never crossed: pins and frecency reorder *within* a tier only | `support/rank.rs` | a pinned substring outranks a name that starts with what you typed |
+| The web row is dropped whenever anything real matched; a scoped `?` keeps it | `support/rank.rs` (`merge`) | the fallback row buries the answer, or disappears from `web:` |
+| An empty answer over rows already on screen keeps those rows | `worker/state.rs` (`keep_stale`) | a timeout blanks the card (looks like "no matches") |
+| A nonzero exit that printed rows is not a failure — only a bad exit with *no* rows is | `prov.fail` | a script that warns on stderr stops answering |
+| `Close` is emitted *before* the row's `exec` | `engine/activate.rs` | the new window lands behind the overlay, the launch OSD under it |
+| Every `git` call carries `--no-optional-locks` | the git family | the launcher makes a commit in another terminal wait |
+| `qalc` makes a unit out of any letters — both sides of a conversion must be known units in one family | `oxy-unit` | `5 KM IN MILES` answers `5 K` with exit 0 |
+| `nmcli`: one unknown field name makes the whole call print nothing | `oxy-wifi` | the list is empty on a different nmcli version |
+| `vol` reads the *chosen* sink (`omarchy-audio-output-sink`), not the default | `oxy-volume` | the DSP sink's volume moves and the speakers do not |
+| Hyprland under a Lua config: `hl.dsp.*` only — `dispatch focuswindow` returns `ok` and does nothing | `oxy-search-windows`, `kill_windows.rs` | "focus" silently does nothing |
+| herdr reads must not mark a tab seen (focusing does) | `oxy-herdr` | a keystroke erases the `done` state the keyword exists to report |
+| `theme:` preview must not call `omarchy theme set` (800ms); use `applyTheme` (44ms) + the foot repaint, and let Enter do the real set | `oxy-theme` | previewing takes a second and leaves the theme changed |
+| `alarm` rounds *up* and refuses a time with no message | `oxy-alarm` | an alarm that fires early, or a notification that tells you nothing |
+| Spotify: shuffle off first, success is the **track id moving**, and only D-Bus works (`xdg-open` claims the handler and does nothing) | `oxy-search-music` | the wrong track plays, or "success" is reported for a no-op |
+| `pass`: no secret in a row, a subtitle, a detail or an argument; the clipboard is cleared only if it still holds the secret | `oxy-pass` | a password in `/proc/*/cmdline` and in the log |
+| `wifi`: never rescan per keystroke (`--rescan no`); a new network opens the panel | `oxy-wifi` | every keystroke empties the list for seconds |
+| `bt`: connect must survive the rfkill soft block → `omarchy-bluetooth-device` | `oxy-bluetooth` | connect fails outright while the block is set |
+| Day arithmetic runs at noon, so a DST change cannot move a count by one | `oxy-date`, `time/date` | "in 90 days" is off by one across a clock change |
+| `?` lists keywords whose `when` failed (they answer nothing) | `engine/inline.rs` + README | help hides what the machine actually has |
+| `docker`: two calls per answer (`ps -aq` + one `inspect`); `stats` is a 1s reading and is cached | `oxy-docker` | a second per keystroke |
+| `shortcuts`: 59 of 235 binds come back from `hyprctl` with an empty key under Lua — use `omarchy-menu-keybindings --print` | `oxy-shortcuts` | most workspace binds are missing |
+| The launcher's own keys are in neither source; they are the frontend's | `oxy-shortcuts` | the list claims to be every key and is not |
+| `repo`'s resolver makes **no** git calls; per-row state is read only for surviving rows; `branch:` reads `.git/HEAD` | `oxy-repo` | 227ms per keystroke |
+| `gh`: text that already says something true draws first; the request is warmed detached; a stale entry is served while fetching | `oxy-gh` | the card stalls on a keystroke |
+| A row with an empty title is dropped, and `maxRows` counts it before it goes | `model/row.rs` | a blank row, or one fewer answer than asked for |
+| `fill` wins over everything on a row: Enter types, runs nothing | `engine/activate.rs` | picking a keyword from `?` launches something |
+| `escExec` belongs to the frontend: Escape runs it before the ladder | `Shell.qml` | a running row is never told to stop |
+
+### 6.7 Verifying a port
+
+```sh
+bash tests/run.sh                     # every check CI runs (static, behaviour, cases, cargo, guards)
+cd core && cargo test --workspace     # the engine suite
+cd core && cargo clippy --workspace --all-targets -- -D warnings
+
+oxy test --cases <id>                 # that extension's assertions, through the engine (native first)
+python3 tests/cases.py <id>           # the same assertions against the script alone (the reference)
+oxy test <id>                         # its testQuery through the engine
+oxy query --local '<query>'           # one question through the in-process engine
+
+printf '{"op":"query","text":"run:","opened":true}\n' | oxy send   # the wire, by hand
+```
+
+The live smoke list the audits used, worth re-running after a batch lands:
+`?` lists 46+ keywords and the chip reads Keywords; `run:` returns 24 rows;
+`apps:` resolves an icon; `later:hi` returns the quicklink; `/clear` →
+activate → `/clear-all` shows the prompt and the second Enter clears;
+`tick:` refreshes while a client is open and does not after a CLI query;
+`preview:` select A → select B → close runs `A-preview`, `B-preview`,
+`A-revert`; `savesettings` keeps the file's order and newline.

@@ -17,5 +17,6 @@
   "timeoutMs": 3000,
   "maxRows": 2,
   "tier": "prefix",
-  "view": "slider"
+  "view": "slider",
+  "native": "vol"
 }

@@ -42,14 +42,14 @@ starts from a measured state:
 
 | fact | value |
 |---|---|
-| Rust files | 100 (37 before the restructure; +3 for `provider/llm/`, +8 for the batch A scaffold) |
-| total lines | 17 007 |
+| Rust files | 132 (37 before the restructure) |
+| total lines | 28 775 |
 | largest file | 600 lines (`provider/worker/state.rs`); nothing above the 800 target |
-| tests | 72 passing (`cargo test --workspace`): 47 engine, 13 LLM, 2 `util::on_path`, 5 cache, 3 logfile, 2 parity tables |
+| tests | 324 passing (`cargo test --workspace`) |
 | lints | `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean |
 | guards | the file budget and the `model/` layering check in `tests/run.sh`; clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
-| extensions | 40 (15 native, 30 script-backed, 27 scripts) — the marketplace was removed |
-| case suites | 387 assertions in 16 files |
+| extensions | 40 (27 native — 22 declaring `"native"` plus the five built-ins; 18 script-backed) — the marketplace was removed |
+| case suites | 26 files; the extensions without one are listed below |
 | unchanged by the restructure | the wire, the row shapes, the state files, the script contract |
 
 The restructure was a move, not a behaviour change, so every claim below —
@@ -61,27 +61,29 @@ LLM slice landed (§4.4).
 
 ## 1. Where we stand
 
-**40 extensions ship. 15 are native. 30 remain script-backed** — 27 distinct
-scripts, because `pr`, `issue` and `ci` are nine-line wrappers that set
-`OXY_GH_MODE` for `oxy-gh`. (`bo:` and its marketplace were removed — see
-`docs/MARKETPLACE-REMOVAL.md`.)
+**40 extensions ship. 27 answer through a native provider. 18 remain
+script-backed** — 15 distinct scripts plus `pr`, `issue` and `ci`, which are
+nine-line wrappers that set `OXY_GH_MODE` for `oxy-gh`. (`bo:` and its
+marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
 
 | already native | area |
 |---|---|
-| `apps`, `commands`, `quicklinks`, `web` | desktop entry points |
+| `apps`, `commands`, `quicklinks`, `web` | desktop entry points (built-ins — no `"native"` field needed) |
 | `calc` (+ `calchist`) | arithmetic, history |
 | `date`, `cal` | dates, months |
 | `emoji` | picker |
 | `file`, `recent` | files |
 | `kill`, `sys`, `ssh`, `ch` | system |
+| `vol`, `bri`, `win`, `bt`, `wifi`, `theme`, `alarm` | batch A — local state |
+| `herdr`, `img`, `pass`, `snip`, `note` | batch D/E — the cheap jq removals |
 
 | batch | extensions | script lines | why they belong together |
 |---|---|---|---|
-| **A. local state** | `vol`, `bri`, `win`, `bt`, `wifi`, `theme`, `alarm` | 1 691 | one CLI per reading (`pactl`, `omarchy-brightness-display`, `hyprctl`, `busctl`/`bluetoothctl`, `nmcli`, `omarchy`, `omarchy reminder`), all sliders/grids that redraw |
-| **B. git family** | `repo`, `git`, `branch`, `stash` | 1 713 | one shared resolver (`oxy-repo --resolve`) plus the same `git` plumbing |
+| ~~**A. local state**~~ ✅ | `vol`, `bri`, `win`, `bt`, `wifi`, `theme`, `alarm` | 1 691 | done — merged `fc76de2`…`a112f2e`, case files landed |
+| **B. git family** | `repo`, `git`, `branch`, `stash` | 1 713 | one shared resolver (`oxy-repo --resolve`) plus the same `git` plumbing — **decided: spawn+parse via `vcs/run.rs` (scaffolded), zero new deps** |
 | **C. GitHub family** | `gh`, `pr`, `issue`, `ci` | 1 074 | one script in four modes (`OXY_GH_MODE`), GraphQL over `gh`, network |
-| **D. session & system views** | `docker`, `shortcuts`, `omarchy`, `herdr`, `img` | 1 371 | a CLI that already emits JSON (`docker`, `hyprctl`, `herdr`), parsed by jq today |
-| **E. text & data** | `unit`, `tz`, `def`, `snip`, `note`, `pass` | 2 861 | answers built from a table or a file, mostly `qalc`/`python3`/`curl` per keystroke |
+| **D. session & system views** | `docker`, `shortcuts`, `omarchy`, ~~`herdr`~~, ~~`img`~~ | 1 371 | `herdr`+`img` done; `docker`, `shortcuts`, `omarchy` remain |
+| **E. text & data** | `unit`, `tz`, `def`, ~~`snip`~~, ~~`note`~~, ~~`pass`~~ | 2 861 | `snip`/`note`/`pass` done; `unit`, `tz`, `def` remain — **`tz` decided: `jiff`** (chrono-tz is winding down; a table fails the 45-case contract) |
 | **F. media** | `radio`, `spotify`, `spotify-library` | 1 019 | a player (mpv/MPRIS) plus a keyless or keyed catalogue lookup |
 | **G. the long-lived one** | `agent` | 2 167 | a process with its own protocol; a rewrite, not a port |
 
@@ -90,10 +92,9 @@ scripts, because `pr`, `issue` and `ci` are nine-line wrappers that set
 - **The script stays as the fallback.** A native provider answers first and
   returns `Fallback` where it declines, so a wrong port is a slower answer,
   never a missing one.
-- **A port is not done without a case file.** 17 of the 30 have none
-  (`note`, `radio`, `spotify-library`, `herdr`, `docker`, `shortcuts`,
-  `omarchy`, `bt`, `wifi`, `theme`, `spotify`, `win`, `vol`, `pass`, `img`,
-  `snip`, `bri`).
+- **A port is not done without a case file.** 13 of the 30 have none
+  (`calchist`, `ch`, `docker`, `file`, `kill`, `music`, `omarchy`, `radio`,
+  `recent`, `shortcuts`, `spotify-library`, `ssh`, `sys`).
 
 ### 1.2 The budgets the scripts measured (the port's acceptance criteria)
 
@@ -215,13 +216,14 @@ oxyd/src/     main, server, wire, logfile, watch, clipboard
 oxy/src/      main, engine_local, cli/{query,send,test,extensions}, cases/{mod,check,view}
 ```
 
-**The batch A scaffold is in place** (commit `41b319a`): the seven stub
-files (`system/{vol,bri,bt,wifi,win}.rs`, `desktop/theme.rs`,
-`time/alarm.rs`), the `native/util.rs` gate helper, and the `construct`
-arms all exist, and each stub declines every question — so a port lands
-file-local, in its own file, with the manifest's script answering until the
-last line is written. Each port is done in its own git worktree under
-`.worktrees/`, which is why nothing collides.
+**The scaffold pattern** (commit `41b319a` for batch A, `081d9dc` for batch
+B + `tz`): stub files, the `native/util.rs` gate helpers (`on_path`, `shq`),
+and the `construct` arms are committed ahead of each wave, and each stub
+declines every question — so a port lands file-local, in its own file, with
+the manifest's script answering until the last line is written. Each port
+is done in its own git worktree under `.worktrees/`, which is why nothing
+collides. **Batch A and the cheap D/E removals have landed this way**; the
+`vcs/` stubs and `time/tz.rs` are in place and waiting.
 
 Two notes on the shape:
 

@@ -16,5 +16,6 @@
   "debounceMs": 80,
   "maxRows": 20,
   "tier": "substring",
-  "view": "snippets"
+  "view": "snippets",
+  "native": "snip"
 }

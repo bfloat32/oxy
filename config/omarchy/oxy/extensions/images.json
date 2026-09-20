@@ -15,5 +15,6 @@
   "debounceMs": 200,
   "maxRows": 60,
   "tier": "file",
-  "view": "grid"
+  "view": "grid",
+  "native": "img"
 }

@@ -1,0 +1,17 @@
+[
+  { "why": "every snippet is a row whose Enter copies the text — the text itself rides along for the view",
+    "requires": "test -f \"${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/oxy-snippets.json\"",
+    "query": "", "minRows": 1,
+    "fields": ["title", "subtitle", "text", "preview", "exec", "lines", "chars", "actions"],
+    "matches": { "exec": "^printf %s " },
+    "atMost": { "actions": 3 } },
+
+  { "why": "type-into-window sleeps first — the launcher must be gone before the keystrokes land",
+    "requires": "test -f \"${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/oxy-snippets.json\"",
+    "query": "", "minRows": 1,
+    "matches": { "actions": "sleep 0\\.2; wtype " } },
+
+  { "why": "a query that matches no name or body is silence, not an error row",
+    "requires": "test -f \"${XDG_CONFIG_HOME:-$HOME/.config}/omarchy/oxy-snippets.json\"",
+    "query": "zzz-no-snippet-is-named-this", "maxRows": 0, "fields": [] }
+]

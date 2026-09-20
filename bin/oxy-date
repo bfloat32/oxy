@@ -127,13 +127,15 @@ holiday_date() {
     easter*)
       offset=${rule#easter}
       base=$(easter_of "$year")
-      date -d "$base $offset days" +%F
+      # No offset means the day itself: passing an empty offset through
+      # `date -d` reads "12:00  days" as a time and lands a day later.
+      date -d "$base $offset days 12:00" +%F
       ;;
     nth\ *)
       # shellcheck disable=SC2086
       set -- $rule
       base=$(nth_weekday "$year" "$2" "$3" "$4")
-      if [[ ${5:-} == +* ]]; then date -d "$base ${5#+} days" +%F; else printf '%s' "$base"; fi
+      if [[ ${5:-} == +* ]]; then date -d "$base ${5#+} days 12:00" +%F; else printf '%s' "$base"; fi
       ;;
     *) printf '%s-%s' "$year" "$rule" ;;
   esac
@@ -343,7 +345,17 @@ resolve_one() {
   fi
 
   looks_like_date "$t" || return 1
-  date -d "$t" +%F 2>/dev/null
+  # A *duration* is added to now in 24-hour units by `date -d`, so an hour a
+  # DST change takes out of the stretch lands the answer on the day before:
+  # crossing into standard time, "in 90 days" answered 89 while the native
+  # said 90. Anchoring at noon absorbs that hour. An absolute date, a range
+  # or a named day is handed to `date` exactly as it was typed — prefixing
+  # those broke the range form outright.
+  if [[ $t =~ ^-?[0-9]+\ (day|days|week|weeks|month|months|year|years)(\ ago)?$ ]]; then
+    date -d "$today_iso $t 12:00" +%F 2>/dev/null
+  else
+    date -d "$t" +%F 2>/dev/null
+  fi
 }
 
 # ---------------------------------------------------------------- phrasing

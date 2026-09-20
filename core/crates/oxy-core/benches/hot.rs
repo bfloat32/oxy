@@ -124,5 +124,42 @@ fn bench_extras(c: &mut Criterion) {
     });
 }
 
-criterion_group!(hot, bench_parse, bench_to_row, bench_merge, bench_extras);
+/// The scorer over a realistic app list: 400 entries, scored per keystroke.
+/// The haystack and acronym are memoized on the entry (`Entry::search_text`),
+/// so this measures the case that matters — the list is built once and
+/// re-scored on every keystroke.
+fn bench_score(c: &mut Criterion) {
+    use oxy_core::support::score::{Entry, fuzzy};
+    let entries: Vec<Entry> = (0..400)
+        .map(|i| {
+            Entry::new(
+                format!("app{i}.desktop"),
+                format!("Application Number {i}"),
+                "Utility".to_string(),
+                format!("Does the {i}th thing, mostly"),
+                vec![format!("app{i}"), "tool".to_string()],
+            )
+        })
+        .collect();
+    c.bench_function("score400", |b| {
+        b.iter(|| {
+            let mut hits = 0;
+            for e in &entries {
+                if fuzzy(black_box(e), black_box("app 1")) >= 0 {
+                    hits += 1;
+                }
+            }
+            black_box(hits)
+        })
+    });
+}
+
+criterion_group!(
+    hot,
+    bench_parse,
+    bench_to_row,
+    bench_merge,
+    bench_extras,
+    bench_score
+);
 criterion_main!(hot);

@@ -222,14 +222,13 @@ const COMMANDS: &[Cmd] = &[
 ];
 
 fn as_entry(c: &Cmd) -> Entry {
-    Entry {
-        id: format!("cmd.{}", c.id),
-        name: c.title.to_string(),
-        generic_name: c.subtitle.to_string(),
-        comment: String::new(),
-        keywords: c.keywords.iter().map(|k| k.to_string()).collect(),
-        payload: Value::Null,
-    }
+    Entry::new(
+        format!("cmd.{}", c.id),
+        c.title.to_string(),
+        c.subtitle.to_string(),
+        String::new(),
+        c.keywords.iter().map(|k| k.to_string()).collect(),
+    )
 }
 
 /// The fuzzy entries are static data — built once at construct, not

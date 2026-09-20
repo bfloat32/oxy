@@ -23,8 +23,8 @@ fn as_entry(link: &Quicklink, index: usize) -> Entry {
     if !link.keyword.is_empty() {
         keywords.push(link.keyword.clone());
     }
-    Entry {
-        id: format!(
+    Entry::new(
+        format!(
             "ql.{}",
             if link.keyword.is_empty() {
                 index.to_string()
@@ -32,16 +32,15 @@ fn as_entry(link: &Quicklink, index: usize) -> Entry {
                 link.keyword.clone()
             }
         ),
-        name: link.title.clone(),
-        generic_name: link.subtitle.clone(),
-        comment: if link.url.is_empty() {
+        link.title.clone(),
+        link.subtitle.clone(),
+        if link.url.is_empty() {
             link.open.clone()
         } else {
             link.url.clone()
         },
         keywords,
-        payload: Value::Null,
-    }
+    )
 }
 
 /// Does a loaded extension answer for this keyword, by name or alias? The

@@ -267,14 +267,13 @@ impl Engine {
 
         let all = self.all_actions();
         for (i, action) in all.iter().enumerate() {
-            let entry = crate::support::score::Entry {
-                id: String::new(),
-                name: action.title.clone(),
-                generic_name: action.subtitle.clone(),
-                comment: String::new(),
-                keywords: action.keywords.clone(),
-                payload: Value::Null,
-            };
+            let entry = crate::support::score::Entry::new(
+                "",
+                action.title.clone(),
+                action.subtitle.clone(),
+                "",
+                action.keywords.clone(),
+            );
             let fuzzy = if arg.is_empty() {
                 0
             } else {

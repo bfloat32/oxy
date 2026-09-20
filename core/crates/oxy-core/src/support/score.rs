@@ -23,9 +23,40 @@ pub struct Entry {
     pub keywords: Vec<String>,
     /// The row the match becomes, carried so scoring needs no second lookup.
     pub payload: serde_json::Value,
+    /// The haystack and the acronym, memoized on first use.
+    ///
+    /// Private on purpose: `Entry::new` is the only way to build one, so a
+    /// caller cannot forget to fill them, and `search_text()`/`acronym()` are
+    /// the only readers. `Score.js` cached both on the entry (`_searchText`,
+    /// `_acronym`) for the reason its comment gives — ranking one list against
+    /// one word built the same string three times per entry per keystroke.
+    /// The port rebuilt them on every `fuzzy` call over a list that is itself
+    /// built once, which is the cost this removes.
+    search_text: OnceLock<String>,
+    acronym: OnceLock<String>,
 }
 
 impl Entry {
+    /// Build one. The two memoized strings start empty and fill on first use.
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        generic_name: impl Into<String>,
+        comment: impl Into<String>,
+        keywords: Vec<String>,
+    ) -> Entry {
+        Entry {
+            id: id.into(),
+            name: name.into(),
+            generic_name: generic_name.into(),
+            comment: comment.into(),
+            keywords,
+            payload: serde_json::Value::Null,
+            search_text: OnceLock::new(),
+            acronym: OnceLock::new(),
+        }
+    }
+
     fn entry_name(&self) -> &str {
         if self.name.is_empty() {
             &self.id
@@ -38,17 +69,37 @@ impl Entry {
         self.keywords.join(" ")
     }
 
-    /// Everything the haystack band searches, lowercased.
-    fn search_text(&self) -> String {
-        format!(
-            "{} {} {} {} {}",
-            self.name,
-            self.generic_name,
-            self.comment,
-            self.keyword_text(),
-            self.id
-        )
-        .to_lowercase()
+    /// Everything the haystack band searches, lowercased. Built once.
+    fn search_text(&self) -> &str {
+        self.search_text.get_or_init(|| {
+            format!(
+                "{} {} {} {} {}",
+                self.name,
+                self.generic_name,
+                self.comment,
+                self.keyword_text(),
+                self.id
+            )
+            .to_lowercase()
+        })
+    }
+
+    /// First letters of every word in name, generic, keywords and id — what an
+    /// acronym like `ff` matches against. Built once.
+    fn acronym(&self) -> &str {
+        self.acronym.get_or_init(|| {
+            let joined = format!(
+                "{} {} {} {}",
+                self.name,
+                self.generic_name,
+                self.keyword_text(),
+                self.id
+            );
+            words(&joined)
+                .iter()
+                .filter_map(|w| w.chars().next())
+                .collect()
+        })
     }
 }
 
@@ -72,22 +123,6 @@ fn words(value: &str) -> Vec<String> {
         .split(|c: char| !(c.is_ascii_lowercase() || c.is_ascii_digit()))
         .filter(|w| !w.is_empty())
         .map(|w| w.to_string())
-        .collect()
-}
-
-/// First letters of every word in name, generic, keywords and id — what an
-/// acronym like `ff` matches against.
-fn acronym(entry: &Entry) -> String {
-    let joined = format!(
-        "{} {} {} {}",
-        entry.name,
-        entry.generic_name,
-        entry.keyword_text(),
-        entry.id
-    );
-    words(&joined)
-        .iter()
-        .filter_map(|w| w.chars().next())
         .collect()
 }
 
@@ -127,8 +162,8 @@ pub fn fuzzy(entry: &Entry, query: &str) -> i64 {
         return 0;
     }
     let search_text = entry.search_text();
-    let acro = acronym(entry);
-    if !all_terms_match(entry, &search_text, &acro, &q) {
+    let acro = entry.acronym();
+    if !all_terms_match(entry, search_text, acro, &q) {
         return -1;
     }
 
@@ -155,7 +190,7 @@ pub fn fuzzy(entry: &Entry, query: &str) -> i64 {
     }
 
     if let Some(at) = search_text.find(&q) {
-        return 6000 - utf16_at(&search_text, at);
+        return 6000 - utf16_at(search_text, at);
     }
 
     if let Some(at) = acro.find(&q) {
@@ -163,7 +198,7 @@ pub fn fuzzy(entry: &Entry, query: &str) -> i64 {
         if at == 0 {
             return 5000 - acro_len;
         }
-        return 4600 - utf16_at(&acro, at) * 10 - acro_len;
+        return 4600 - utf16_at(acro, at) * 10 - acro_len;
     }
 
     4000 - name_len
@@ -174,14 +209,13 @@ mod tests {
     use super::*;
 
     fn firefox() -> Entry {
-        Entry {
-            id: "firefox.desktop".into(),
-            name: "Firefox".into(),
-            generic_name: "Web Browser".into(),
-            comment: "Browse the web".into(),
-            keywords: vec!["internet".into(), "mozilla".into()],
-            payload: serde_json::Value::Null,
-        }
+        Entry::new(
+            "firefox.desktop",
+            "Firefox",
+            "Web Browser",
+            "Browse the web",
+            vec!["internet".into(), "mozilla".into()],
+        )
     }
 
     #[test]
@@ -207,15 +241,32 @@ mod tests {
         assert_eq!(fuzzy(&firefox(), ""), 0);
     }
 
+    /// The memo is the point: `Score.js` cached these on the entry and the
+    /// port did not. An entry is built once and scored on every keystroke, so
+    /// the first use fills them and later ones are free — which is also why
+    /// mutating an entry after scoring it is not a supported pattern.
+    #[test]
+    fn the_haystack_and_acronym_are_built_once() {
+        let mut e = Entry::new("firefox.desktop", "Firefox", "Web Browser", "", vec![]);
+        assert!(e.search_text().contains("firefox"));
+        // firefox, web, browser, then the id split into firefox + desktop
+        assert_eq!(e.acronym(), "fwbfd");
+        e.name = "Iceweasel".into();
+        assert!(
+            e.search_text().contains("firefox"),
+            "the haystack is cached, not rebuilt"
+        );
+        assert_eq!(e.acronym(), "fwbfd", "the acronym is cached too");
+    }
+
     fn entry(id: &str, name: &str, generic: &str, comment: &str, keywords: &[&str]) -> Entry {
-        Entry {
-            id: id.into(),
-            name: name.into(),
-            generic_name: generic.into(),
-            comment: comment.into(),
-            keywords: keywords.iter().map(|k| k.to_string()).collect(),
-            payload: serde_json::Value::Null,
-        }
+        Entry::new(
+            id,
+            name,
+            generic,
+            comment,
+            keywords.iter().map(|k| k.to_string()).collect(),
+        )
     }
 
     /// The port checked against the build it is a port of: every expected

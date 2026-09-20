@@ -355,14 +355,13 @@ fn scan_applications() -> Vec<App> {
             }
 
             apps.push(App {
-                entry: Entry {
-                    id: id.clone(),
-                    name: parsed.name,
-                    generic_name: parsed.generic_name,
-                    comment: parsed.comment,
-                    keywords: parsed.keywords,
-                    payload: Value::Null,
-                },
+                entry: Entry::new(
+                    id.clone(),
+                    parsed.name,
+                    parsed.generic_name,
+                    parsed.comment,
+                    parsed.keywords,
+                ),
                 icon: parsed.icon,
             });
         }

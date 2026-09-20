@@ -56,12 +56,15 @@ Declared names reach the extension through both a `{name}` placeholder in
 | `refreshMs` | `0` | re-ask this often while the rows are on screen |
 | `socket` | `""` | a unix socket to ask instead of running a command |
 | `settings` | `[]` | fields `settings:` asks for, each `{ key, label, value, placeholder, secret }` |
-| `testQuery` | `""` | what `oxy test` types at this extension for the `actions` check |
+| `testQuery` | `""` | what the plain `oxy test` types at this extension, and fails if it answers no rows |
 
 `tier` is one of `calc`, `forced`, `prefix`, `substring`, `weak`, `file` and
 `web`. `view` is a `Result*.qml` in `plugin/`, named in lower case without the
 `Result`. The launcher silently falls back to `substring` and to `list` on a
-name it does not know; a manifest naming neither is worth fixing before it
+name it does not know, which is why `oxy test --only manifest` checks both
+against the real lists (`KNOWN_VIEWS` in the core, kept in step with
+`Shell.qml` by `tests/run.sh`) along with the ids, the keywords and — the one
+that matters most — that a `native:` name is an arm in `construct`. A manifest naming neither is worth fixing before it
 ships.
 
 The layouts that exist today:

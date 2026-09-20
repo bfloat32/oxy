@@ -180,7 +180,7 @@ pub(crate) async fn run(args: &[String]) -> i32 {
     let Some(local) = &local else {
         let verdict =
             "no endpoint configured: the CLI list answers, and the doctor has nothing to check";
-        return report(json_out, &checks, &lines, first_failure, verdict, true);
+        return report(json_out, &checks, &lines, first_failure, verdict);
     };
 
     if tier == "offline" {
@@ -326,7 +326,7 @@ pub(crate) async fn run(args: &[String]) -> i32 {
         }
         None => format!("tier `{tier}` passed"),
     };
-    report(json_out, &checks, &lines, first_failure, &verdict, true)
+    report(json_out, &checks, &lines, first_failure, &verdict)
 }
 
 fn model_of(local: &Local) -> String {
@@ -345,7 +345,6 @@ fn report(
     lines: &[String],
     first_failure: Option<String>,
     verdict: &str,
-    _ran: bool,
 ) -> i32 {
     if json_out {
         let out = json!({

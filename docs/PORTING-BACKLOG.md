@@ -92,7 +92,7 @@ marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
 - **The script stays as the fallback.** A native provider answers first and
   returns `Fallback` where it declines, so a wrong port is a slower answer,
   never a missing one.
-- **A port is not done without a case file.** 13 of the 30 have none
+- **A port is not done without a case file.** 13 of the 40 have none
   (`calchist`, `ch`, `docker`, `file`, `kill`, `music`, `omarchy`, `radio`,
   `recent`, `shortcuts`, `spotify-library`, `ssh`, `sys`).
 
@@ -812,25 +812,31 @@ confirm bug.
 
 ## 5. Suggested sequence, with a definition of done
 
-1. **Start from the finished tree** (§0): the refactor is merged, so every port
-   lands straight into the folder §2.0 names for it — no rebasing, and the
-   guards (file budget, layering, clippy) hold the line while it does.
-2. **Batch A first**, as planned: it is the one typed most and it pays for the
-   shared CLI/Hyprland helpers. Order inside: `bri` (S) → `vol` → `win` →
-   `theme` → `bt`/`wifi` → `alarm`.
-3. **Then the cheap jq-removals**: `herdr`, `img` (D), `snip`, `note`, `pass`
-   (E) — small ports that keep momentum, each carrying a case file.
-4. **Then the two dependency decisions**: git (B) and tz (E) — do them when
-   there is room to evaluate, not inside a batch of seven.
-5. **Then the network family** (C, F) once the HTTP decision is made.
-6. **`docker`/`shortcuts`/`omarchy`** (D) whenever; they are self-contained.
-7. **`agent`** (G) last, as its own project with the 18 cases as the
+Where the wave has got to, against the plan it started with:
+
+1. **Start from the finished tree** (§0) — **done**: the refactor is merged,
+   so every port lands straight into the folder §2.0 names for it, and the
+   guards (file budget, layering, view-list sync, `oxy test --only manifest`,
+   clippy) hold the line while it does.
+2. **Batch A first** — **done** (`bri`, `vol`, `win`, `theme`, `bt`, `wifi`,
+   `alarm`), the most-typed family, and it paid for the shared helpers
+   (`util::on_path`, `util::shq`).
+3. **The cheap jq-removals** — **done**: `herdr`, `img` (D), `snip`, `note`,
+   `pass` (E).
+4. **The two dependency decisions** — **in flight**: git (B) is scaffolded
+   (`native/vcs/run.rs`, the shared `git --no-optional-locks` runner) with its
+   providers landing; tz (E) is a stub, so the script still answers.
+5. **The network family** (C, F) — **next**, once the HTTP decision is made.
+6. **`docker`/`shortcuts`/`omarchy`** (D) — **next**; they are self-contained.
+7. **`agent`** (G) — **last**, as its own project with the 18 cases as the
    acceptance suite.
-8. **In parallel, not in a batch**: `oxy test`'s missing layers + fixtures
-   (§4.2) and the case files (§4.7).
+8. **In parallel, not in a batch** — `oxy test`'s `manifest` layer landed
+   (§4.2's cheapest third); the case files (§4.7) are 27 of 40.
 9. **The LLM track runs alongside all of it** (§4.4) and touches nothing the
-   batches touch: its next steps are autodetect, token framing with the
-   frontend change that needs, then the session file and multi-turn.
+   batches touch: retry, the key, the doctor, the `oxy ask` verb, the fallback
+   chain, the soft interrupt and the usage ledger have landed; autodetect,
+   token framing with the frontend change it needs, and the session file are
+   next.
 
 ### 5.1 Definition of done for one port
 
@@ -849,7 +855,7 @@ confirm bug.
 6. The state files it shares stay byte-compatible (§6.4).
 7. It declines (`Fallback`/`Empty`) exactly where the script printed nothing —
    the "silent" cases are the spec for this.
-8. New cases cover the behaviours the port adds, and the 17 extensions with no
+8. New cases cover the behaviours the port adds, and the 13 extensions with no
    cases get their first ones.
 9. The budget in §1.2 is measured and met.
 

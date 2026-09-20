@@ -17,10 +17,10 @@ model ← registry, settings, state ← provider ← engine ← oxyd, oxy
 | `model/` | the wire shapes: `Row`, `Action`, `Query`, `EngineCmd`, `EngineEvent` | open a file, spawn a process |
 | `registry/` | extension files on disk: `Extension`, `load_dir`, command building | |
 | `settings/` | the user's `oxy.json` and every path we touch (`paths.rs`) | |
-| `state/` | what the launcher remembers: frecency, pins, recents, MRU | |
-| `provider/` | how a question reaches an extension — `process`, `socket`, `worker`, and `native/` (the compiled-in providers, grouped by subsystem) | |
+| `state/` | what the launcher remembers: frecency, pins, recents, MRU, and the model ledger (`usage`) | |
+| `provider/` | how a question reaches an extension — `process`, `socket`, `worker`, `native/` (the compiled-in providers, grouped by subsystem) and `llm/` (the local-model client: `http`, `stream`, `retry`, `models`, `turn`) | |
 | `engine/` | the orchestrator — one file per phase of its life | |
-| `support/` | small dependency-free helpers: cache, availability, rank, score, quote | |
+| `support/` | small dependency-free helpers: cache, availability, rank, score, quote, `store` (JSON files that survive a bad write), `net` (one bounded connect) | |
 
 `oxyd/src/` keeps boot wiring in `main.rs`; the accept loop, wire parsing,
 the logfile and the watcher each have their own file. `oxy/src/` keeps
@@ -43,6 +43,10 @@ dispatch in `main.rs`; verbs under `cli/`, the case runner under `cases/`.
   (`core/.loc-allow` names the exempt data tables).
 - A layering check fails if anything under `model/` mentions `std::fs`,
   `std::process` or `tokio::process` — the wire shapes never touch IO.
+- A view-list check fails if `KNOWN_VIEWS` and `plugin/Shell.qml` disagree,
+  and `oxy test --only manifest` (run against this repo's extensions in the
+  same script) checks every manifest — including that a `native:` name is an
+  arm in `construct`.
 - `cargo clippy --workspace --all-targets -- -D warnings` is a CI step.
 
 ## Run it

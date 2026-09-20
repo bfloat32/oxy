@@ -12,6 +12,7 @@ pub mod system;
 pub mod text;
 pub mod time;
 pub mod util;
+pub mod vcs;
 
 use crate::provider::NativeExt;
 
@@ -22,6 +23,7 @@ pub fn construct(name: &str) -> Option<Box<dyn NativeExt>> {
     match name {
         "alarm" => Some(Box::new(time::alarm::Alarm)),
         "apps" => Some(Box::new(desktop::apps::Apps::new())),
+        "branch" | "branches" => Some(Box::new(vcs::branch::Branch)),
         "bri" | "brightness" => Some(Box::new(system::bri::Bri)),
         "bt" | "bluetooth" => Some(Box::new(system::bt::Bt)),
         "calc" => Some(Box::new(calc::Calc::new())),
@@ -32,6 +34,7 @@ pub fn construct(name: &str) -> Option<Box<dyn NativeExt>> {
         "date" => Some(Box::new(time::date::Date)),
         "emoji" => Some(Box::new(desktop::emoji::Emoji::default())),
         "file" | "files" => Some(Box::new(system::file::Files)),
+        "git" => Some(Box::new(vcs::git::Git)),
         "herdr" => Some(Box::new(system::herdr::Herdr)),
         "img" | "images" => Some(Box::new(system::img::Img)),
         "kill" | "ps" => Some(Box::new(system::kill::Kill::new())),
@@ -39,10 +42,13 @@ pub fn construct(name: &str) -> Option<Box<dyn NativeExt>> {
         "pass" => Some(Box::new(system::pass::Pass)),
         "quicklinks" => Some(Box::new(desktop::quicklinks::Quicklinks)),
         "recent" => Some(Box::new(system::recent::Recent::default())),
+        "repo" | "repos" => Some(Box::new(vcs::repo::Repo)),
         "snip" | "snippets" => Some(Box::new(text::snip::Snip)),
         "ssh" => Some(Box::new(system::ssh::Ssh::default())),
+        "stash" | "stashes" => Some(Box::new(vcs::stash::Stash)),
         "sys" | "system" => Some(Box::new(system::sys::Sys::new())),
         "theme" => Some(Box::new(desktop::theme::Theme)),
+        "tz" | "timezone" => Some(Box::new(time::tz::Tz)),
         "vol" | "volume" => Some(Box::new(system::vol::Vol)),
         "web" => Some(Box::new(desktop::web::Web)),
         "wifi" => Some(Box::new(system::wifi::Wifi)),

@@ -17,5 +17,6 @@
   "tier": "substring",
   "view": "herdr",
   "cacheMs": 0,
-  "refreshMs": 2000
+  "refreshMs": 2000,
+  "native": "herdr"
 }

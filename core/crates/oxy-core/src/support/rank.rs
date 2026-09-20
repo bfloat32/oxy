@@ -4,6 +4,12 @@
 //! The tier is the kind of match, and it always wins. `local` breaks ties
 //! inside a tier and is where a provider's own bias lives, so a bias can
 //! reorder equals but can never lift a weak match above a strong one.
+//!
+//! Two things add to the score after that clamp, and only one of them keeps
+//! the rule: a pin is clamped to the row's own tier (`pins_apply`), while
+//! frecency is added to the finished number (`frecency_apply`) and can carry
+//! a row within 9000 of its ceiling past the next tier's floor. The script
+//! does both the same way, so the difference is parity, not a port bug.
 
 use std::sync::Arc;
 

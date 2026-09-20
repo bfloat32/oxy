@@ -34,6 +34,9 @@ pub(crate) fn spawn(
 
 /// A single file's change signature — len + mtime, so an edit or a delete
 /// (None metadata → 0) both register. Same fixed-key hasher as `signature`.
+/// The mtime is in **milliseconds**: seconds would miss a same-length edit
+/// saved twice inside one second, which is a save that changes a setting
+/// and looks like nothing happened.
 fn file_signature(path: &Path) -> u64 {
     use std::hash::Hasher;
     let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -44,7 +47,7 @@ fn file_signature(path: &Path) -> u64 {
                 meta.modified()
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
+                    .map(|d| d.as_millis() as u64)
                     .unwrap_or(0),
             );
         }
@@ -78,7 +81,7 @@ fn signature(dir: &Path) -> u64 {
                 meta.modified()
                     .ok()
                     .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_secs())
+                    .map(|d| d.as_millis() as u64)
                     .unwrap_or(0),
             );
             acc ^= h.finish();

@@ -39,7 +39,7 @@ impl Availability {
         match self.store.get(check) {
             None => None,
             Some(e) if e.ok => Some(true),
-            Some(e) if now_ms() - e.at < RECHECK_MS => Some(false),
+            Some(e) if now_ms().saturating_sub(e.at) < RECHECK_MS => Some(false),
             Some(_) => None,
         }
     }

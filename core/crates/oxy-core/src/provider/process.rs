@@ -82,17 +82,6 @@ fn shell_command(body: &str) -> Command {
     cmd
 }
 
-/// The same environment for the blocking `std::process::Command` callers.
-fn shell_command_sync(body: &str) -> std::process::Command {
-    let mut cmd = std::process::Command::new("bash");
-    cmd.arg("-c").arg(body);
-    if let Some(env) = &*LOGIN_ENV.read().unwrap() {
-        cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
-    }
-    cmd.env("OXY_PLUGIN_ID", &*PLUGIN_ID);
-    cmd
-}
-
 /// What a run left behind: stdout, the exit code when the wait returned one,
 /// and whether the deadline killed it — the `code`/`timeout` fields the
 /// event log reports, which `Option<String>` could not carry.
@@ -179,35 +168,6 @@ pub async fn check(body: &str) -> bool {
         _ => {
             let _ = child.kill().await;
             false
-        }
-    }
-}
-
-/// Command for the availability probe at load and for `oxy test` preflight.
-pub fn run_sync(body: &str, timeout: Duration) -> Option<String> {
-    let child = shell_command_sync(body)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let start = std::time::Instant::now();
-    let mut out = child;
-    loop {
-        match out.try_wait() {
-            Ok(Some(_)) => {
-                let mut buf = Vec::new();
-                use std::io::Read;
-                out.stdout.take()?.read_to_end(&mut buf).ok()?;
-                return Some(String::from_utf8_lossy(&buf).into_owned());
-            }
-            Ok(None) if start.elapsed() < timeout => {
-                std::thread::sleep(Duration::from_millis(5));
-            }
-            _ => {
-                let _ = out.kill();
-                return None;
-            }
         }
     }
 }

@@ -43,9 +43,9 @@ starts from a measured state:
 | fact | value |
 |---|---|
 | Rust files | 100 (37 before the restructure; +3 for `provider/llm/`, +8 for the batch A scaffold) |
-| total lines | 16 562 |
+| total lines | 16 666 |
 | largest file | 600 lines (`provider/worker/state.rs`); nothing above the 800 target |
-| tests | 62 passing (`cargo test --workspace`): 47 engine, 13 LLM, 2 for `util::on_path` |
+| tests | 70 passing (`cargo test --workspace`): 47 engine, 13 LLM, 2 `util::on_path`, 5 cache, 3 logfile |
 | lints | `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean |
 | guards | the file budget and the `model/` layering check in `tests/run.sh`; clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
 | extensions | 40 (15 native, 30 script-backed, 27 scripts) — the marketplace was removed |
@@ -1003,7 +1003,7 @@ header, and is the kind of thing a clean rewrite quietly loses.
 
 | rule | where it comes from | what breaks if a port ignores it |
 |---|---|---|
-| A tier is never crossed: pins and frecency reorder *within* a tier only | `support/rank.rs` | a pinned substring outranks a name that starts with what you typed |
+| A **pin** is clamped to its own tier; **frecency** is added to the finished score and is *not* — a heavily-used row near its tier's ceiling can cross into the next band (the script adds it the same way, so this is parity, not a port bug) | `state/pins.rs`, `state/frecency.rs`, `support/rank.rs` | a pinned substring never outranks a name that starts with what you typed; a frecency-boosted one can, in principle, outrank even a `forced` row |
 | The web row is dropped whenever anything real matched; a scoped `?` keeps it | `support/rank.rs` (`merge`) | the fallback row buries the answer, or disappears from `web:` |
 | An empty answer over rows already on screen keeps those rows | `worker/state.rs` (`keep_stale`) | a timeout blanks the card (looks like "no matches") |
 | A nonzero exit that printed rows is not a failure — only a bad exit with *no* rows is | `prov.fail` | a script that warns on stderr stops answering |

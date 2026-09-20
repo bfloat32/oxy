@@ -60,3 +60,55 @@ pub(crate) fn append_log(path: &Path, line: &str) {
         let _ = f.write_all(line.as_bytes());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Two generations, and the second rotation has to *replace* `.old`
+    /// rather than fail: on Windows a rename onto an existing file is the
+    /// case worth checking, and this runs on both platforms.
+    #[test]
+    fn rotation_keeps_two_generations() {
+        let dir = std::env::temp_dir().join(format!("oxyd-log-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("oxy.log");
+        let old = dir.join("oxy.log.old");
+
+        std::fs::write(&path, vec![b'x'; 1_048_577]).unwrap();
+        append_log(&path, "one\n");
+        assert!(old.exists(), "the first rotation writes .old");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "one\n");
+
+        std::fs::write(&path, vec![b'y'; 1_048_577]).unwrap();
+        append_log(&path, "two\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "two\n");
+        let kept = std::fs::read_to_string(&old).unwrap();
+        assert!(kept.starts_with('y'), "the second rotation replaced .old");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_small_file_is_never_rotated() {
+        let dir = std::env::temp_dir().join(format!("oxyd-log-small-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("oxy.log");
+        append_log(&path, "first\n");
+        append_log(&path, "second\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "first\nsecond\n");
+        assert!(!dir.join("oxy.log.old").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_line_carries_ts_sid_and_ev() {
+        let line = log_line("abc", "prov.done", &json!({"ms": 12}));
+        assert!(line.ends_with('\n'));
+        let v: Value = serde_json::from_str(line.trim()).unwrap();
+        assert_eq!(v["sid"], "abc");
+        assert_eq!(v["ev"], "prov.done");
+        assert_eq!(v["ms"], 12);
+        assert!(v["ts"].as_u64().unwrap() > 0);
+    }
+}

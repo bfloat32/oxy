@@ -12,7 +12,14 @@ use crate::model::row::Row;
 /// Half-life in days: a launch is worth half as much a week after you made it.
 const HALF_LIFE_DAYS: f64 = 7.0;
 const DAY_MS: f64 = 86_400_000.0;
-/// The most a boost can move a row inside its tier. It never crosses one.
+/// The most a boost adds. Unlike a pin — which is clamped to the row's own
+/// tier in `pins_apply` — this is added to the *finished* score, after the
+/// tier clamp in `rank::score`. So a row already within 9000 of its tier's
+/// ceiling can edge past the next tier's floor: a substring row at the top
+/// fuzzy band (local 91 646) plus a full boost outranks a prefix row at
+/// local 0, and a used prefix row can outrank a `forced` one. The script's
+/// `Frecency.js` adds it exactly the same way, so this is parity — changing
+/// it means changing both builds, not fixing a port.
 const MAX_BOOST: i64 = 9000;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

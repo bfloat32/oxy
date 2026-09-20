@@ -52,12 +52,18 @@ struct Bucket {
 }
 
 impl Bucket {
+    /// Move a key to the front of the LRU order, adding it if it is new. A
+    /// key reaches `entries` only through `put`, so the first touch of a key
+    /// is what puts it in the order — without that, eviction never sees it
+    /// and the map grows past `MAX_PER_PROVIDER` for the life of the daemon.
     fn touch(&mut self, key: &str) {
-        if let Some(at) = self.keys.iter().position(|k| k == key)
-            && at > 0
-        {
-            let key = self.keys.remove(at).unwrap();
-            self.keys.push_front(key);
+        match self.keys.iter().position(|k| k == key) {
+            Some(0) => {}
+            Some(at) => {
+                let key = self.keys.remove(at).unwrap();
+                self.keys.push_front(key);
+            }
+            None => self.keys.push_front(key.to_string()),
         }
     }
 }
@@ -146,5 +152,75 @@ impl Cache {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn rows(n: usize) -> SharedRows {
+        Arc::new(
+            (0..n)
+                .map(|i| Arc::new(crate::model::row::Row::new(format!("k{i}"), "t")))
+                .collect(),
+        )
+    }
+
+    /// The bound the module promises: a daemon up for days must not hold one
+    /// entry per query it has ever seen.
+    #[test]
+    fn a_provider_holds_at_most_max_per_provider_answers() {
+        let mut cache = Cache::default();
+        for i in 0..(MAX_PER_PROVIDER * 3) {
+            cache.put("gh", &format!("q{i}"), rows(1), 60_000, 7);
+        }
+        assert_eq!(cache.entries(), MAX_PER_PROVIDER);
+        // The most recent ones are the ones kept: the oldest was evicted.
+        assert!(cache.get("gh", "q0", 7).is_none());
+        let newest = format!("q{}", MAX_PER_PROVIDER * 3 - 1);
+        assert!(cache.get("gh", &newest, 7).is_some());
+    }
+
+    #[test]
+    fn a_hit_refreshes_the_lru_order() {
+        let mut cache = Cache::default();
+        for i in 0..MAX_PER_PROVIDER {
+            cache.put("gh", &format!("q{i}"), rows(1), 60_000, 7);
+        }
+        // Touch the oldest, then add one: the touched key survives, the
+        // second-oldest is the one evicted.
+        assert!(cache.get("gh", "q0", 7).is_some());
+        cache.put("gh", "fresh", rows(1), 60_000, 7);
+        assert!(cache.get("gh", "q0", 7).is_some(), "q0 was refreshed");
+        assert!(cache.get("gh", "q1", 7).is_none(), "q1 was the coldest");
+    }
+
+    #[test]
+    fn ttl_zero_stores_nothing() {
+        let mut cache = Cache::default();
+        cache.put("vol", "q", rows(2), 0, 7);
+        assert_eq!(cache.entries(), 0);
+    }
+
+    #[test]
+    fn a_stamp_mismatch_is_a_miss() {
+        let mut cache = Cache::default();
+        cache.put("gh", "q", rows(1), 60_000, 7);
+        assert!(cache.get("gh", "q", 7).is_some());
+        assert!(cache.get("gh", "q", 8).is_none());
+        // The stale read still serves it, which is what keeps a reload from
+        // blanking the card while the new definition answers.
+        assert!(cache.get_stale("gh", "q", 7).is_some());
+    }
+
+    #[test]
+    fn providers_do_not_share_keys() {
+        let mut cache = Cache::default();
+        cache.put("gh", "same", rows(3), 60_000, 7);
+        cache.put("pr", "same", rows(1), 60_000, 7);
+        assert_eq!(cache.get("gh", "same", 7).unwrap().len(), 3);
+        assert_eq!(cache.get("pr", "same", 7).unwrap().len(), 1);
     }
 }

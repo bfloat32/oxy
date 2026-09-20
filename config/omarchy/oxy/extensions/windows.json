@@ -14,5 +14,6 @@
   "debounceMs": 0,
   "maxRows": 14,
   "tier": "substring",
-  "view": "windows"
+  "view": "windows",
+  "native": "win"
 }

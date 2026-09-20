@@ -1,0 +1,21 @@
+[
+  { "why": "every mapped window answers, drawn as the windows view with the session facts on the row",
+    "query": "", "minRows": 1, "view": "windows",
+    "fields": ["title", "wsName", "focused", "floating", "special", "session", "exec"],
+    "matches": { "id": "^0x[0-9a-f]+$",
+                 "exec": "^hyprctl dispatch 'hl\\.dsp\\.focus\\(\\{ window = \"address:0x[0-9a-f]+\" \\}\\)'$",
+                 "session": "'windows': [0-9]+.*'monitors': [0-9]+" } },
+
+  { "why": "focus goes through the Lua dispatcher — dispatch focuswindow returns ok and does nothing under a Lua config",
+    "query": "", "minRows": 1,
+    "fields": ["actions"],
+    "atMost": { "actions": 3 },
+    "matches": { "actions": "'title': 'Focus'.*'title': 'Close Window'" } },
+
+  { "why": "a special-workspace window is an offer too — checked only when the box has one",
+    "query": "special",
+    "fields": ["wsName", "special"] },
+
+  { "why": "a query that matches nothing is silence, not an error row",
+    "query": "zzz-no-window-is-named-this", "maxRows": 0, "fields": [] }
+]

@@ -43,13 +43,13 @@ starts from a measured state:
 | fact | value |
 |---|---|
 | Rust files | 132 (37 before the restructure) |
-| total lines | 28 775 |
-| largest file | 600 lines (`provider/worker/state.rs`); nothing above the 800 target |
-| tests | 324 passing (`cargo test --workspace`) |
+| total lines | 28 774 |
+| largest file | 719 lines (`provider/native/time/alarm/clock.rs`); nothing above the 800 target |
+| tests | 325 passing (`cargo test --workspace`) |
 | lints | `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean |
-| guards | the file budget and the `model/` layering check in `tests/run.sh`; clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
+| guards | the file budget, the `model/` layering check and the **view-list sync** in `tests/run.sh`; `oxy test --only manifest` against this repo's extensions (it checks that every `native:` name is an arm in `construct`); clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
 | extensions | 40 (27 native — 22 declaring `"native"` plus the five built-ins; 18 script-backed) — the marketplace was removed |
-| case suites | 26 files; the extensions without one are listed below |
+| case suites | 27 files, 443 assertions; the extensions without one are listed below |
 | unchanged by the restructure | the wire, the row shapes, the state files, the script contract |
 
 The restructure was a move, not a behaviour change, so every claim below —
@@ -739,11 +739,25 @@ Verified live against a stub streaming server: `answerstart` with provider
 error; a dead endpoint lands in the card as *"Could not reach
 127.0.0.1:19999 (…). Is the model server running?"*.
 
+**Since that slice** (each verified against a stub, not by reading):
+
+| landed | where |
+|---|---|
+| `ask.key` — a literal, or `env:NAME` so the value never lives in a committed file; sent as `Authorization: Bearer …`, and no header at all when unset | `provider/llm/mod.rs`, `http.rs` |
+| retry: only the transient statuses, `Retry-After` honoured **capped at 60 s**, saturating parse, our own backoff otherwise; never re-sends once text has arrived | `provider/llm/retry.rs` |
+| one streamed turn shared by the card and the CLI (`Piece::Text`/`Notice`/`Error`) | `provider/llm/turn.rs` |
+| `oxy ask "question"` — the same client without the card, notices on stderr | `cli/ask.rs` |
+| `oxy ask doctor --tier offline\|catalog [--json]` — checkpoints, verdict, next step, non-zero exit; `/v1/models` read tolerantly (OpenAI and ollama shapes, tag-insensitive) | `cli/doctor.rs`, `provider/llm/models.rs` |
+| an endpoint that is *not listening* falls back to the CLI list, saying so in the card; one that answers badly does not | `engine/ask.rs` |
+| soft interrupt — a question typed mid-stream queues and runs when the current one ends | `engine/ask.rs`, `pipeline.rs` |
+| the model ledger — count + last-used per model, reported by `/stats` | `state/usage.rs` |
+| the chip's `hint` when nothing is configured at all | `engine/ask.rs`, `Shell.qml` |
+
 **What is deliberately not done yet**, in the order the design asks for it:
 
-1. **Autodetect** — probe `localhost:11434` / `:1234` at registry time and
-   offer the local model when no endpoint is configured. Today an endpoint
-   must be named; the probe exists (`Local::probe`) but nothing calls it.
+1. **Autodetect** — offer a local model when no endpoint is configured. The
+   probe is called now (the doctor's catalog tier, and the boot-time Ollama
+   hint in `?`), but nothing yet *configures* the endpoint for you.
 2. **Token framing** — deltas are buffered into whole lines because the
    wire's `answer` event is one line per event and the card appends a
    newline between them (a token per event would render one word per line).
@@ -751,17 +765,20 @@ error; a dead endpoint lands in the card as *"Could not reach
 3. **The session file and multi-turn** — `ask:`/`chat` as a scope, turns
    replayed as `messages[]`, idle expiry (design §6, §8). The request
    builder already takes history.
-4. **The key'd providers and the CLI-kind transports** (design §5) — the
-   registry beyond local: subscription CLIs keep their own session handles.
-5. **`/` commands, markdown rendering, and the `oxy ask` verb** (§9).
+4. **The provider registry** (design §5) — key'd endpoints and the CLI-kind
+   transports as first-class rows: `ask.key` covers one endpoint, and the CLI
+   fallback is a chain rather than a registry.
+5. **`/` commands and markdown rendering** (§9). The `oxy ask` verb is in.
 
 It depends on nothing in the porting batches, and the batches depend on
 nothing in it — it is a parallel track, not a batch.
 
 ### 4.5 Windows gaps
 
-- `read_clipboard` is `#[cfg(unix)]` (`oxyd/src/clipboard.rs`), so the `paste`
-  row never appears on Windows (the CLI and daemon otherwise work).
+- ~~`read_clipboard` is `#[cfg(unix)]`~~ — closed: the Windows half reads
+  through PowerShell's `Get-Clipboard`, bounded twice (512 chars, two
+  seconds), and the URL test is shared by both platforms. Verified live: a URL
+  on the clipboard became the first row of an empty box.
 - Extension sockets are Unix-only by design (`provider/socket.rs`).
 - Icon/art URLs are canonical now (`file_url`), which was the other
   platform-shaped gap.
@@ -964,7 +981,7 @@ list.
 they read the machine every time (which is also why so many of them are in
 batch A: the reading is the whole cost).
 
-### 6.5 The remaining 30, measured
+### 6.5 The remaining 18 script-backed, measured
 | id | keyword | view | script | lines | CLI/tools | refreshMs | cacheMs | cases | size |
 |---|---|---|---|---|---|---|---|---|---|
 | agent | do | agent | oxy-agent | 2167 | hyprctl, systemctl, python3, git, gh | 600 | – | yes | XL |
@@ -1007,7 +1024,7 @@ header, and is the kind of thing a clean rewrite quietly loses.
 |---|---|---|
 | A **pin** is clamped to its own tier; **frecency** is added to the finished score and is *not* — a heavily-used row near its tier's ceiling can cross into the next band (the script adds it the same way, so this is parity, not a port bug) | `state/pins.rs`, `state/frecency.rs`, `support/rank.rs` | a pinned substring never outranks a name that starts with what you typed; a frecency-boosted one can, in principle, outrank even a `forced` row |
 | The web row is dropped whenever anything real matched; a scoped `?` keeps it | `support/rank.rs` (`merge`) | the fallback row buries the answer, or disappears from `web:` |
-| The score tie-break is lowercased byte order, where the script used `localeCompare` — **an accepted deviation**, since matching ICU collation would take a dependency | `support/rank.rs` (`by_score`, `sort_key`) | two rows with *equal* scores and non-ASCII titles can swap places between the two builds |
+| The score tie-break is lowercased byte order, where the script used `localeCompare` — **an accepted deviation**, since matching ICU collation would take a dependency | `support/rank.rs` (`sort_key`) | two rows with *equal* scores and non-ASCII titles can swap places between the two builds |
 | An empty answer over rows already on screen keeps those rows | `worker/state.rs` (`keep_stale`) | a timeout blanks the card (looks like "no matches") |
 | A nonzero exit that printed rows is not a failure — only a bad exit with *no* rows is | `prov.fail` | a script that warns on stderr stops answering |
 | `Close` is emitted *before* the row's `exec` | `engine/activate.rs` | the new window lands behind the overlay, the launch OSD under it |

@@ -160,7 +160,6 @@ fn kind_of(ext: &str) -> &'static str {
     }
 }
 
-
 impl NativeExt for Recent {
     fn query<'a>(
         &'a mut self,

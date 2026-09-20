@@ -1005,6 +1005,7 @@ header, and is the kind of thing a clean rewrite quietly loses.
 |---|---|---|
 | A **pin** is clamped to its own tier; **frecency** is added to the finished score and is *not* — a heavily-used row near its tier's ceiling can cross into the next band (the script adds it the same way, so this is parity, not a port bug) | `state/pins.rs`, `state/frecency.rs`, `support/rank.rs` | a pinned substring never outranks a name that starts with what you typed; a frecency-boosted one can, in principle, outrank even a `forced` row |
 | The web row is dropped whenever anything real matched; a scoped `?` keeps it | `support/rank.rs` (`merge`) | the fallback row buries the answer, or disappears from `web:` |
+| The score tie-break is lowercased byte order, where the script used `localeCompare` — **an accepted deviation**, since matching ICU collation would take a dependency | `support/rank.rs` (`by_score`, `sort_key`) | two rows with *equal* scores and non-ASCII titles can swap places between the two builds |
 | An empty answer over rows already on screen keeps those rows | `worker/state.rs` (`keep_stale`) | a timeout blanks the card (looks like "no matches") |
 | A nonzero exit that printed rows is not a failure — only a bad exit with *no* rows is | `prov.fail` | a script that warns on stderr stops answering |
 | `Close` is emitted *before* the row's `exec` | `engine/activate.rs` | the new window lands behind the overlay, the launch OSD under it |

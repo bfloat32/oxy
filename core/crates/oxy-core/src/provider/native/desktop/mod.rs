@@ -7,4 +7,5 @@ pub mod commands;
 pub mod emoji;
 mod emoji_data;
 pub mod quicklinks;
+pub mod theme;
 pub mod web;

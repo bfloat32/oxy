@@ -19,16 +19,34 @@ impl Engine {
     /// user wrote is lost and nothing we defaulted to is recorded as chosen.
     pub(super) async fn on_save_settings(&mut self, id: &str, values: Map<String, Value>) {
         let path = crate::settings::paths::settings_file();
-        let Ok(text) = std::fs::read_to_string(&path) else {
+        // A missing file is a first save, not a reason to drop the form; a
+        // file that does not parse is reported rather than half-rewritten;
+        // and valid JSON that is not an object cannot hold settings at all —
+        // `as_object_mut().unwrap()` on it used to take the daemon down.
+        let text = std::fs::read_to_string(&path).unwrap_or_default();
+        let trailing_newline = text.is_empty() || text.ends_with('\n');
+        let mut raw = match serde_json::from_str::<Value>(&text) {
+            Ok(v) if v.is_object() => v,
+            Ok(_) => {
+                self.emit(EngineEvent::Notice {
+                    text: "oxy.json is not an object — the save was not written".into(),
+                })
+                .await;
+                return;
+            }
+            Err(_) if text.trim().is_empty() => json!({}),
+            Err(_) => {
+                self.emit(EngineEvent::Notice {
+                    text: "oxy.json does not parse — the save was not written".into(),
+                })
+                .await;
+                return;
+            }
+        };
+        let Some(obj) = raw.as_object_mut() else {
             return;
         };
-        let trailing_newline = text.ends_with('\n');
-        let Ok(mut raw) = serde_json::from_str::<Value>(&text) else {
-            return;
-        };
-        let entry = raw
-            .as_object_mut()
-            .unwrap()
+        let entry = obj
             .entry("extensionSettings".to_string())
             .or_insert_with(|| json!({}));
         if !entry.is_object() {
@@ -65,6 +83,10 @@ impl Engine {
 
     pub(super) async fn on_reload(&mut self) {
         self.settings = Settings::load(&crate::settings::paths::settings_file());
+        for path in self.settings.recovered.clone() {
+            self.emit_log("settings.recovered", json!({ "f": path.to_string_lossy() }))
+                .await;
+        }
         *self.shared.settings.write().await = Arc::new(self.settings.clone());
         let load_t0 = std::time::Instant::now();
         let report = crate::registry::load_dir(

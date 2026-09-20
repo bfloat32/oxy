@@ -6,3 +6,4 @@ pub mod cache;
 pub mod quote;
 pub mod rank;
 pub mod score;
+pub mod store;

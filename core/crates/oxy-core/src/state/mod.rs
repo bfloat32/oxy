@@ -36,15 +36,15 @@ pub struct State {
 }
 
 impl State {
-    pub fn load(frecency_path: &Path, state_path: &Path) -> State {
-        let frecency = std::fs::read_to_string(frecency_path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<Frecency>(&t).ok())
+    /// Read both files. The second half of the return is the files that did
+    /// not parse and were moved aside — the caller reports them, because a
+    /// silent reset of pins and recents is exactly the failure this prevents.
+    pub fn load(frecency_path: &Path, state_path: &Path) -> (State, Vec<std::path::PathBuf>) {
+        let mut moved = Vec::new();
+        let frecency = crate::support::store::read_json::<Frecency>(frecency_path, &mut moved)
             .unwrap_or_default();
 
-        let (recents, pins) = std::fs::read_to_string(state_path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<StateFile>(&t).ok())
+        let (recents, pins) = crate::support::store::read_json::<StateFile>(state_path, &mut moved)
             .map(|s| {
                 let recents = s
                     .recents
@@ -58,11 +58,14 @@ impl State {
             })
             .unwrap_or_default();
 
-        State {
-            frecency,
-            recents,
-            pins,
-        }
+        (
+            State {
+                frecency,
+                recents,
+                pins,
+            },
+            moved,
+        )
     }
 
     /// Atomic write: the file is renamed over, so a crash mid-save cannot lose
@@ -91,4 +94,62 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     let tmp = path.with_extension("tmp");
     std::fs::write(&tmp, text)?;
     std::fs::rename(&tmp, path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dir(tag: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("oxy-state-{tag}-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn a_truncated_state_file_is_moved_aside_not_read_as_empty() {
+        let d = dir("corrupt");
+        let frecency = d.join("oxy-frecency.json");
+        let state_path = d.join("oxy-state.json");
+        std::fs::write(&frecency, r#"{"app:x":{"count":3,"last":1}}"#).unwrap();
+        std::fs::write(&state_path, r#"{"recents":["git:"],"#).unwrap(); // cut mid-write
+
+        let (state, moved) = State::load(&frecency, &state_path);
+        assert_eq!(moved, vec![d.join("oxy-state.corrupt")]);
+        assert!(state.pins.is_empty());
+        assert!(state.recents.is_empty());
+        // The half that did parse is untouched, and the broken file survives.
+        assert!(state.frecency.contains_key("app:x"));
+        assert!(d.join("oxy-state.corrupt").exists());
+        assert!(!state_path.exists());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_clean_load_moves_nothing() {
+        let d = dir("clean");
+        let frecency = d.join("oxy-frecency.json");
+        let state_path = d.join("oxy-state.json");
+        std::fs::write(&frecency, "{}").unwrap();
+        std::fs::write(
+            &state_path,
+            r#"{"recents":["git:",""],"pins":{"app:x":true,"app:y":false}}"#,
+        )
+        .unwrap();
+
+        let (state, moved) = State::load(&frecency, &state_path);
+        assert!(moved.is_empty());
+        assert_eq!(
+            state.recents,
+            vec!["git:".to_string()],
+            "empty entries drop"
+        );
+        assert!(state.pins.contains_key("app:x"));
+        assert!(
+            !state.pins.contains_key("app:y"),
+            "a false pin is not a pin"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
 }

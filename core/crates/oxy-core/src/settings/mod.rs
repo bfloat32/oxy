@@ -126,6 +126,9 @@ pub struct Settings {
     pub extensions: Map<String, Value>,
     /// What each extension was configured with, by extension id.
     pub extension_settings: Map<String, Value>,
+    /// Files this load had to move aside because they did not parse. Not a
+    /// setting: the engine reports them once and moves on.
+    pub recovered: Vec<std::path::PathBuf>,
 }
 
 impl Default for Settings {
@@ -147,6 +150,7 @@ impl Default for Settings {
             ask: default_local_ask(),
             extensions: Map::new(),
             extension_settings: Map::new(),
+            recovered: Vec::new(),
         }
     }
 }
@@ -298,12 +302,16 @@ impl Settings {
         out
     }
 
+    /// Read `oxy.json`. A file that does not parse is moved aside (see
+    /// `support::store`) and its path lands in `recovered` for the caller to
+    /// report — the settings fall back to defaults either way, but the file
+    /// survives for the human who wrote it.
     pub fn load(path: &Path) -> Settings {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-            .map(|v| Settings::merge(&v))
-            .unwrap_or_default()
+        let mut recovered = Vec::new();
+        let raw = crate::support::store::read_json::<Value>(path, &mut recovered);
+        let mut out = raw.map(|v| Settings::merge(&v)).unwrap_or_default();
+        out.recovered = recovered;
+        out
     }
 
     /// The `extensionSettings.<id>` object for one extension, for the
@@ -342,6 +350,21 @@ mod tests {
     /// `engines` in oxy.json merge over the defaults by id: adding Kagi must
     /// not make Google disappear, and a same-id entry overrides in place —
     /// the QML semantics, which replacing the list did not share.
+    #[test]
+    fn a_corrupt_settings_file_is_moved_aside_and_reported() {
+        let d = std::env::temp_dir().join(format!("oxy-settings-{}", std::process::id()));
+        std::fs::remove_dir_all(&d).ok();
+        std::fs::create_dir_all(&d).unwrap();
+        let path = d.join("oxy.json");
+        std::fs::write(&path, r#"{"recents": true,"#).unwrap(); // cut mid-write
+
+        let s = Settings::load(&path);
+        assert_eq!(s.recovered, vec![d.join("oxy.corrupt")]);
+        assert!(!s.recents, "defaults, and the file survives to be fixed");
+        assert!(d.join("oxy.corrupt").exists());
+        std::fs::remove_dir_all(&d).ok();
+    }
+
     #[test]
     fn engines_merge_by_id() {
         let s = Settings::merge(&serde_json::json!({

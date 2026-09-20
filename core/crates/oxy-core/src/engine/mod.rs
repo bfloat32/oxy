@@ -168,10 +168,28 @@ impl Engine {
         *shared.registry.write().await = Arc::new(extensions.clone());
         let extensions = Arc::new(extensions);
 
-        let state = State::load(
+        let (state, state_moved) = State::load(
             &crate::settings::paths::frecency_file(),
             &crate::settings::paths::state_file(),
         );
+        // A state file that did not parse was moved aside rather than read as
+        // empty; say so, or the loss of pins and recents is invisible.
+        for path in state_moved {
+            let _ = evt_tx
+                .send(EngineEvent::Log {
+                    ev: "state.recovered".into(),
+                    fields: json!({ "f": path.to_string_lossy() }),
+                })
+                .await;
+        }
+        for path in &settings.recovered {
+            let _ = evt_tx
+                .send(EngineEvent::Log {
+                    ev: "settings.recovered".into(),
+                    fields: json!({ "f": path.to_string_lossy() }),
+                })
+                .await;
+        }
 
         let mut engine = Engine {
             cmd_rx,

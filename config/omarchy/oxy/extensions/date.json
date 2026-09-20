@@ -9,6 +9,7 @@
   ],
   "subtitle": "Dates, holidays and day counts",
   "glyph": "",
+  "native": "date",
   "search": "oxy-date {query}",
   "testQuery": "christmas",
   "minChars": 3,

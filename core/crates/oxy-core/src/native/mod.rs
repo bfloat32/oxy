@@ -8,8 +8,12 @@
 
 pub mod apps;
 pub mod calc;
+pub mod calchist;
 pub mod calendar;
+pub mod clipboard;
 pub mod commands;
+pub mod date;
+pub mod days;
 pub mod emoji;
 pub mod file;
 pub mod kill;
@@ -29,7 +33,10 @@ pub fn construct(name: &str) -> Option<Box<dyn NativeExt>> {
         "apps" => Some(Box::new(apps::Apps::new())),
         "calc" => Some(Box::new(calc::Calc::new())),
         "cal" | "calendar" => Some(Box::new(calendar::Cal::new())),
+        "calchist" => Some(Box::new(calchist::CalcHist::default())),
+        "ch" | "clipboard" => Some(Box::new(clipboard::Clip::default())),
         "commands" | "run" => Some(Box::new(commands::Commands::new())),
+        "date" => Some(Box::new(date::Date)),
         "emoji" => Some(Box::new(emoji::Emoji::default())),
         "file" | "files" => Some(Box::new(file::Files)),
         "kill" | "ps" => Some(Box::new(kill::Kill::new())),

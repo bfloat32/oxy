@@ -299,6 +299,11 @@ async fn test_cases(only: Option<String>) -> i32 {
 
     // One engine for the whole run — each case is just the next query.
     let (tx, mut rx, _task) = local_engine().await;
+    // Every EngineCmd::Query bumps the engine's epoch by one. Counting our
+    // own sends gives the epoch each case's Results must carry — a worker
+    // still finishing the previous case can land a stale Results after the
+    // drain, and without this check its empty `waiting` reads as an answer.
+    let mut epoch = 0u64;
 
     for ext in &report.extensions {
         if let Some(only) = &only
@@ -365,15 +370,24 @@ async fn test_cases(only: Option<String>) -> i32 {
             {
                 break;
             }
+            epoch += 1;
 
             let deadline = std::time::Instant::now()
                 + Duration::from_millis((ext.timeout_ms + ext.debounce_ms + 4000).max(8000));
             let mut rows: Vec<Value> = Vec::new();
             while let Ok(Some(event)) = tokio::time::timeout_at(deadline.into(), rx.recv()).await {
                 if let EngineEvent::Results {
-                    rows: r, waiting, ..
+                    epoch: ep,
+                    rows: r,
+                    waiting,
+                    ..
                 } = event
                 {
+                    // Stale Results from an earlier case's stragglers are
+                    // not this case's answer.
+                    if ep != epoch {
+                        continue;
+                    }
                     rows = r
                         .iter()
                         .filter(|row| row.provider_id == ext.id)

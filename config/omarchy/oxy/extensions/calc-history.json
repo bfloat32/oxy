@@ -7,6 +7,7 @@
   ],
   "subtitle": "Calculator History",
   "glyph": "",
+  "native": "calchist",
   "search": "oxy-calc-history {query}",
   "when": "test -s \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/oxy-calc-history.json\"",
   "minChars": 0,

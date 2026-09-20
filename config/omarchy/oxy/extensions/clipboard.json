@@ -9,6 +9,7 @@
   ],
   "subtitle": "Clipboard",
   "glyph": "",
+  "native": "ch",
   "search": "oxy-clipboard-history {query}",
   "when": "test -f \"$HOME/.local/state/omarchy/clipboard-history.json\"",
   "minChars": 0,

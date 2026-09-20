@@ -1,7 +1,8 @@
 //! `cal:` — a month, drawn as a grid by the launcher. A port of
-//! `bin/oxy-calendar` for the shapes that are months and years; anything
-//! natural-language (holidays, weekdays, spans) declines to `Fallback`, and
-//! the declared `search` — `oxy-calendar` — answers it the way it always did.
+//! `bin/oxy-calendar`: months and years resolve here, and anything
+//! natural-language (holidays, weekdays, spans) asks `date::resolve_span` —
+//! the in-process `--iso` mode the script shelled out for — so `cal:` and
+//! `date:` cannot disagree about which day Christmas is.
 //!
 //! Row fields are the ones the `calendar` view reads: `year`, `month`,
 //! `today`, `weekStart`, `marks`.
@@ -12,6 +13,10 @@ use std::pin::Pin;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::native::date;
+use crate::native::days::{
+    self, MONTHS, MONTHS_ABBR, WEEKDAYS, add_months, days_from_civil, iso_week, today, weekday,
+};
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 
 /// `week_start` is asked of `locale` once: the machine's locale does not
@@ -35,75 +40,6 @@ impl Cal {
     fn week_start(&mut self) -> i64 {
         *self.week_start.get_or_insert_with(week_start)
     }
-}
-
-const MONTHS: [&str; 12] = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-];
-const MONTHS_ABBR: [&str; 12] = [
-    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-];
-const WEEKDAYS: [&str; 7] = [
-    "Sunday",
-    "Monday",
-    "Tuesday",
-    "Wednesday",
-    "Thursday",
-    "Friday",
-    "Saturday",
-];
-
-/// Days since the epoch for a civil date (Howard Hinnant's algorithm). A
-/// civil calendar fits in a few lines and asks for no date library.
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146097 + doe - 719468
-}
-
-fn civil_from_days(z: i64) -> (i64, i64, i64) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    (if m <= 2 { y + 1 } else { y }, m, d)
-}
-
-/// 0 = Sunday.
-fn weekday(year: i64, month: i64, day: i64) -> i64 {
-    (days_from_civil(year, month, day) + 4).rem_euclid(7)
-}
-
-fn today() -> (i64, i64, i64) {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    civil_from_days(secs / 86400)
-}
-
-fn add_months(year: i64, month: i64, delta: i64) -> (i64, i64) {
-    let total = year * 12 + (month - 1) + delta;
-    (total.div_euclid(12), total.rem_euclid(12) + 1)
 }
 
 /// The month names of the language this desktop is used in. `date -d` knew
@@ -211,39 +147,6 @@ fn week_start() -> i64 {
         })
         .map(|v| if v == 2 { 1 } else { 0 })
         .unwrap_or(0)
-}
-
-/// ISO-8601 week number, for the "week 41" subtitle.
-fn iso_week(year: i64, month: i64, day: i64) -> i64 {
-    let ordinal = days_from_civil(year, month, day) - days_from_civil(year, 1, 1) + 1;
-    // The standard algorithm: week = (ordinal - weekday + 10) / 7, with the
-    // edge cases of belonging to the previous or next year's week 1.
-    let dow = if weekday(year, month, day) == 0 {
-        7
-    } else {
-        weekday(year, month, day)
-    };
-    let week = (ordinal - dow + 10) / 7;
-    if week < 1 {
-        // Last ISO week of the previous year.
-        return iso_weeks_in(year - 1);
-    }
-    if week > iso_weeks_in(year) {
-        return 1;
-    }
-    week
-}
-
-fn iso_weeks_in(year: i64) -> i64 {
-    // A year has 53 ISO weeks when it starts on Thursday, or is a leap year
-    // starting on Wednesday.
-    let jan1 = weekday(year, 1, 1);
-    let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
-    if jan1 == 4 || (leap && jan1 == 3) {
-        53
-    } else {
-        52
-    }
 }
 
 impl NativeExt for Cal {
@@ -384,11 +287,86 @@ impl NativeExt for Cal {
                 )]);
             }
 
-            // Everything else is whatever `date:` makes of it — a holiday, a
-            // weekday, a week number, a quarter, a range, an explicit date —
-            // and the declared `search` script reads English dates the way it
-            // always has.
-            NativeOutcome::Fallback
+            // Everything else is whatever `date:` makes of it: a holiday, a
+            // weekday, a week number, a quarter, a range, an explicit date.
+            // The days it names are dotted, and a span crossing months draws
+            // one grid per month.
+            //
+            // `date:` refuses a bare three-letter weekday because it answers
+            // unscoped and "sat" opens more searches than it opens questions.
+            // `cal:` is typed on purpose, so here the same three letters are
+            // a day. The script shelled out to `oxy-date --iso` for this;
+            // the resolver is in-process now, and there is still only one
+            // reader of English dates.
+            let ask = match lower.as_str() {
+                "mon" => "monday",
+                "tue" | "tues" => "tuesday",
+                "wed" | "weds" => "wednesday",
+                "thu" | "thur" | "thurs" => "thursday",
+                "fri" => "friday",
+                "sat" => "saturday",
+                "sun" => "sunday",
+                _ => lower.as_str(),
+            };
+            let today_num = days_from_civil(ty, tm, _td);
+            let Some((from, to)) = date::resolve_span(ask, today_num, ty) else {
+                return NativeOutcome::Fallback;
+            };
+
+            let note = if from == to {
+                format!(
+                    "{} {}",
+                    WEEKDAYS[days::weekday_of(from) as usize],
+                    days::day_month(from)
+                )
+            } else {
+                format!(
+                    "{} to {}",
+                    days::day_month_abbr(from),
+                    days::day_month_abbr(to)
+                )
+            };
+
+            // A span longer than a month is not dotted at all: a whole
+            // quarter with every square marked is a quarter with nothing
+            // marked.
+            let span_days = to - from + 1;
+            let marks_for = |year: i64, month: i64| -> Vec<i64> {
+                if span_days > 31 {
+                    return vec![];
+                }
+                (from..=to)
+                    .filter_map(|z| {
+                        let (y, m, d) = days::civil_from_days(z);
+                        (y == year && m == month).then_some(d)
+                    })
+                    .collect()
+            };
+
+            // One row per month the span touches, up to a screenful. Six
+            // grids is already more than the tabs can carry.
+            let (ey, em, _) = days::civil_from_days(to);
+            let (mut y, mut m, _) = days::civil_from_days(from);
+            let mut rows = Vec::new();
+            let mut score = 95000;
+            while rows.len() < 6 {
+                rows.push(month_row(
+                    &format!("cal-{y:04}-{m:02}"),
+                    y,
+                    m,
+                    MONTHS_ABBR[(m - 1) as usize],
+                    score,
+                    marks_for(y, m),
+                    &note,
+                    ws,
+                ));
+                score -= 100;
+                if (y, m) == (ey, em) {
+                    break;
+                }
+                (y, m) = add_months(y, m, 1);
+            }
+            NativeOutcome::Rows(rows)
         })
     }
 }
@@ -402,7 +380,7 @@ mod tests {
         // 2024-02-29 is a Thursday; a leap day is the date a bad algorithm
         // gets wrong.
         let z = days_from_civil(2024, 2, 29);
-        assert_eq!(civil_from_days(z), (2024, 2, 29));
+        assert_eq!(days::civil_from_days(z), (2024, 2, 29));
         assert_eq!(weekday(2024, 2, 29), 4);
     }
 

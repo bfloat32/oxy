@@ -1155,6 +1155,15 @@ impl Engine {
             return "Settings".into();
         }
         for ext in self.extensions.iter() {
+            // The synthesized quicklinks extension's aliases are the links'
+            // keywords — the chip names the link, not its transport, so only
+            // its own keyword counts as an extension match.
+            if ext.id == "quicklinks" {
+                if ext.keyword == query.scope {
+                    return ext.title.clone();
+                }
+                continue;
+            }
             if ext.keyword == query.scope || ext.aliases.contains(&query.scope) {
                 return ext.title.clone();
             }
@@ -2166,6 +2175,21 @@ mod tests {
             crate::extension::def_stamp(ql_after),
             "a quicklinks edit must read as a changed definition"
         );
+    }
+
+    /// Third-audit nit: `later:`'s chip names the link ("Added Later"), not
+    /// the transport ("Quicklinks") — the synthesized extension's aliases are
+    /// link keywords, so only its own keyword may claim the label.
+    #[test]
+    fn scope_label_names_the_link_not_quicklinks() {
+        let mut engine = bare_engine();
+        engine.extensions = Arc::new(builtin_extensions(&[link("later")]));
+        engine.settings.quicklinks = vec![link("later")];
+        let known = known_keywords(&engine.extensions, &builtin_keywords());
+        let q = Query::parse("later:hi", 1, Some(&known));
+        assert_eq!(engine.scope_label(&q), "link later");
+        let q = Query::parse("quicklinks:x", 1, Some(&known));
+        assert_eq!(engine.scope_label(&q), "Quicklinks");
     }
 
     /// A minimal engine for the in-process flows — no workers, and state

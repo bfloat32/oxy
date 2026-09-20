@@ -7,6 +7,7 @@
 
 use serde_json::{Value, json};
 
+use crate::provider::native::util::shq;
 use crate::support::quote::quote;
 
 /// `format_span` — a leftover as "30m 45s", for the rounded-up detail.
@@ -73,58 +74,6 @@ pub(super) fn duration_lines(minutes: i64, total: i64, fire: &str) -> (String, S
         String::new()
     };
     (subtitle, detail)
-}
-
-/// `printf '%q'` — bash's re-parseable quoting, which the script used for
-/// the message inside `omarchy reminder N …`: a plain word when it can be,
-/// backslashes for the metacharacters ("tea time" is `tea\ time`, not two
-/// arguments), `$'…'` once a control byte shows up. The escaped set is the
-/// one bash quotes: `#` and `~` only matter at the front, `,` and `!` count
-/// as metacharacters everywhere.
-fn shq(s: &str) -> String {
-    if s.is_empty() {
-        return "''".to_string();
-    }
-    if s.chars().any(|c| c.is_control()) {
-        let mut out = String::from("$'");
-        for ch in s.chars() {
-            match ch {
-                '\'' => out.push_str("\\'"),
-                '\\' => out.push_str("\\\\"),
-                '\x07' => out.push_str("\\a"),
-                '\x08' => out.push_str("\\b"),
-                '\t' => out.push_str("\\t"),
-                '\n' => out.push_str("\\n"),
-                '\x0b' => out.push_str("\\v"),
-                '\x0c' => out.push_str("\\f"),
-                '\r' => out.push_str("\\r"),
-                c if c.is_control() => {
-                    // bash writes what it cannot print as octal bytes
-                    let mut buf = [0u8; 4];
-                    for b in c.encode_utf8(&mut buf).as_bytes() {
-                        out.push_str(&format!("\\{b:03o}"));
-                    }
-                }
-                c => out.push(c),
-            }
-        }
-        out.push('\'');
-        return out;
-    }
-    let mut out = String::with_capacity(s.len());
-    for (i, ch) in s.chars().enumerate() {
-        let esc = match ch {
-            ' ' | '!' | '"' | '$' | '&' | '\'' | '(' | ')' | '*' | ',' | ';' | '<' | '>' | '?'
-            | '[' | '\\' | ']' | '^' | '`' | '{' | '|' | '}' => true,
-            '#' | '~' => i == 0,
-            _ => false,
-        };
-        if esc {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 /// The hero row: the message is the title, the exec arms the timer, and the

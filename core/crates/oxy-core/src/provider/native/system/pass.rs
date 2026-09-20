@@ -30,7 +30,7 @@ use std::time::Duration;
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::provider::native::util::on_path;
+use crate::provider::native::util::{on_path, shq};
 use crate::provider::process::run;
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::support::quote::quote;
@@ -54,58 +54,6 @@ fn store_dir() -> PathBuf {
         .filter(|v| !v.is_empty())
         .map(PathBuf::from)
         .unwrap_or_else(|| crate::settings::paths::home().join(".password-store"))
-}
-
-/// `printf '%q'` — bash's re-parseable quoting, which the script used to
-/// put a name inside the `oxy-pass copy` line: a plain word when it can
-/// be, backslashes for the metacharacters, `$'…'` once a control byte
-/// shows up. The escaped set is the one bash quotes: `#` and `~` only
-/// matter at the front, `,` and `!` count as metacharacters everywhere.
-/// (The same port `time::alarm` carries for `omarchy reminder`.)
-fn shq(s: &str) -> String {
-    if s.is_empty() {
-        return "''".to_string();
-    }
-    if s.chars().any(|c| c.is_control()) {
-        let mut out = String::from("$'");
-        for ch in s.chars() {
-            match ch {
-                '\'' => out.push_str("\\'"),
-                '\\' => out.push_str("\\\\"),
-                '\x07' => out.push_str("\\a"),
-                '\x08' => out.push_str("\\b"),
-                '\t' => out.push_str("\\t"),
-                '\n' => out.push_str("\\n"),
-                '\x0b' => out.push_str("\\v"),
-                '\x0c' => out.push_str("\\f"),
-                '\r' => out.push_str("\\r"),
-                c if c.is_control() => {
-                    // bash writes what it cannot print as octal bytes
-                    let mut buf = [0u8; 4];
-                    for b in c.encode_utf8(&mut buf).as_bytes() {
-                        out.push_str(&format!("\\{b:03o}"));
-                    }
-                }
-                c => out.push(c),
-            }
-        }
-        out.push('\'');
-        return out;
-    }
-    let mut out = String::with_capacity(s.len());
-    for (i, ch) in s.chars().enumerate() {
-        let esc = match ch {
-            ' ' | '!' | '"' | '$' | '&' | '\'' | '(' | ')' | '*' | ',' | ';' | '<' | '>' | '?'
-            | '[' | '\\' | ']' | '^' | '`' | '{' | '|' | '}' => true,
-            '#' | '~' => i == 0,
-            _ => false,
-        };
-        if esc {
-            out.push('\\');
-        }
-        out.push(ch);
-    }
-    out
 }
 
 /// The script's own needle check — `*"$needle"*` over the lowered name and
@@ -559,17 +507,6 @@ mod tests {
             row["actions"][1]["exec"],
             json!("printf %s 'it'\\''s deploy' | wl-copy")
         );
-    }
-
-    #[test]
-    fn shq_is_bashs_percent_q() {
-        assert_eq!(shq("github/work"), "github/work");
-        assert_eq!(shq("a b"), "a\\ b");
-        assert_eq!(shq("it's"), "it\\'s");
-        assert_eq!(shq("a#b"), "a#b");
-        assert_eq!(shq("#tag"), "\\#tag");
-        assert_eq!(shq(""), "''");
-        assert_eq!(shq("a\nb"), "$'a\\nb'");
     }
 
     #[test]

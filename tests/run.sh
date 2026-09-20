@@ -53,7 +53,7 @@ say "extension JSON + case shape"
 python3 - <<'PY' || bad "extension JSON or a cases file is malformed"
 import glob, json, sys
 bad = []
-CASE_KEYS = {"why": str, "query": str, "minRows": int, "maxRows": int,
+CASE_KEYS = {"why": str, "requires": str, "query": str, "minRows": int, "maxRows": int,
              "row": int, "view": str, "fields": list, "absent": list,
              "atMost": dict, "matches": dict}
 seen_ids, seen_kw = {}, {}

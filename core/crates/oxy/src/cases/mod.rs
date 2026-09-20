@@ -80,7 +80,18 @@ pub(crate) async fn run(only: Option<String>) -> i32 {
         }
 
         let mut problems = 0usize;
+        let mut skipped_cases = 0usize;
         for case in &cases {
+            // A case can name a probe the way a manifest names `when` — a
+            // window case needs a compositor, and asserting rows without one
+            // is not a failure, it is a case that cannot run here.
+            if let Some(requires) = case.get("requires").and_then(|r| r.as_str())
+                && !requires.trim().is_empty()
+                && !oxy_core::provider::process::check(requires).await
+            {
+                skipped_cases += 1;
+                continue;
+            }
             let query = case.get("query").and_then(|q| q.as_str()).unwrap_or("");
             let text = format!("{}:{query}", ext.keyword);
             // Results queued by the previous case are its answer, not this
@@ -134,11 +145,23 @@ pub(crate) async fn run(only: Option<String>) -> i32 {
                 }
             }
         }
-        if problems == 0 {
-            held += 1;
-            println!("ok   {} cases  {} held", ext.id, cases.len());
-        } else {
+        if problems > 0 {
             failed += problems;
+        } else if skipped_cases == cases.len() {
+            println!("skip {} cases (requires not met here)", ext.id);
+            skipped += 1;
+        } else {
+            held += 1;
+            let tail = if skipped_cases > 0 {
+                format!(", {skipped_cases} skipped")
+            } else {
+                String::new()
+            };
+            println!(
+                "ok   {} cases  {} held{tail}",
+                ext.id,
+                cases.len() - skipped_cases
+            );
         }
     }
     println!("{held} held, {failed} broke, {skipped} skipped");

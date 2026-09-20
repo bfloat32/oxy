@@ -419,6 +419,7 @@ A case is a query and a set of assertions about one row of the answer.
 | | |
 |---|---|
 | `why` | what this is protecting. Printed when it fails |
+| `requires` | a shell probe, like the manifest's `when`: the case is skipped where it fails |
 | `query` | the one argument the command is called with |
 | `minRows`, `maxRows` | how many rows the answer must have |
 | `row` | which row the rest of the case is about, default 0 |
@@ -433,6 +434,10 @@ Three things to know about the shape:
 - an assertion on a row is only checked when there is a row. Set `minRows`
   whenever you assert on one, or an extension that has gone completely silent
   passes every case you wrote.
+- a case that can only be true on some machines says so with `requires`:
+  `"requires": "command -v hyprctl"` is how the window cases skip on a box with
+  no compositor instead of failing there. The manifest's `when` is the
+  file-level version of the same idea.
 - `matches` takes a negative lookahead, which is how you say a field must not
   be something: `{ "zoneid": "^(?!UTC$)" }`.
 - `fields` and `absent` turn on emptiness, not on truth. A field is absent when

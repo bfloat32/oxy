@@ -286,8 +286,16 @@ def run_extension(ext_file: Path, env: dict, verbose: bool):
         return
 
     held = 0
+    skipped_here = 0
     problems = []
     for case in cases:
+        # A case can name a probe the way a manifest names `when`: a window
+        # case needs a compositor, and asserting rows on a machine without one
+        # is not a failure, it is a case that cannot run here.
+        requires = str(case.get("requires", "")).strip()
+        if requires and run(["bash", "-c", requires], env=env).returncode != 0:
+            skipped_here += 1
+            continue
         before = len(problems)
         query = str(case.get("query", ""))
         # MSYS rewrites a leading-slash argument into a Windows path; a
@@ -313,8 +321,11 @@ def run_extension(ext_file: Path, env: dict, verbose: bool):
             print(f"        {prob}")
             if why:
                 print(f"        ({why})")
+    elif held == 0 and skipped_here:
+        skip(f"{name} cases", "requires not met here")
     else:
-        ok(f"{name} cases  {held} held")
+        tail = f", {skipped_here} skipped" if skipped_here else ""
+        ok(f"{name} cases  {held} held{tail}")
 
 
 def main():

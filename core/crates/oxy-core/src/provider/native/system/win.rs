@@ -373,7 +373,7 @@ mod tests {
               "floating": true, "fullscreen": 0, "xwayland": true,
               "pinned": false, "grouped": [],
               "focusHistoryID": 2, "size": [640, 360], "at": [0, 0] },
-            { "address": "0xaaa", "class": "foot", "title": "~/projects/omacast",
+            { "address": "0xaaa", "class": "foot", "title": "~/projects/example",
               "mapped": true, "monitor": 0,
               "workspace": { "id": 1, "name": "1" },
               "floating": false, "fullscreen": 0, "xwayland": false,
@@ -435,7 +435,7 @@ mod tests {
         let bbb = rows.iter().find(|r| r["id"] == "0xbbb").unwrap();
         assert_eq!(bbb["title"], "firefox");
         let aaa = rows.iter().find(|r| r["id"] == "0xaaa").unwrap();
-        assert_eq!(aaa["title"], "~/projects/omacast");
+        assert_eq!(aaa["title"], "~/projects/example");
     }
 
     #[test]

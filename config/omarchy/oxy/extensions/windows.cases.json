@@ -1,5 +1,6 @@
 [
   { "why": "every mapped window answers, drawn as the windows view with the session facts on the row",
+    "requires": "command -v hyprctl",
     "query": "", "minRows": 1, "view": "windows",
     "fields": ["title", "wsName", "focused", "floating", "special", "session", "exec"],
     "matches": { "id": "^0x[0-9a-f]+$",
@@ -7,6 +8,7 @@
                  "session": "'windows': [0-9]+.*'monitors': [0-9]+" } },
 
   { "why": "focus goes through the Lua dispatcher — dispatch focuswindow returns ok and does nothing under a Lua config",
+    "requires": "command -v hyprctl",
     "query": "", "minRows": 1,
     "fields": ["actions"],
     "atMost": { "actions": 3 },

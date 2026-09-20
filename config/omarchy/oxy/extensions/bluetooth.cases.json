@@ -1,0 +1,16 @@
+[
+  { "why": "the keyword answers in the radios view whatever the adapter state — the off card and the on strip both carry the same radio fields",
+    "query": "", "minRows": 1, "view": "radios",
+    "fields": ["title"],
+    "matches": { "radioLabel": "^Bluetooth$", "kind": "^(radio|device)$" } },
+
+  { "why": "asking for the radio by name still lands in the same view",
+    "query": "bluetooth", "view": "radios",
+    "fields": ["title"],
+    "matches": { "radioLabel": "^Bluetooth$" } },
+
+  { "why": "the top row always has something real to run — the radio's power call or a device verb",
+    "query": "", "view": "radios",
+    "fields": ["title", "exec"],
+    "matches": { "exec": "^omarchy-bluetooth-(power|device) " } }
+]

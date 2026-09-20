@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
+use super::emoji_data::{DEFAULTS, intents};
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::support::quote::quote;
 
@@ -70,132 +71,6 @@ fn data_path() -> PathBuf {
 }
 
 const KEEP_RECENT: usize = 24;
-
-/// What the picker opens with: intentions resolved through the same matcher
-/// a typed search uses, so a renamed codepoint still lands.
-const DEFAULTS: &[&str] = &[
-    "red heart",
-    "thumbs up",
-    "fire",
-    "tada",
-    "rocket",
-    "check mark button",
-    "cross mark",
-    "warning",
-    "pray",
-    "clap",
-    "wave",
-    "hundred",
-    "thinking",
-    "sparkles",
-    "star",
-    "bulb",
-    "bug",
-    "wrench",
-    "laptop",
-    "calendar",
-    "coffee",
-    "pizza",
-    "brain",
-    "muscle",
-    "rainbow",
-    "robot",
-    "ghost",
-    "skull",
-    "eyes",
-    "face with tears of joy",
-    "sob",
-    "smiling face with sunglasses",
-    "heart_eyes",
-    "grin",
-    "ok hand",
-    "shrug",
-];
-
-/// What a person types when they are after a feeling rather than a name —
-/// each entry is a list of names to put in front of whatever the search
-/// itself turns up.
-fn intents(query: &str) -> &'static [&'static str] {
-    match query {
-        "love" => &["red heart", "smiling face with hearts", "heart hands"],
-        "heart" | "hearts" => &["red heart"],
-        "smile" => &["slightly smiling face", "grinning face with smiling eyes"],
-        "happy" => &["grinning face", "smiling face with smiling eyes blush"],
-        "joy" => &["face with tears of joy", "grinning face"],
-        "sad" => &["crying face", "pensive"],
-        "cry" => &["crying face", "loudly crying"],
-        "crying laughing" | "laughing crying" => {
-            &["face with tears of joy", "rolling on the floor laughing"]
-        }
-        "lol" | "lmao" => &["rolling on the floor laughing"],
-        "laugh" => &["face with tears of joy", "grinning squinting face"],
-        "party" => &["party popper", "partying face", "confetti ball"],
-        "congrats" | "congratulations" | "celebrate" => {
-            &["party popper", "clinking glasses", "trophy"]
-        }
-        "celebration" => &["party popper", "partying face"],
-        "thanks" => &["folded hands", "pray"],
-        "thank you" => &["folded hands", "pray"],
-        "ty" | "thx" => &["folded hands"],
-        "please" => &["folded hands", "pleading"],
-        "sorry" => &["pleading", "folded hands"],
-        "yes" => &["check mark button", "thumbs up"],
-        "no" => &["cross mark", "thumbs down"],
-        "nope" => &["cross mark", "thumbs down"],
-        "x" => &["cross mark"],
-        "i love you" => &["love-you gesture", "red heart"],
-        "ily" => &["love-you gesture"],
-        "snow" => &["snowflake", "snowman"],
-        "wrong" => &["cross mark"],
-        "tick" => &["check mark button"],
-        "done" => &["check mark button"],
-        "good" => &["thumbs up"],
-        "bad" => &["thumbs down"],
-        "lgtm" => &["thumbs up"],
-        "brasil" => &["brazil"],
-        "usa" | "america" => &["flag us united america"],
-        "idea" => &["light bulb"],
-        "wow" => &["astonished"],
-        "shocked" => &["astonished", "face screaming in fear"],
-        "surprised" => &["astonished"],
-        "scared" => &["fearful"],
-        "tired" => &["sleepy", "yawning"],
-        "bored" => &["expressionless", "unamused"],
-        "meh" => &["neutral face", "unamused"],
-        "annoyed" => &["unamused", "rolling eyes"],
-        "eyeroll" => &["rolling eyes"],
-        "cringe" => &["grimacing"],
-        "oops" => &["grimacing"],
-        "angry" => &["angry face", "pouting face"],
-        "mad" => &["angry face", "pouting face"],
-        "cheers" => &["clinking glasses", "clinking beer mugs"],
-        "hi" | "hello" => &["waving hand"],
-        "bye" => &["waving hand"],
-        "winner" => &["trophy", "1st place medal"],
-        "ship" | "shipit" => &["rocket"],
-        "deploy" | "launch" => &["rocket"],
-        "lit" => &["fire"],
-        "confused" => &["confused face", "thinking face"],
-        "strong" => &["flexed biceps"],
-        "deal" => &["handshake"],
-        "agree" => &["handshake", "thumbs up"],
-        "money" => &["money bag", "dollar banknote"],
-        "work" => &["briefcase"],
-        "code" => &["laptop", "technologist"],
-        "broken" => &["collision", "hammer"],
-        "deadline" => &["alarm clock"],
-        "night" => &["crescent moon"],
-        "morning" => &["sunrise"],
-        "food" => &["fork and knife", "pizza"],
-        "drunk" => &["clinking beer mugs", "beer mug"],
-        "dead" => &["skull"],
-        "cool" => &["smiling face with sunglasses"],
-        "nice" => &["smiling face with sunglasses", "ok hand"],
-        "up" => &["thumbs up", "up arrow"],
-        "down" => &["thumbs down", "down arrow"],
-        _ => &[],
-    }
-}
 
 /// One data entry, prepared once: the character, its keyword string with
 /// underscores already read as spaces, and the words of it.

@@ -9,6 +9,7 @@
   "subtitle": "SSH",
   "glyph": "",
   "search": "oxy-ssh {query}",
+  "native": "ssh",
   "when": "test -f \"$HOME/.ssh/config\"",
   "minChars": 0,
   "debounceMs": 60,

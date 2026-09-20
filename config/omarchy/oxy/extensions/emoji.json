@@ -11,6 +11,7 @@
   "subtitle": "Emoji",
   "glyph": "",
   "search": "oxy-emoji {query}",
+  "native": "emoji",
   "when": "test -f /usr/share/omarchy/shell/plugins/emojis/emojis.json",
   "minChars": 0,
   "debounceMs": 100,

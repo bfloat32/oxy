@@ -10,9 +10,12 @@ pub mod apps;
 pub mod calc;
 pub mod calendar;
 pub mod commands;
+pub mod emoji;
 pub mod file;
 pub mod kill;
 pub mod quicklinks;
+pub mod recent;
+pub mod ssh;
 pub mod sys;
 pub mod web;
 
@@ -27,9 +30,12 @@ pub fn construct(name: &str) -> Option<Box<dyn NativeExt>> {
         "calc" => Some(Box::new(calc::Calc::new())),
         "cal" | "calendar" => Some(Box::new(calendar::Cal::new())),
         "commands" | "run" => Some(Box::new(commands::Commands)),
+        "emoji" => Some(Box::new(emoji::Emoji)),
         "file" | "files" => Some(Box::new(file::Files)),
         "kill" | "ps" => Some(Box::new(kill::Kill::new())),
         "quicklinks" => Some(Box::new(quicklinks::Quicklinks)),
+        "recent" => Some(Box::new(recent::Recent)),
+        "ssh" => Some(Box::new(ssh::Ssh)),
         "sys" | "system" => Some(Box::new(sys::Sys::new())),
         "web" => Some(Box::new(web::Web)),
         _ => None,

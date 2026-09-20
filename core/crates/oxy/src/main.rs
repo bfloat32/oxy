@@ -376,7 +376,7 @@ async fn test_cases(only: Option<String>) -> i32 {
                     rows = r
                         .iter()
                         .filter(|row| row.provider_id == ext.id)
-                        .map(|row| serde_json::to_value(row).unwrap_or(Value::Null))
+                        .map(|row| case_view(row, &ext.id))
                         .collect();
                     if !waiting.contains(&ext.id) {
                         break;
@@ -423,6 +423,33 @@ async fn case_preflight(id: &str) -> bool {
         _ => return true,
     };
     oxy_core::provider::process::check(probe).await
+}
+
+/// The row a case asserts on: the serialized wire row, plus the names the
+/// fixtures were written against. The wire carries `iconGlyph` and a `key`
+/// of `ext:<id>:<row-id>`; the scripts that own the cases say `glyph` and
+/// `id` — so those names are mapped back here rather than the cases being
+/// rewritten for the wire's spelling.
+fn case_view(row: &oxy_core::row::Row, ext_id: &str) -> Value {
+    let mut v = serde_json::to_value(row).unwrap_or(Value::Null);
+    let Some(obj) = v.as_object_mut() else {
+        return v;
+    };
+    let prefix = format!("ext:{ext_id}:");
+    if let Some(id) = row.key.strip_prefix(&prefix) {
+        obj.insert("id".into(), json!(id));
+    }
+    if !obj.contains_key("glyph") {
+        if let Some(g) = obj.get("iconGlyph").cloned() {
+            obj.insert("glyph".into(), g);
+        }
+    }
+    if !obj.contains_key("icon") {
+        if let Some(i) = obj.get("iconSource").cloned() {
+            obj.insert("icon".into(), i);
+        }
+    }
+    v
 }
 
 /// A field is absent when missing, "", [] or {}. 0 and false are real.

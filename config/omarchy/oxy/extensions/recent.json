@@ -10,6 +10,7 @@
   "subtitle": "Recent",
   "glyph": "",
   "search": "oxy-recent {query}",
+  "native": "recent",
   "when": "test -f \"$HOME/.local/share/recently-used.xbel\"",
   "minChars": 0,
   "debounceMs": 120,

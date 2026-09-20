@@ -26,6 +26,7 @@ prints the events that come back.
 {"op": "savesettings", "id": "spotify", "values": {"token": "…"}}
 {"op": "ask",   "text": "why is the sky blue"}
 {"op": "stopask"}
+{"op": "clipboard", "url": "https://…"}   // a URL the frontend already knows
 {"op": "reload"}
 {"op": "log",   "ev": "open", "fields": {"q": "fire"}}
 {"op": "ping"}

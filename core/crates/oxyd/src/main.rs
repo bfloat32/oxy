@@ -181,11 +181,26 @@ async fn main() {
             std::process::exit(1);
         }
     };
-    // A stale socket file from a dead daemon is replaced, not mourned.
-    #[cfg(unix)]
+    // One daemon owns the address. A file left by a dead one is replaced; a
+    // socket a live daemon is answering on is not — two frontends spawning at
+    // once, or a hand-run oxyd beside a running one, would otherwise split
+    // the state in two and orphan whichever daemon bound first.
     {
-        let _ = std::fs::remove_file(dirs::socket_name());
+        use interprocess::local_socket::tokio::Stream;
+        let live = tokio::time::timeout(
+            std::time::Duration::from_millis(800),
+            Stream::connect(name.clone()),
+        )
+        .await
+        .map(|r| r.is_ok())
+        .unwrap_or(false);
+        if live {
+            eprintln!("oxyd: already running on {}", dirs::socket_name());
+            return;
+        }
     }
+    #[cfg(unix)]
+    let _ = std::fs::remove_file(dirs::socket_name());
     let listener = match ListenerOptions::new().name(name).create_tokio() {
         Ok(l) => l,
         Err(e) => {
@@ -313,9 +328,16 @@ async fn serve_with<R, W>(
                 }
             }
             event = events.recv() => {
-                let Ok(event) = event else { continue };
-                if writer.write_all(event.as_bytes()).await.is_err() {
-                    return;
+                match event {
+                    // A slow client skips what it missed; a closed channel
+                    // means the engine is gone and there is nothing to serve.
+                    Ok(event) => {
+                        if writer.write_all(event.as_bytes()).await.is_err() {
+                            return;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => return,
                 }
             }
         }

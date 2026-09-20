@@ -1048,6 +1048,7 @@ impl Engine {
         // A normal row: record, preview-commit, run, close.
         self.remember(&row);
         self.remember_query();
+        self.remember_mru(&row.extra);
         self.emit_log(
             "act",
             json!({ "ep": self.epoch, "id": row.key, "src": row.provider_id, "t": row.title }),
@@ -1184,6 +1185,7 @@ impl Engine {
 
         self.remember(row);
         self.remember_query();
+        self.remember_mru(&action.extra);
 
         if let Some(row_key) = action.extra.get("row").and_then(|v| v.as_str()) {
             // A self-reference: activate the row it names.
@@ -1487,6 +1489,28 @@ impl Engine {
         }
         state::frecency_record(&mut self.state.frecency, &row.key, now_ms(), &self.raw);
         self.save_state();
+    }
+
+    /// A provider-declared recency write: `"remember": {"file", "value"}`
+    /// on the row or the action. Runs before the exec it rides with, the way
+    /// `oxy-emoji --used` ran before the copy.
+    fn remember_mru(&self, extra: &serde_json::Map<String, Value>) {
+        let Some(r) = extra.get("remember").and_then(|v| v.as_object()) else {
+            return;
+        };
+        let (Some(file), Some(value)) = (
+            r.get("file").and_then(|v| v.as_str()),
+            r.get("value").and_then(|v| v.as_str()),
+        ) else {
+            return;
+        };
+        let keep = r.get("keep").and_then(|v| v.as_u64()).unwrap_or(24) as usize;
+        let dir = self
+            .state_path
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| crate::dirs::state_home().join("omarchy"));
+        state::mru_record(&dir, file, value, keep);
     }
 
     /// The question, not the answer.

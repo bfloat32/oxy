@@ -288,6 +288,13 @@ here. A `query` on the first action takes over `Enter` on the row itself.
 A row may also carry `fill`: `Enter` types that text into the box and runs
 nothing. It wins over everything else on the row.
 
+On the Rust daemon a row or an action may carry `remember`:
+`{"file": "emoji-recent", "value": "😂"}` asks the engine to put `value` at
+the top of `~/.local/state/omarchy/oxy-<file>` — newest first, duplicates
+kept once, `keep` (default 24) lines retained — before the `exec` it rides
+with runs. It is how a picker keeps its own "recently used" list without a
+helper command having to exist on `PATH`.
+
 ### Rows that keep the launcher open
 
 Three fields decide what the two keys that always mean something do.

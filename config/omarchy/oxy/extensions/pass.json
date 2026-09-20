@@ -16,5 +16,6 @@
   "timeoutMs": 8000,
   "maxRows": 20,
   "tier": "prefix",
-  "view": "vault"
+  "view": "vault",
+  "native": "pass"
 }

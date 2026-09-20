@@ -56,6 +56,8 @@ pub struct Engine {
     worker_tx: mpsc::Sender<WorkerMsg>,
 
     state: State,
+    /// Which model answered, how often — the ledger `/stats` reports.
+    usage: crate::state::usage::Usage,
     state_path: std::path::PathBuf,
     frecency_path: std::path::PathBuf,
 
@@ -100,6 +102,10 @@ pub struct Engine {
     clipboard_url: Option<String>,
     /// The in-flight `ask` stream; a new question or a close kills it.
     ask_task: Option<tokio::task::JoinHandle<()>>,
+    /// A question typed while one was still being answered. It starts when
+    /// the current stream ends: cancelling to restart loses the answer that
+    /// was already arriving, which is what "soft interrupt" is about.
+    ask_pending: Option<String>,
     /// The first `askProviders` entry whose `when` answered — probed once
     /// per settings load, the way `checkAsk` ran once per config load.
     ask_provider: Option<crate::settings::AskProvider>,
@@ -168,6 +174,7 @@ impl Engine {
         *shared.registry.write().await = Arc::new(extensions.clone());
         let extensions = Arc::new(extensions);
 
+        let (usage, usage_moved) = crate::state::usage::load(&crate::settings::paths::usage_file());
         let (state, state_moved) = State::load(
             &crate::settings::paths::frecency_file(),
             &crate::settings::paths::state_file(),
@@ -178,6 +185,14 @@ impl Engine {
             let _ = evt_tx
                 .send(EngineEvent::Log {
                     ev: "state.recovered".into(),
+                    fields: json!({ "f": path.to_string_lossy() }),
+                })
+                .await;
+        }
+        for path in usage_moved {
+            let _ = evt_tx
+                .send(EngineEvent::Log {
+                    ev: "usage.recovered".into(),
                     fields: json!({ "f": path.to_string_lossy() }),
                 })
                 .await;
@@ -202,6 +217,7 @@ impl Engine {
             native_for: Box::new(native_for),
             worker_tx,
             state,
+            usage,
             state_path: crate::settings::paths::state_file(),
             frecency_path: crate::settings::paths::frecency_file(),
             epoch: 0,
@@ -220,6 +236,7 @@ impl Engine {
             preview_revert: String::new(),
             clipboard_url: None,
             ask_task: None,
+            ask_pending: None,
             ask_provider: None,
             llm: None,
             ask_probed: false,

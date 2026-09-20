@@ -149,6 +149,23 @@ impl Engine {
                 self.emit_log(ev, Value::Object(f)).await;
                 false
             }
+            WorkerMsg::AskDone { model } => {
+                // The task is over, so the handle it left behind is stale —
+                // clearing it here is what lets the *next* question start
+                // instead of queueing behind a stream that already ended.
+                self.ask_task = None;
+                // One completed turn on this model. The ledger counts turns,
+                // the way jcode's does — never "was it useful", which we
+                // cannot know from here.
+                self.usage.record(&model, now_ms());
+                state::usage::save(&crate::settings::paths::usage_file(), &self.usage);
+                // A question typed while this one was being answered starts
+                // now: the point of queueing it rather than cancelling.
+                if let Some(next) = self.ask_pending.take() {
+                    self.on_ask(&next).await;
+                }
+                false
+            }
         }
     }
 

@@ -114,6 +114,8 @@ fn bare_engine() -> Engine {
         preview_revert: String::new(),
         clipboard_url: None,
         ask_task: None,
+        ask_pending: None,
+        usage: crate::state::usage::Usage::default(),
         ask_provider: None,
         llm: None,
         ask_probed: true,

@@ -6,6 +6,7 @@ use serde_json::json;
 
 use super::{Engine, EngineEvent};
 use crate::provider::llm::Local;
+use crate::provider::worker::WorkerMsg;
 
 impl Engine {
     // ----------------------------------------------------------------- ask
@@ -15,10 +16,18 @@ impl Engine {
     /// entry whose `when` answers is run with the question, and its stdout
     /// streams back the same way.
     pub(super) async fn on_ask(&mut self, question: &str) {
-        self.stop_ask();
         if question.trim().is_empty() {
             return;
         }
+        // A turn is already streaming: keep this question for the moment it
+        // ends rather than cancelling it — the answer that was already
+        // arriving is the thing worth keeping. Escape, and `stopask`, still
+        // cancel on purpose.
+        if self.ask_task.is_some() {
+            self.ask_pending = Some(question.to_string());
+            return;
+        }
+        self.stop_ask();
 
         // The probe ran at registry emit, once per settings load — a wrong
         // guess costs more than a hundred milliseconds, but probing on every
@@ -26,9 +35,17 @@ impl Engine {
         if !self.ask_probed {
             self.probe_ask().await;
         }
+        // A local endpoint that is not listening at all falls back to the CLI
+        // list; one that answers badly does not — its error belongs in the
+        // card, not hidden behind a second provider's answer. The probe is
+        // bounded (250ms) and only runs when an endpoint is configured.
+        let mut fell_back = None;
         if let Some(llm) = self.llm.clone() {
-            self.ask_local(llm, question).await;
-            return;
+            if llm.probe().await || !self.probe_cli_ask().await {
+                self.ask_local(llm, question).await;
+                return;
+            }
+            fell_back = Some(format!("nothing is listening on {}", llm.url.authority()));
         }
         let spec = self.ask_provider.clone();
 
@@ -45,6 +62,14 @@ impl Engine {
             .await;
             return;
         };
+        // After the start, which clears the card: the line has to survive the
+        // reset to be worth saying.
+        if let Some(why) = fell_back {
+            self.emit(EngineEvent::Answer {
+                line: format!("· {why} — {} answers instead", spec.title),
+            })
+            .await;
+        }
 
         let command = spec
             .command
@@ -62,6 +87,8 @@ impl Engine {
         };
 
         let evt = self.evt_tx.clone();
+        let worker_tx = self.worker_tx.clone();
+        let title = spec.title.clone();
         self.ask_task = Some(tokio::spawn(async move {
             use tokio::io::AsyncBufReadExt;
             let mut answered = false;
@@ -83,6 +110,9 @@ impl Engine {
                 String::new()
             };
             let _ = evt.send(EngineEvent::AnswerDone { error }).await;
+            // The engine counts the turn and starts whatever was typed while
+            // this one was talking.
+            let _ = worker_tx.send(WorkerMsg::AskDone { model: title }).await;
         }));
     }
 
@@ -106,8 +136,10 @@ impl Engine {
         })
         .await;
 
+        let title = llm.title();
         let mut pieces = crate::provider::llm::turn::spawn(llm, Vec::new(), question.to_string());
         let evt = self.evt_tx.clone();
+        let worker_tx = self.worker_tx.clone();
         self.ask_task = Some(tokio::spawn(async move {
             // Deltas are buffered into whole lines because the wire's `answer`
             // event is one line per event — the card appends a newline
@@ -158,7 +190,24 @@ impl Engine {
             // An error after some text is reported, not thrown away: the card
             // keeps what arrived and shows why it stopped.
             let _ = evt.send(EngineEvent::AnswerDone { error }).await;
+            let _ = worker_tx.send(WorkerMsg::AskDone { model: title }).await;
         }));
+    }
+
+    /// The CLI list, probed lazily — for a fallback, not at load. A machine
+    /// with an endpoint configured pays nothing until the endpoint is found
+    /// missing, and then pays it once.
+    async fn probe_cli_ask(&mut self) -> bool {
+        if self.ask_provider.is_some() {
+            return true;
+        }
+        for provider in self.settings.ask_ordered() {
+            if provider.when.is_empty() || crate::provider::process::check(&provider.when).await {
+                self.ask_provider = Some(provider.clone());
+                return true;
+            }
+        }
+        false
     }
 
     /// The first `askProviders` entry whose `when` answers, in list order —
@@ -189,10 +238,17 @@ impl Engine {
         if !self.ask_probed {
             self.probe_ask().await;
         }
+        // `hint` is what the footer says when nothing is configured: the
+        // absence of a provider is a fact, and the useful half of it is what
+        // to do about it.
         let ask = match (&self.llm, &self.ask_provider) {
-            (Some(local), _) => json!({ "available": true, "model": local.title() }),
-            (None, Some(p)) => json!({ "available": true, "model": p.title }),
-            (None, None) => json!({ "available": false, "model": "" }),
+            (Some(local), _) => json!({ "available": true, "model": local.title(), "hint": "" }),
+            (None, Some(p)) => json!({ "available": true, "model": p.title, "hint": "" }),
+            (None, None) => json!({
+                "available": false,
+                "model": "",
+                "hint": "set ask.endpoint in oxy.json, or install claude, codex, gemini or ollama",
+            }),
         };
         self.emit(EngineEvent::Registry {
             extensions: self

@@ -70,6 +70,13 @@ pub enum WorkerMsg {
         ev: String,
         fields: Value,
     },
+    /// A streamed answer finished, and this is what answered. Not a worker
+    /// message in the provider sense — the ask stream and the engine share
+    /// this channel because it is the one the engine already selects on, and
+    /// the two things the engine does with it (count the turn, start the
+    /// question that was typed while this one was talking) both belong to the
+    /// engine rather than to the task.
+    AskDone { model: String },
 }
 
 /// What the registry-wide `Shared` holds — the parts of one launcher that

@@ -66,6 +66,11 @@ pub fn log_file() -> PathBuf {
     state_home().join("omarchy/oxy-log.jsonl")
 }
 
+/// The model ledger: which backend answered, how often, when last.
+pub fn usage_file() -> PathBuf {
+    state_home().join("omarchy/oxy-model-usage.json")
+}
+
 /// The address the daemon listens on and the frontend connects to.
 ///
 /// A filesystem socket on Unix (`$XDG_RUNTIME_DIR/oxyd.sock`, falling back to

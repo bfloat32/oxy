@@ -85,6 +85,9 @@ Item {
   // process; this owns the card.
   property bool answerMode: false
   property bool answerAvailable: false
+  // What to do about there being no ask provider — the registry's own words,
+  // shown where the hint would be if there were one.
+  property string answerHint: ""
   property bool answerStreaming: false
   property string answerText: ""
   property string answerQuestion: ""
@@ -251,6 +254,7 @@ Item {
       var ask = ev.ask || {}
       root.answerAvailable = ask.available === true
       root.answerModel = String(ask.model || "")
+      root.answerHint = String(ask.hint || "")
       return
     case "close": return root.dismiss()
     case "answerstart":
@@ -1278,6 +1282,8 @@ Item {
               parts.push("⇧↵  " + second)
             }
             if (root.answerAvailable && input.text.trim() !== "") parts.push("⌃↵  Ask " + root.answerModel)
+            // Nothing configured is worth saying once, with the way out.
+            else if (!root.answerAvailable && root.answerHint !== "") parts.push(root.answerHint)
             if (actions.length > 1) parts.push("⌃K  Actions")
             return parts.join("     ")
           }

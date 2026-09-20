@@ -7,6 +7,7 @@ mod frecency;
 mod mru;
 mod pins;
 mod recents;
+pub mod usage;
 
 use std::path::Path;
 
@@ -16,6 +17,7 @@ pub use frecency::*;
 pub use mru::*;
 pub use pins::*;
 pub use recents::*;
+pub use usage::*;
 
 // ------------------------------------------------------------ persistence
 

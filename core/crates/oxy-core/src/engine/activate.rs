@@ -233,16 +233,20 @@ impl Engine {
             "stats" => {
                 let cached = self.shared.cache.lock().unwrap().entries();
                 let checks = self.shared.availability.lock().unwrap().stats();
-                self.emit(EngineEvent::Notice {
-                    text: format!(
-                        "{} extensions · {} answers cached · {} checks, {} ok",
-                        self.extensions.len(),
-                        cached,
-                        checks.0,
-                        checks.1
-                    ),
-                })
-                .await;
+                let usage = self.usage.summary();
+                let mut text = format!(
+                    "{} extensions · {} answers cached · {} checks, {} ok",
+                    self.extensions.len(),
+                    cached,
+                    checks.0,
+                    checks.1
+                );
+                // Which model answers, and how often — absent until a turn
+                // has finished, rather than a zero that means nothing.
+                if !usage.is_empty() {
+                    text.push_str(&format!(" · ask: {usage}"));
+                }
+                self.emit(EngineEvent::Notice { text }).await;
                 return;
             }
             _ => {}

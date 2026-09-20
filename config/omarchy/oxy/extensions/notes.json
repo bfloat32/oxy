@@ -14,5 +14,6 @@
   "debounceMs": 120,
   "maxRows": 14,
   "tier": "substring",
-  "view": "notes"
+  "view": "notes",
+  "native": "note"
 }

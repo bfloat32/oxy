@@ -1,0 +1,26 @@
+[
+  { "why": "a bare herdr: always answers — agents and workspaces, or the offline card",
+    "requires": "command -v herdr",
+    "query": "", "minRows": 1, "view": "herdr",
+    "fields": ["title", "subtitle", "exec"],
+    "matches": { "exec": "^(oxy-herdr --focus |omarchy-launch-tui )" } },
+
+  { "why": "every row id is scoped under herdr: — the herdr:offline card included",
+    "requires": "command -v herdr",
+    "query": "", "minRows": 1,
+    "matches": { "id": "^herdr:" } },
+
+  { "why": "scores stay inside the extension's own band however many agents answer",
+    "requires": "command -v herdr",
+    "query": "", "minRows": 1,
+    "matches": { "score": "^[0-9]+$" } },
+
+  { "why": "a query that names nothing narrows to one row or none — the offline card still answers",
+    "requires": "command -v herdr",
+    "query": "zzz-no-agent-named-this-zzz", "maxRows": 1, "fields": [] },
+
+  { "why": "go-to plus Copy Pane ID is the whole action set — the offline card has none",
+    "requires": "command -v herdr",
+    "query": "", "minRows": 1,
+    "atMost": { "actions": 2 } }
+]

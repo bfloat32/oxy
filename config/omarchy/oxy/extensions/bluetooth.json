@@ -14,5 +14,6 @@
   "timeoutMs": 6000,
   "maxRows": 20,
   "tier": "prefix",
-  "view": "radios"
+  "view": "radios",
+  "native": "bt"
 }

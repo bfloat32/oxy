@@ -4,6 +4,8 @@
 pub mod clipboard;
 pub mod file;
 pub mod kill;
+mod kill_windows;
 pub mod recent;
 pub mod ssh;
+mod ssh_config;
 pub mod sys;

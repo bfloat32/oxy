@@ -1,0 +1,13 @@
+[
+  { "why": "whatever the air holds, the answer is the radios view — the strip when the radio is on, the off row when it is not",
+    "query": "", "minRows": 1, "view": "radios",
+    "fields": ["title", "kind", "radioOn", "radioLabel", "exec", "actions"],
+    "matches": { "radioLabel": "^Wi-Fi$" } },
+
+  { "why": "the radio word lands on the strip whether the radio is on or off",
+    "query": "rescan", "minRows": 1, "view": "radios",
+    "matches": { "kind": "^radio$", "title": "^Wi-Fi is (on|off)$" } },
+
+  { "why": "a name nothing carries is a real empty answer, not an error",
+    "query": "zzz-no-such-ssid-xyz", "maxRows": 0, "fields": [] }
+]

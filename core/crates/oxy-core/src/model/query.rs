@@ -42,7 +42,10 @@ fn looks_like_path(rest: &str) -> bool {
 fn filter_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r#"([a-z][a-z0-9_-]*):(?:"([^"]*)"|'([^']*)'|(\S*))"#)
+        // `(?i)` is the script's `/i`: `FILE:x` is a filter, and the key is
+        // lowercased after the match. Without it an upper-case keyword is
+        // read as plain text and the provider it named never hears about it.
+        Regex::new(r#"(?i)([a-z][a-z0-9_-]*):(?:"([^"]*)"|'([^']*)'|(\S*))"#)
             .expect("filter regex compiles")
     })
 }
@@ -188,6 +191,108 @@ mod tests {
             .iter()
             .map(|s| s.to_string())
             .collect()
+    }
+
+    /// The port checked against the build it is a port of: every field below
+    /// was produced by running `plugin/Query.js` under node over the same raw
+    /// strings and the same registered keywords. A failure means the two
+    /// parsers disagree about what a keystroke means.
+    #[test]
+    fn parsing_matches_the_script() {
+        struct Case {
+            raw: &'static str,
+            text: &'static str,
+            scope: &'static str,
+            empty: bool,
+            filters: &'static [(&'static str, &'static str)],
+            arg_file: &'static str,
+            extras_file: &'static [(&'static str, &'static str)],
+            routes_file: bool,
+            routes_apps: bool,
+        }
+        let known: HashSet<String> = [
+            "calc", "run", "web", "command", "files", "file", "apps", "app", "win", "windows",
+            "git", "tz", "timezone", "format", "in", "type", "music", "sp", "emoji",
+        ]
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+        let aliases_file = vec!["files".to_string()];
+        let aliases_apps = vec!["app".to_string()];
+
+        #[rustfmt::skip]
+        let cases: &[Case] = &[
+            Case { raw: "", text: "", scope: "", empty: true, filters: &[], arg_file: "", extras_file: &[], routes_file: true, routes_apps: true },
+            Case { raw: "   ", text: "", scope: "", empty: true, filters: &[], arg_file: "", extras_file: &[], routes_file: true, routes_apps: true },
+            Case { raw: "firefox", text: "firefox", scope: "", empty: false, filters: &[], arg_file: "firefox", extras_file: &[], routes_file: true, routes_apps: true },
+            Case { raw: "file:report.pdf", text: "", scope: "file", empty: false, filters: &[("file", "report.pdf")], arg_file: "report.pdf", extras_file: &[], routes_file: true, routes_apps: false },
+            Case { raw: "file:", text: "", scope: "file", empty: false, filters: &[("file", "")], arg_file: "", extras_file: &[], routes_file: true, routes_apps: false },
+            Case { raw: "file:report budget", text: "budget", scope: "file", empty: false, filters: &[("file", "report")], arg_file: "report budget", extras_file: &[], routes_file: true, routes_apps: false },
+            Case { raw: "music:\"kind of blue\" jazz", text: "jazz", scope: "music", empty: false, filters: &[("music", "kind of blue")], arg_file: "jazz", extras_file: &[("music", "kind of blue")], routes_file: false, routes_apps: false },
+            Case { raw: "music:'single quoted' tail", text: "tail", scope: "music", empty: false, filters: &[("music", "single quoted")], arg_file: "tail", extras_file: &[("music", "single quoted")], routes_file: false, routes_apps: false },
+            Case { raw: "=2+2", text: "", scope: "calc", empty: false, filters: &[("calc", "2+2")], arg_file: "", extras_file: &[("calc", "2+2")], routes_file: false, routes_apps: false },
+            Case { raw: ">lock", text: "", scope: "run", empty: false, filters: &[("run", "lock")], arg_file: "", extras_file: &[("run", "lock")], routes_file: false, routes_apps: false },
+            Case { raw: "?how to", text: "", scope: "web", empty: false, filters: &[("web", "how to")], arg_file: "", extras_file: &[("web", "how to")], routes_file: false, routes_apps: false },
+            Case { raw: "/etc", text: "", scope: "command", empty: false, filters: &[("command", "etc")], arg_file: "", extras_file: &[("command", "etc")], routes_file: false, routes_apps: false },
+            Case { raw: "/etc/passwd", text: "", scope: "file", empty: false, filters: &[("file", "etc/passwd")], arg_file: "etc/passwd", extras_file: &[], routes_file: true, routes_apps: false },
+            Case { raw: "/ls", text: "", scope: "command", empty: false, filters: &[("command", "ls")], arg_file: "", extras_file: &[("command", "ls")], routes_file: false, routes_apps: false },
+            Case { raw: "/path/with/slash", text: "", scope: "file", empty: false, filters: &[("file", "path/with/slash")], arg_file: "path/with/slash", extras_file: &[], routes_file: true, routes_apps: false },
+            Case { raw: "~/notes", text: "~/notes", scope: "", empty: false, filters: &[], arg_file: "~/notes", extras_file: &[], routes_file: true, routes_apps: true },
+            Case { raw: "win:", text: "", scope: "win", empty: false, filters: &[("win", "")], arg_file: "", extras_file: &[("win", "")], routes_file: false, routes_apps: false },
+            Case { raw: "anything:x", text: "anything:x", scope: "", empty: false, filters: &[], arg_file: "anything:x", extras_file: &[], routes_file: true, routes_apps: true },
+            Case { raw: "https://example.com", text: "https://example.com", scope: "", empty: false, filters: &[], arg_file: "https://example.com", extras_file: &[], routes_file: true, routes_apps: true },
+            Case { raw: "git:omarchy commit", text: "commit", scope: "git", empty: false, filters: &[("git", "omarchy")], arg_file: "commit", extras_file: &[("git", "omarchy")], routes_file: false, routes_apps: false },
+            Case { raw: "FILE:x", text: "", scope: "file", empty: false, filters: &[("file", "x")], arg_file: "x", extras_file: &[], routes_file: true, routes_apps: false },
+            Case { raw: "File:x", text: "", scope: "file", empty: false, filters: &[("file", "x")], arg_file: "x", extras_file: &[], routes_file: true, routes_apps: false },
+            Case { raw: "file:report format:pdf", text: "", scope: "file", empty: false, filters: &[("file", "report"), ("format", "pdf")], arg_file: "report", extras_file: &[("format", "pdf")], routes_file: true, routes_apps: false },
+            Case { raw: "file:a file:b", text: "", scope: "file", empty: false, filters: &[("file", "b")], arg_file: "b", extras_file: &[], routes_file: true, routes_apps: false },
+            Case { raw: "a:b:c", text: "a:b:c", scope: "", empty: false, filters: &[], arg_file: "a:b:c", extras_file: &[], routes_file: true, routes_apps: true },
+            Case { raw: "  spaced   out  ", text: "spaced out", scope: "", empty: false, filters: &[], arg_file: "spaced out", extras_file: &[], routes_file: true, routes_apps: true },
+            Case { raw: "file:report format:pdf git:omarchy", text: "", scope: "file", empty: false, filters: &[("file", "report"), ("format", "pdf"), ("git", "omarchy")], arg_file: "report", extras_file: &[("format", "pdf"), ("git", "omarchy")], routes_file: true, routes_apps: false },
+            Case { raw: "tz:tokyo 9am", text: "9am", scope: "tz", empty: false, filters: &[("tz", "tokyo")], arg_file: "9am", extras_file: &[("tz", "tokyo")], routes_file: false, routes_apps: false },
+            Case { raw: "unknown:value known:x", text: "unknown:value known:x", scope: "", empty: false, filters: &[], arg_file: "unknown:value known:x", extras_file: &[], routes_file: true, routes_apps: true },
+            Case { raw: "file:\"quoted value\"", text: "", scope: "file", empty: false, filters: &[("file", "quoted value")], arg_file: "quoted value", extras_file: &[], routes_file: true, routes_apps: false },
+            Case { raw: "file:unterminated \"quote", text: "\"quote", scope: "file", empty: false, filters: &[("file", "unterminated")], arg_file: "unterminated \"quote", extras_file: &[], routes_file: true, routes_apps: false },
+            Case { raw: "in:~/work report", text: "report", scope: "in", empty: false, filters: &[("in", "~/work")], arg_file: "report", extras_file: &[("in", "~/work")], routes_file: false, routes_apps: false },
+            Case { raw: "sp:kind of blue type:album", text: "of blue", scope: "sp", empty: false, filters: &[("sp", "kind"), ("type", "album")], arg_file: "of blue", extras_file: &[("sp", "kind"), ("type", "album")], routes_file: false, routes_apps: false },
+        ];
+
+        for c in cases {
+            let q = Query::parse(c.raw, 1, Some(&known));
+            assert_eq!(q.text, c.text, "text of {:?}", c.raw);
+            assert_eq!(q.scope, c.scope, "scope of {:?}", c.raw);
+            assert_eq!(q.empty, c.empty, "empty of {:?}", c.raw);
+            let got: Vec<(&str, &str)> = q
+                .filters
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            assert_eq!(got, c.filters, "filters of {:?}", c.raw);
+            assert_eq!(
+                q.arg_for("file", &aliases_file),
+                c.arg_file,
+                "arg_for(file) of {:?}",
+                c.raw
+            );
+            let extras_map = q.extras("file", &aliases_file);
+            let extras: Vec<(&str, &str)> = extras_map
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect();
+            assert_eq!(extras, c.extras_file, "extras(file) of {:?}", c.raw);
+            assert_eq!(
+                q.routes_to("file", &aliases_file),
+                c.routes_file,
+                "routes_to(file) of {:?}",
+                c.raw
+            );
+            assert_eq!(
+                q.routes_to("apps", &aliases_apps),
+                c.routes_apps,
+                "routes_to(apps) of {:?}",
+                c.raw
+            );
+        }
     }
 
     #[test]

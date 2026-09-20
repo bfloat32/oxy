@@ -43,9 +43,9 @@ starts from a measured state:
 | fact | value |
 |---|---|
 | Rust files | 100 (37 before the restructure; +3 for `provider/llm/`, +8 for the batch A scaffold) |
-| total lines | 16 666 |
+| total lines | 17 007 |
 | largest file | 600 lines (`provider/worker/state.rs`); nothing above the 800 target |
-| tests | 70 passing (`cargo test --workspace`): 47 engine, 13 LLM, 2 `util::on_path`, 5 cache, 3 logfile |
+| tests | 72 passing (`cargo test --workspace`): 47 engine, 13 LLM, 2 `util::on_path`, 5 cache, 3 logfile, 2 parity tables |
 | lints | `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean |
 | guards | the file budget and the `model/` layering check in `tests/run.sh`; clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
 | extensions | 40 (15 native, 30 script-backed, 27 scripts) — the marketplace was removed |
@@ -1034,6 +1034,7 @@ header, and is the kind of thing a clean rewrite quietly loses.
 | The LLM endpoint is `http://` and nothing else, on purpose | `provider/llm/http.rs` | a launcher quietly sending a question to a remote host in plaintext |
 | A configured endpoint replaces the CLI list rather than joining it | `engine/ask.rs`'s `probe_ask` | four probes spawned to ignore their answers |
 | A manifest's `native:` name must be an arm in `construct` | `provider/native/mod.rs` | the port never loads and the script answers as before — indistinguishable from success |
+| The scorer and the parser must keep matching the script **exactly**: `(?i)` on the filter regex (`FILE:x` is a filter, not text) and UTF-16 indices in the score bands (`Bücher` + `cher` is 7974, not 7964) | `support/score.rs`, `model/query.rs` | an upper-case keyword silently reaches no provider, and an accented name ranks lower here than in the script build |
 
 ### 6.7 Verifying a port
 
@@ -1049,6 +1050,12 @@ oxy query --local '<query>'           # one question through the in-process engi
 
 printf '{"op":"query","text":"run:","opened":true}\n' | oxy send   # the wire, by hand
 ```
+
+When a port is of a **JS or QML module**, the strongest check is the original
+itself: `plugin/Score.js` and `plugin/Query.js` both run under node (strip the
+`.pragma library` line), and the Rust side carries a table of their answers —
+156 score cases and 33 parser cases today. Run the script, pin the numbers,
+and the port cannot drift without a test failing.
 
 The LLM slice has its own checks — the client and the parser are tested
 against a stub server inside `cargo test`, so no network and no model are

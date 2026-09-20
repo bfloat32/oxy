@@ -1,0 +1,46 @@
+[
+  { "why": "the output slider rides the *chosen* sink, not the default",
+    "query": "", "minRows": 1, "view": "slider",
+    "fields": ["title", "subtitle", "accessory", "value", "min", "max", "step", "setExec", "exec", "actions"],
+    "matches": { "id": "^output$", "title": "^Output Volume$",
+                 "group": "^Volume$",
+                 "accessory": "^(Muted|[0-9]+(\\.[0-9]+)?%)$",
+                 "value": "^[0-9]+(\\.[0-9]+)?$",
+                 "min": "^0(\\.0)?$", "max": "^100(\\.0)?$", "step": "^5(\\.0)?$",
+                 "setExec": "^oxy-volume set output \\{value\\}$",
+                 "exec": "^omarchy-audio-output-volume mute-toggle$" } },
+
+  { "why": "a bare vol: is at most the two sliders",
+    "query": "", "minRows": 1, "maxRows": 2, "fields": [] },
+
+  { "why": "the second row, where wpctl answers, is the input slider",
+    "query": "", "row": 1, "view": "slider",
+    "matches": { "id": "^input$", "title": "^Input Volume$",
+                 "subtitle": "^Microphone$",
+                 "setExec": "^oxy-volume set input \\{value\\}$",
+                 "exec": "^omarchy-audio-input-mute$",
+                 "accessory": "^(Muted|[0-9]+(\\.[0-9]+)?%)$" } },
+
+  { "why": "vol:mic is only the input slider",
+    "query": "mic", "minRows": 1, "maxRows": 1, "view": "slider",
+    "matches": { "id": "^input$", "title": "^Input Volume$",
+                 "subtitle": "^Microphone$" } },
+
+  { "why": "vol:speaker matches only the output word list",
+    "query": "speaker", "minRows": 1, "maxRows": 1,
+    "matches": { "id": "^output$" } },
+
+  { "why": "mute is in both word lists — the output row answers",
+    "query": "mute", "minRows": 1,
+    "matches": { "id": "^output$" } },
+
+  { "why": "and so does the input row behind it",
+    "query": "mute", "row": 1,
+    "matches": { "id": "^input$" } },
+
+  { "why": "a word in neither list is silence",
+    "query": "brightness", "maxRows": 0, "fields": [] },
+
+  { "why": "and so is any other word the lists do not contain",
+    "query": "zephyr", "maxRows": 0, "fields": [] }
+]

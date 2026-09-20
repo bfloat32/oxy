@@ -1,0 +1,33 @@
+[
+  { "why": "the slider row carries everything the view draws",
+    "query": "", "minRows": 1, "maxRows": 1, "view": "slider",
+    "fields": ["title", "subtitle", "accessory", "value", "min", "max", "step", "setExec", "exec", "actions"],
+    "matches": { "id": "^brightness$", "title": "^Screen Brightness$",
+                 "group": "^Brightness$", "accessory": "^[0-9]+%$",
+                 "setExec": "^omarchy-brightness-display \\{value\\}%$",
+                 "exec": "^omarchy-brightness-display 100%$" } },
+
+  { "why": "min is 1, not 0 — zero on a backlight is a black screen with no way back",
+    "query": "", "minRows": 1,
+    "matches": { "min": "^1(\\.0)?$", "max": "^100(\\.0)?$", "step": "^5(\\.0)?$",
+                 "value": "^[0-9]+(\\.[0-9]+)?$" } },
+
+  { "why": "the actions are the presets and the display off switch",
+    "query": "", "minRows": 1,
+    "fields": ["actions"],
+    "atMost": { "actions": 4 } },
+
+  { "why": "a word from the list still answers",
+    "query": "dim", "minRows": 1, "maxRows": 1,
+    "matches": { "id": "^brightness$", "view": "^slider$" } },
+
+  { "why": "so does a substring of one",
+    "query": "backlight", "minRows": 1, "maxRows": 1,
+    "matches": { "id": "^brightness$" } },
+
+  { "why": "a word outside the list is silence, not an error row",
+    "query": "volume", "maxRows": 0, "fields": [] },
+
+  { "why": "and so is any other word the list does not contain",
+    "query": "zephyr", "maxRows": 0, "fields": [] }
+]

@@ -113,6 +113,10 @@ pub struct Engine {
     /// it is set, the CLI list is not probed and not used.
     llm: Option<crate::provider::llm::Local>,
     ask_probed: bool,
+    /// Is a local Ollama listening? Probed once at boot, and only when no
+    /// endpoint is configured — it is what the `?` list's setup hint reads,
+    /// and the help list is built synchronously.
+    ollama_up: bool,
     /// Rows of a form being filled in (engine-side state for SaveSettings).
     known: HashSet<String>,
 }
@@ -174,6 +178,15 @@ impl Engine {
         *shared.registry.write().await = Arc::new(extensions.clone());
         let extensions = Arc::new(extensions);
 
+        // One bounded connect, and only when nothing is configured: the hint
+        // it feeds is for someone who has not set an endpoint yet.
+        let ollama_up = settings.ask.endpoint.trim().is_empty()
+            && crate::support::net::port_open(
+                "127.0.0.1",
+                11434,
+                std::time::Duration::from_millis(200),
+            )
+            .await;
         let (usage, usage_moved) = crate::state::usage::load(&crate::settings::paths::usage_file());
         let (state, state_moved) = State::load(
             &crate::settings::paths::frecency_file(),
@@ -240,6 +253,7 @@ impl Engine {
             ask_provider: None,
             llm: None,
             ask_probed: false,
+            ollama_up,
             known: HashSet::new(),
         };
         engine.rebuild_known();

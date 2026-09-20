@@ -104,15 +104,12 @@ impl Local {
     /// Whether anything is listening. A connect, not a request: a model
     /// server that is up but still loading a model should not read as down.
     pub async fn probe(&self) -> bool {
-        let timeout = std::time::Duration::from_millis(250);
-        matches!(
-            tokio::time::timeout(
-                timeout,
-                tokio::net::TcpStream::connect((self.url.host.as_str(), self.url.port))
-            )
-            .await,
-            Ok(Ok(_))
+        crate::support::net::port_open(
+            &self.url.host,
+            self.url.port,
+            std::time::Duration::from_millis(250),
         )
+        .await
     }
 }
 

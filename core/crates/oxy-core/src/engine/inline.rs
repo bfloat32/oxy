@@ -82,6 +82,58 @@ impl Engine {
                 &link.glyph,
             );
         }
+        // Last, because they are the only rows here that say "not yet":
+        // a keyword that is hidden, or a model that is one line of config
+        // away. Each is a *live* fact, so it disappears when it stops being
+        // true — which is why nothing has to be dismissed.
+        for (id, title, subtitle) in self.setup_hints() {
+            let mut row = fill_row(FillSpec {
+                provider: "help",
+                key: &format!("hint:{id}"),
+                group: "Setup",
+                title: &title,
+                subtitle: &subtitle,
+                accessory: "",
+                glyph: "·",
+                fill: "",
+                verb: "",
+            });
+            row.score = rank::score(rank::TIER_FORCED, 4000 - out.len() as i64 * 200, 0);
+            out.push(row);
+        }
+        out
+    }
+
+    /// What this machine is missing, in the `?` list's own words.
+    ///
+    /// Deliberately not a notification: a hint is something to read when you
+    /// go looking, and every one of these is cheap enough to check while the
+    /// list is being built (two PATH walks and a flag the daemon probed at
+    /// boot).
+    fn setup_hints(&self) -> Vec<(&'static str, String, String)> {
+        let mut out = Vec::new();
+        let has = |id: &str| self.extensions.iter().any(|e| e.id == id);
+        if has("gh") && !crate::provider::native::util::on_path("gh") {
+            out.push((
+                "gh",
+                "gh: is hidden".to_string(),
+                "install the GitHub CLI (gh) to search pull requests, issues and runs".to_string(),
+            ));
+        }
+        if has("repo") && !crate::provider::native::util::on_path("fd") {
+            out.push((
+                "fd",
+                "repo: has no fd".to_string(),
+                "install fd-find: the repository scan is slower without it".to_string(),
+            ));
+        }
+        if self.ollama_up {
+            out.push((
+                "ollama",
+                "Ollama is listening".to_string(),
+                "set ask.endpoint to http://127.0.0.1:11434/v1/chat/completions to ask it with Ctrl+Enter".to_string(),
+            ));
+        }
         out
     }
 

@@ -115,6 +115,7 @@ fn bare_engine() -> Engine {
         clipboard_url: None,
         ask_task: None,
         ask_pending: None,
+        ollama_up: false,
         usage: crate::state::usage::Usage::default(),
         ask_provider: None,
         llm: None,

@@ -3,6 +3,7 @@
 
 pub mod availability;
 pub mod cache;
+pub mod net;
 pub mod quote;
 pub mod rank;
 pub mod score;

@@ -441,7 +441,7 @@ Item {
     "gitrepo", "gitbranches", "gitstashes", "agent",
     "ghrepo", "ghpr", "docker", "notes", "processes", "emoji", "themes",
     "windows", "hosts", "radios", "radioplayer", "files", "repos",
-    "menutree", "snippets", "vault", "shortcuts", "herdr", "marketplace", "marketplacehome", "marketplaceunit", "answer", "loading"]
+    "menutree", "snippets", "vault", "shortcuts", "herdr", "answer", "loading"]
 
   // The [menu] surface tokens, so a theme that styles the Omarchy menu styles
   // this too, with no extra work from the user.
@@ -459,7 +459,7 @@ Item {
   // ------------------------------------------------------------ lifecycle
 
   // `payloadJson` is how something outside asks for a particular screen rather
-  // than the opening one: `omarchy-shell shell summon oma.oxy '{"query":"bo:"}'`.
+  // than the opening one: `omarchy-shell shell summon oma.oxyrs '{"query":"run:"}'`.
   function open(payloadJson) {
     var wanted = ""
     if (payloadJson) {
@@ -644,7 +644,7 @@ Item {
     if (root.activeView === "docker") {
       return Math.max(1, Math.floor((root.cardWidth - Style.space(12)) / Style.space(280)))
     }
-    if (root.activeView === "emoji" || root.activeView === "themes" || root.activeView === "marketplace") {
+    if (root.activeView === "emoji" || root.activeView === "themes") {
       return (resultsArea.item && resultsArea.item.columns)
         ? Math.max(1, resultsArea.item.columns) : 1
     }
@@ -1033,14 +1033,12 @@ Item {
               }
               event.accepted = true
             } else if ((root.activeView === "grid" || root.activeView === "dashboard"
-                        || root.activeView === "calendar" || root.activeView === "docker"
-                        || root.activeView === "marketplace")
+                        || root.activeView === "calendar" || root.activeView === "docker")
                        && event.key === Qt.Key_Right) {
               root.move(1)
               event.accepted = true
             } else if ((root.activeView === "grid" || root.activeView === "dashboard"
-                        || root.activeView === "calendar" || root.activeView === "docker"
-                        || root.activeView === "marketplace")
+                        || root.activeView === "calendar" || root.activeView === "docker")
                        && event.key === Qt.Key_Left) {
               root.move(-1)
               event.accepted = true
@@ -1166,9 +1164,6 @@ Item {
           case "hosts": return hostsView
           case "shortcuts": return shortcutsView
           case "herdr": return herdrView
-          case "marketplace": return marketplaceView
-          case "marketplacehome": return marketplaceHomeView
-          case "marketplaceunit": return marketplaceUnitView
           case "radios": return radiosView
           case "radioplayer": return radioPlayerView
           case "vault": return vaultView
@@ -1211,9 +1206,6 @@ Item {
       Component { id: hostsView;     ResultHosts     { launcher: root; width: resultsArea.width; maxHeight: resultsArea.room } }
       Component { id: shortcutsView; ResultShortcuts { launcher: root; width: resultsArea.width; maxHeight: resultsArea.room } }
       Component { id: herdrView;     ResultHerdr     { launcher: root; width: resultsArea.width; maxHeight: resultsArea.room } }
-      Component { id: marketplaceView; ResultMarketplace { launcher: root; width: resultsArea.width; maxHeight: resultsArea.room } }
-      Component { id: marketplaceHomeView; ResultMarketplaceHome { launcher: root; width: resultsArea.width; maxHeight: resultsArea.room } }
-      Component { id: marketplaceUnitView; ResultMarketplaceUnit { launcher: root; width: resultsArea.width; maxHeight: resultsArea.room } }
       Component { id: radiosView;    ResultRadios    { launcher: root; width: resultsArea.width; maxHeight: resultsArea.room } }
       Component { id: radioPlayerView; ResultRadioPlayer { launcher: root; width: resultsArea.width; maxHeight: resultsArea.room } }
       Component { id: filesView;     ResultFiles     { launcher: root; width: resultsArea.width; maxHeight: resultsArea.room } }

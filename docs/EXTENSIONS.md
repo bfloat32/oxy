@@ -36,7 +36,7 @@ Declared names reach the extension through both a `{name}` placeholder in
 | field | default | what it does |
 | --- | --- | --- |
 | `id` | required | unique; also the default keyword |
-| `search` | required | the command that answers. The launcher takes a `socket` instead, but `bo test` fails a file with no `search`, so declare both |
+| `search` | required | the command that answers. The launcher takes a `socket` instead, but a manifest with no `search` is a load error, so declare both |
 | `keyword` | `id` | what you type before the colon |
 | `aliases` | `[]` | other keywords that reach it |
 | `filters` | `[]` | extra filter names to parse out of the query — undeclared, `year:1959` stays literal text and `{year}` substitutes empty |
@@ -56,12 +56,13 @@ Declared names reach the extension through both a `{name}` placeholder in
 | `refreshMs` | `0` | re-ask this often while the rows are on screen |
 | `socket` | `""` | a unix socket to ask instead of running a command |
 | `settings` | `[]` | fields `settings:` asks for, each `{ key, label, value, placeholder, secret }` |
-| `testQuery` | `""` | what `bo test` types at this extension for the `actions` check |
+| `testQuery` | `""` | what `oxy test` types at this extension for the `actions` check |
 
 `tier` is one of `calc`, `forced`, `prefix`, `substring`, `weak`, `file` and
 `web`. `view` is a `Result*.qml` in `plugin/`, named in lower case without the
 `Result`. The launcher silently falls back to `substring` and to `list` on a
-name it does not know; `bo test` fails on either.
+name it does not know; a manifest naming neither is worth fixing before it
+ships.
 
 The layouts that exist today:
 
@@ -101,9 +102,6 @@ The layouts that exist today:
 | `vault` | your password store, drawn as a store |
 | `shortcuts` | this machine's keymap, drawn as keys |
 | `herdr` | agents, sorted by what they need from you |
-| `marketplacehome` | marketplaces, and the units you have |
-| `marketplace` | one marketplace's units, as tiles |
-| `marketplaceunit` | one unit, and the switch for it |
 | `loading` | a skeleton in the shape of the answer, drawn by the launcher while a slow answer is still coming — no extension needs to name it |
 
 `ResultAnswer.qml` is a view in the folder and not one on this list:
@@ -320,41 +318,10 @@ and 100, `step` to 1.
 
 ## Cases: keeping it working
 
-### What `bo test` already gives you
-
-Run it on your unit and, without you having written anything:
-
-```bash
-bo test weather
-```
-
-- the extension JSON is read the way the launcher reads it: an `id` and a
-  `search` are there, `view` and `tier` are names the launcher knows, and the
-  numbers are numbers
-- the command in `search` is on `PATH`, and when it is a script your own unit
-  ships but has not linked, it says so rather than saying "not found"
-- the command runs, with `{query}` filled in and every other placeholder empty,
-  and again with nothing typed when `minChars` is 0
-- what it printed parses, and every row survives the launcher's own reading:
-  a `title` on each, `exec` a string, `score` a number, `progress` between 0
-  and 1, every action named
-- an extension whose `when` is false here is skipped, not failed
-- every action on every row names a program that is on `PATH`. This check runs
-  the first word of `search` with `testQuery` as its only argument, so name a
-  `testQuery` when a bare query comes back with no actions on it
-
-Those are the four kinds of check, and `--only` picks them: `manifest`,
-`answer`, `actions` and `cases`. `--fast` is `--only manifest` and runs nothing.
-`--jobs n` sets how many extensions are checked at once, and `--quiet` prints
-only failures, for a hook.
-
-That is the whole of it. It proves your extension answers. It cannot prove the
-answer is right.
-
 ### Why a case exists
 
 Moving the clock out of a `tz:` row title into its own field kept every row
-valid, and left the hero drawing cities with no times against them. `bo test`
+valid, and left the hero drawing cities with no times against them. The runner
 stayed green through all of it. Nothing caught it until a screen recording did,
 two hours later.
 
@@ -369,7 +336,7 @@ config/omarchy/oxy/extensions/weather.cases.json
 The name is the extension file's name, not its `id`: `timezone.json` has
 `"id": "tz"` and its cases live in `timezone.cases.json`.
 
-`bo test` finds it on its own and runs it after the extension itself. It calls
+The runner finds it on its own and runs it after the extension itself. It calls
 the **first word** of `search` with one argument, the case's `query`. Every
 literal argument in `search` is dropped, so a script that needs a subcommand
 cannot be reached by a case:
@@ -379,13 +346,12 @@ ok      weather                1 row, 4 bare
 ok      weather cases          6 held
 ```
 
-`bo test <unit>` runs only that unit, which is the one to run while you are
-working. The script has to be on `PATH` for the cases to run at all, so link
-the unit first with `bo add <unit>`.
+`python3 tests/cases.py <name>` runs only that extension, which is the one to
+run while you are working.
 
 ### The in-repo runner: `tests/cases.py`
 
-The same case files also run without `bo`, from this repository:
+The case files run from this repository:
 
 ```bash
 python3 tests/cases.py          # every extension that can answer here
@@ -431,8 +397,8 @@ asserting the fourth row is metres is a case you will delete the first time you
 reorder a list, and deleting cases is a habit worth not starting. Do not write
 one against anything you cannot run here either: a network answer that changes,
 `gh` behind a login, hardware this machine does not have. `when` keeps those
-extensions out of `bo test` entirely, and a case is not the place to argue with
-that.
+extensions out of the cases run entirely, and a case is not the place to argue
+with that.
 
 ### Writing one
 
@@ -550,7 +516,7 @@ the answer no other check can see.
 ### Breaking it on purpose
 
 A case you have not watched fail is not a test. Change the thing it protects,
-run `bo test <unit>`, read the line, put it back:
+run `python3 tests/cases.py <name>`, read the line, put it back:
 
 ```
 fail    unit cases             1 of 8 broke
@@ -562,7 +528,7 @@ If it passed while broken, the case is asserting something else than you think,
 usually because the answer came back empty and there was no `minRows` to catch
 it.
 
-### What `bo new extension` writes
+### What the scaffold writes
 
 The scaffold ships a `<name>.cases.json` with three cases that already pass
 against the stub it writes: a bare keyword answers with its hint row, a typed

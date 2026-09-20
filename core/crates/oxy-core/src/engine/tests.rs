@@ -115,6 +115,7 @@ fn bare_engine() -> Engine {
         clipboard_url: None,
         ask_task: None,
         ask_provider: None,
+        llm: None,
         ask_probed: true,
         known: HashSet::new(),
     };

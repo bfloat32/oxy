@@ -29,6 +29,18 @@ pub struct AskProvider {
     pub when: String,
 }
 
+/// The `ask` block: a local model endpoint spoken to directly, in this
+/// process, instead of through a CLI. An empty endpoint means the
+/// `askProviders` list answers, exactly as it always did.
+#[derive(Debug, Clone)]
+pub struct LocalAsk {
+    pub endpoint: String,
+    pub model: String,
+    pub system: String,
+    pub max_tokens: u64,
+    pub temperature: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct Quicklink {
     pub title: String,
@@ -107,6 +119,9 @@ pub struct Settings {
     pub ask_provider: String,
     /// Ctrl+Enter's backends, probed in order at ask time.
     pub ask_providers: Vec<AskProvider>,
+    /// A local model server, when one is configured. Answering through it
+    /// skips the CLI list entirely.
+    pub ask: LocalAsk,
     /// Built-in extensions set to `false` stay off.
     pub extensions: Map<String, Value>,
     /// What each extension was configured with, by extension id.
@@ -129,6 +144,7 @@ impl Default for Settings {
             quicklinks: Vec::new(),
             ask_provider: String::new(),
             ask_providers: default_ask_providers(),
+            ask: default_local_ask(),
             extensions: Map::new(),
             extension_settings: Map::new(),
         }
@@ -254,6 +270,24 @@ impl Settings {
             // The key's presence replaces — an empty list is "ask nothing",
             // not "keep the defaults".
             out.ask_providers = parsed;
+        }
+        if let Some(a) = obj.get("ask").and_then(|v| v.as_object()) {
+            let s = |k: &str| a.get(k).and_then(|v| v.as_str());
+            if let Some(v) = s("endpoint") {
+                out.ask.endpoint = v.to_string();
+            }
+            if let Some(v) = s("model") {
+                out.ask.model = v.to_string();
+            }
+            if let Some(v) = s("system") {
+                out.ask.system = v.to_string();
+            }
+            if let Some(v) = a.get("maxTokens").and_then(|v| v.as_u64()) {
+                out.ask.max_tokens = v;
+            }
+            if let Some(v) = a.get("temperature").and_then(|v| v.as_f64()) {
+                out.ask.temperature = v;
+            }
         }
         if let Some(v) = obj.get("extensions").and_then(|v| v.as_object()) {
             out.extensions = v.clone();

@@ -10,6 +10,33 @@ registry, session model, performance budgets, failure handling, and the
 build order. It is written to be implemented from, and to be checked
 against later.
 
+> **Status: the first native slice is implemented** (in Rust, in the core —
+> this plan's phases describe a `bin/oxy-ask` script, which the native
+> version supersedes for the api-kind transport).
+>
+> Done:
+> - `ask` in `oxy.json`: `endpoint`, `model`, `system`, `maxTokens` (800),
+>   `temperature` (0.4) — §7's block, minus the parts not yet built.
+> - `provider/llm/`: a minimal HTTP/1.1 client (`http.rs` — loopback, plain
+>   HTTP only, chunked-aware, streaming), the delta parser (`stream.rs` —
+>   OpenAI SSE, ollama NDJSON, llama.cpp `content`, in-stream errors), and
+>   the request builder (`mod.rs` — the `messages[]` shape, with history
+>   replay ready for the multi-turn slice).
+> - `engine/ask.rs`: a configured endpoint answers `Ctrl+Enter` in-process —
+>   no process, no shell, no `stdbuf` — and the CLI list is not probed. A
+>   server that is down says so in the card.
+> - The registry chip reports the model (`Local · llama3.2`).
+> - 13 tests: request shape, URL strictness, both body framings against a
+>   stub server, every delta shape, and the settings merge.
+>
+> Not yet (in the order the design asks for them): autodetect of a local
+> server (probe at registry time), the session file and multi-turn
+> `ask:`/`chat` scope (§6, §8), token-level framing (today deltas are
+> buffered into whole lines because the wire's `answer` event is one line
+> per event — §4's 120ms flush needs the frontend to change with it), the
+> key'd providers and the CLI `cli`-kind transports (§5), `/` commands,
+> markdown rendering, and the `oxy ask` verb (§9).
+
 ---
 
 ## 1. What exists today, and what this adds

@@ -21,9 +21,10 @@ type EnvPairs = Arc<Vec<(String, String)>>;
 static LOGIN_ENV: RwLock<Option<EnvPairs>> = RwLock::new(None);
 
 /// The plugin id this daemon's launcher registers — exported to every
-/// command so a script that summons the launcher back (`bo:`'s toggle)
-/// returns to the build that asked. The script build leaves the variable
-/// unset, where `oxy-bo` falls back to `oma.oxy`.
+/// command so a script that summons the launcher back (a row that closes
+/// the window and reopens it on a query) returns to the build that asked.
+/// The script build leaves the variable unset, so a script that needs the
+/// id falls back to `oma.oxy`.
 static PLUGIN_ID: LazyLock<String> = LazyLock::new(|| {
     std::env::var("OXY_PLUGIN_ID")
         .ok()

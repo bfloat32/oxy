@@ -533,7 +533,7 @@ install_body() {
 
   step "The keybinding"
   # Omarchy reads hyprland.lua; the modules.d loader means adding a module
-  # never edits a config file again. If better-omarchy already installed its
+  # never edits a config file again. If something else already installed a
   # loader it does exactly this job — the file is left alone and only the
   # link is ours.
   loader="$HYPR_DIR/modules.lua"

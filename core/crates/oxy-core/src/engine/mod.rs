@@ -103,6 +103,9 @@ pub struct Engine {
     /// The first `askProviders` entry whose `when` answered — probed once
     /// per settings load, the way `checkAsk` ran once per config load.
     ask_provider: Option<crate::settings::AskProvider>,
+    /// The configured local model endpoint, resolved with the settings. When
+    /// it is set, the CLI list is not probed and not used.
+    llm: Option<crate::provider::llm::Local>,
     ask_probed: bool,
     /// Rows of a form being filled in (engine-side state for SaveSettings).
     known: HashSet<String>,
@@ -200,6 +203,7 @@ impl Engine {
             clipboard_url: None,
             ask_task: None,
             ask_provider: None,
+            llm: None,
             ask_probed: false,
             known: HashSet::new(),
         };

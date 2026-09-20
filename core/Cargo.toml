@@ -15,7 +15,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 # preserve_order: a settings file that comes in ordered goes out ordered —
 # `oxy save` must not alphabetise the user's oxy.json.
 serde_json = { version = "1", features = ["preserve_order"] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync", "io-util", "io-std", "fs", "signal"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync", "io-util", "io-std", "fs", "signal", "net"] }
 interprocess = { version = "2", features = ["tokio"] }
 fancy-regex = "0.14"
 sysinfo = "0.33"

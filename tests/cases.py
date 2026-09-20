@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Runs the shipped <name>.cases.json assertions against their extensions.
 
-`bo test` is the reference implementation, and it lives outside this
-repository. This runner reads the same case files the same way: the first
-word of an extension's `search` is called with the case's `query`, the rows
-it prints are parsed, and each assertion is checked against the row the
-case names.
+This runner reads the case files the way the launcher reads an extension:
+the first word of an extension's `search` is called with the case's `query`,
+the rows it prints are parsed, and each assertion is checked against the row
+the case names.
 
     tests/cases.py              every extension with a cases file
     tests/cases.py repo         one extension

@@ -4,7 +4,19 @@
 
 use serde_json::Value;
 
-use super::{AskProvider, Engine};
+use super::{AskProvider, Engine, LocalAsk};
+
+/// The `ask` block's defaults: no endpoint, so the CLI list answers; and a
+/// system prompt written for a launcher card rather than a terminal.
+pub(super) fn default_local_ask() -> LocalAsk {
+    LocalAsk {
+        endpoint: String::new(),
+        model: String::new(),
+        system: "Answer briefly; this renders in a launcher card, not a terminal.".into(),
+        max_tokens: 800,
+        temperature: 0.4,
+    }
+}
 
 pub(super) fn default_ask_providers() -> Vec<AskProvider> {
     [

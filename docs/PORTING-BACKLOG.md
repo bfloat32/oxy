@@ -5,12 +5,12 @@ between the script build and the Rust core: batch by batch, with what each
 port must reproduce, what it implies, and the traps that were found by testing
 and are easy to lose. Nothing here is a code change.
 
-**Revision 4 (final).** Revision 2 checked the scripts line by line; revision
-3 added the four dimensions a port needs (gates, acceptance suites, internal
-APIs, row contracts); this one closes it out: the **baseline** the
-restructure left behind (§0), every Rust reference re-pointed at the
-post-split files, and two appendices a porter will actually work from —
-**the traps** (§6.6) and **the verification commands** (§6.7).
+**Revision 5.** Revision 4 audited itself against the tree; this one records
+what changed since: the **marketplace removal** (`bo:` and its 2 518 lines are
+gone — `docs/MARKETPLACE-REMOVAL.md`), the **first native LLM slice** (§4.4:
+a local model endpoint answered in-process, 620 lines and 13 tests), and a
+**re-measured baseline** (§0: 92 files, 16 316 lines, 60 tests). Every count
+in this document was re-derived from the tree after both changes.
 
 The corrections from the earlier passes, worth knowing up front:
 
@@ -19,11 +19,13 @@ The corrections from the earlier passes, worth knowing up front:
 - `oxy-repo` exposes **four** subcommands to other scripts (`--resolve`,
   `--current`, `--paths`, `--slug`), not one.
 - `gh` draws its panels with `ghrepo`/`ghpr`; `stash` can also emit `list`
-  rows; `bo` emits `marketplaceunit` rows; `spotify` emits `cards` as well as
-  `player`.
-- `docker`'s view reads more than the doc listed (`health`, `cpu`, `band`,
-  `hostCores`, `hostMem`, `memBytes`), and `repos` reads `ahead`, `behind`,
-  `dirty`, `drifted`, `index`, `selected`.
+  rows; `spotify` emits `cards` as well as `player`.
+- §6.2 was rebuilt from each view's own header comment, which is where the
+  contracts actually live: `docker` owes `cid`/`image`/`status`/`ports[]`/
+  `cpuFull`/`memPct` and friends, `processes` owes `cpuLive`/`winTitle`/
+  `winClass`/`cmd`, `vault` owes `store`/`tool`/`clearSeconds`, `radios` owes
+  `kind`/`joined`, and `radioplayer`'s `danger`/`glyph`/`primary` turned out
+  to be the view's own button descriptors, not row fields at all.
 - `def` also caps its cache at 500 entries; `oxy-date --iso` is called by
   `oxy-calendar` (the native `cal` already absorbed it in-process); and
   `oxy-emoji --used` has no callers left.
@@ -40,25 +42,29 @@ starts from a measured state:
 
 | fact | value |
 |---|---|
-| Rust files | 89 (was 37) |
-| total lines | 15 534 |
+| Rust files | 92 (37 before the restructure; +3 for `provider/llm/`) |
+| total lines | 16 316 |
 | largest file | 600 lines (`provider/worker/state.rs`); nothing above the 800 target |
-| tests | 47 passing (`cargo test --workspace`) |
-| lints | `cargo clippy --workspace --all-targets -- -D warnings` clean |
+| tests | 60 passing (`cargo test --workspace`): 47 engine, 13 for the LLM slice |
+| lints | `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean |
 | guards | the file budget and the `model/` layering check in `tests/run.sh`; clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
-| unchanged by the restructure | the wire, the row shapes, the state files, the script contract, and all 41 extensions |
+| extensions | 40 (15 native, 30 script-backed, 27 scripts) — the marketplace was removed |
+| case suites | 387 assertions in 16 files |
+| unchanged by the restructure | the wire, the row shapes, the state files, the script contract |
 
-That last row is the one that matters for this document: the restructure was
-a move, not a behaviour change, so every claim below — budgets, gates, view
-contracts, state files — still describes the code as it stands.
+The restructure was a move, not a behaviour change, so every claim below —
+budgets, gates, view contracts, state files — describes the code as it
+stands. Two things have changed since: the marketplace is gone (§1), and the
+LLM slice landed (§4.4).
 
 ---
 
 ## 1. Where we stand
 
-**41 extensions ship. 15 are native. 31 remain script-backed** — 28 distinct
+**40 extensions ship. 15 are native. 30 remain script-backed** — 27 distinct
 scripts, because `pr`, `issue` and `ci` are nine-line wrappers that set
-`OXY_GH_MODE` for `oxy-gh`.
+`OXY_GH_MODE` for `oxy-gh`. (`bo:` and its marketplace were removed — see
+`docs/MARKETPLACE-REMOVAL.md`.)
 
 | already native | area |
 |---|---|
@@ -77,7 +83,7 @@ scripts, because `pr`, `issue` and `ci` are nine-line wrappers that set
 | **D. session & system views** | `docker`, `shortcuts`, `omarchy`, `herdr`, `img` | 1 371 | a CLI that already emits JSON (`docker`, `hyprctl`, `herdr`), parsed by jq today |
 | **E. text & data** | `unit`, `tz`, `def`, `snip`, `note`, `pass` | 2 861 | answers built from a table or a file, mostly `qalc`/`python3`/`curl` per keystroke |
 | **F. media** | `radio`, `spotify`, `spotify-library` | 1 019 | a player (mpv/MPRIS) plus a keyless or keyed catalogue lookup |
-| **G. the two big ones** | `agent`, `bo` | 3 058 | long-lived processes with their own protocol; a rewrite, not a port |
+| **G. the long-lived one** | `agent` | 2 167 | a process with its own protocol; a rewrite, not a port |
 
 ### 1.1 Two rules for every batch
 
@@ -138,7 +144,7 @@ script stayed silent. Every port must reproduce its gate internally.
 
 ### 1.4 The acceptance suites that already exist
 
-**415 assertions in 17 case files** — the porting wave's free acceptance
+**387 assertions in 16 case files** — the porting wave's free acceptance
 suite, because `oxy test --cases <id>` runs them through the engine (native
 provider first):
 
@@ -150,7 +156,7 @@ provider first):
 | D | *none* | 0 |
 | E | `unit` 72, `timezone` 45, `define` 30 | 147 |
 | F | *none* | 0 |
-| G | `agent` 18, `bo` 28 | 46 |
+| G | `agent` 18 | 18 |
 | already native | `date` 56, `calendar` 30, `emoji` 41 | 127 |
 
 Two consequences worth stating plainly:
@@ -188,7 +194,6 @@ provider/native/
   remote/     gh.rs (four modes), ci.rs, issue.rs, pr.rs       (C — new)
   media/      radio.rs, spotify.rs, spotify_library.rs         (F — new)
   agent/      mod.rs + its submodules                          (G — new; the largest)
-  marketplace/ bo.rs                                           (G — new; low value)
 ```
 
 The rest of the crate, for orientation (all of it exists today):
@@ -200,7 +205,7 @@ oxy-core/src/
   settings/   defaults, paths, mod                 — oxy.json and every path we touch
   state/      frecency, pins, recents, mru, mod    — what the launcher remembers
   support/    availability, cache, quote, rank, score
-  provider/   process, socket, worker/{mod,route,state}, native/…
+  provider/   process, socket, worker/{mod,route,state}, llm/{mod,http,stream}, native/…
   engine/     activate, ask, builtins, inline, persist, pipeline, workers, tests
 oxyd/src/     main, server, wire, logfile, watch, clipboard
 oxy/src/      main, engine_local, cli/{query,send,test,extensions}, cases/{mod,check,view}
@@ -579,7 +584,7 @@ is cached (an entry list is cheap; a stale one is a lie). `pass` wins over
 - Token refresh against `accounts.spotify.com`; a 401 tells the user to run
   the auth helper again.
 
-### Batch G — the two big ones (`agent`, `bo`)
+### Batch G — the long-lived one (`agent`)
 
 - **`agent` (`do:`)** — 2167 lines of Python behind
   `~/.local/state/omarchy/oxy-agent.sock`: process supervision of
@@ -589,12 +594,6 @@ is cached (an entry list is cheap; a stale one is a lie). `pass` wins over
   (`{epoch, query}` in, `{epoch, rows}` out, pushes between answers) does not
   change, so `ResultAgent.qml` and the engine stay as they are. It is the
   largest single item and the one with the richest existing suite (18 cases).
-- **`bo`** — 891 lines driving the third-party `bo` CLI: the marketplace view
-  contract (home / marketplace / unit, the reserved words, the
-  address-in-the-box scheme `bo:@market` / `bo:#market/unit`, the re-summon
-  after a toggle via `OXY_PLUGIN_ID`). Porting means reimplementing the *view*
-  contract while still shelling out to `bo`; low value until `bo` is ours.
-
 ---
 
 ## 3. Cross-cutting decisions the batches force
@@ -624,13 +623,12 @@ is cached (an entry list is cheap; a stale one is a lie). `pass` wins over
 9. **Native providers and `extensionSettings`**: `repo`, `tz`, `def` must read
    `ctx.settings.settings_for(id)` and honour the same key names the scripts
    read from `$OXY_*` (`roots`, `zones`, `cacheDays`). No native does this yet
-   — `repo` would be the first. Only seven scripts read `OXY_*` at all:
+   — `repo` would be the first. Only six scripts read `OXY_*` at all:
    `define` (`OXY_CACHEDAYS`), `repo` (`OXY_REPO_ROOTS`, `OXY_ROOTS`,
    `OXY_REPO`), `timezone` (`OXY_ZONES`, plus `OXY_NAMES`/`OXY_HOME` in the
    Python helper), `gh` (`OXY_GH_MODE`, `OXY_GH_OFFLINE`; the three
-   wrappers only set the mode), `theme` (`OXY_THEME_LIMIT`), `bo`
-   (`OXY_BO_DETACHED`, `OXY_PLUGIN_ID`), and the agent (Python:
-   `OXY_DESK_DRY`).
+   wrappers only set the mode), `theme` (`OXY_THEME_LIMIT`), and the agent
+   (Python: `OXY_DESK_DRY`).
 10. **A port must not change the wire**: same row fields the view reads
     (§6.2), same `exec`/`setExec` strings, same state files (§6.4).
 11. **A port must reproduce its `when`** (§1.3) or it will answer where the
@@ -641,7 +639,11 @@ is cached (an entry list is cheap; a stale one is a lie). `pass` wins over
 
 The crate's dependency set is deliberately small — `serde`, `serde_json`
 (`preserve_order`), `tokio`, `interprocess`, `fancy-regex`, `sysinfo`,
-`ignore` — and most of the porting wave adds nothing to it:
+`ignore` — and most of the porting wave adds nothing to it. The LLM slice
+added no crate either: it enabled tokio's `net` feature and wrote the HTTP
+client by hand (it was already coming in transitively through
+`interprocess`, but relying on someone else's feature list is how a build
+breaks on a patch release):
 
 | batch | Cargo.toml delta |
 |---|---|
@@ -670,10 +672,10 @@ the tools.
 | `oxy-timezone-plan` | 189 | `oxy-timezone` for the day grid | folded into the native `tz` port — it emits the `timegrid` rows |
 | `oxy-music-play` | 91 | `oxy-search-music`'s row exec (MusicBrainz → `OpenUri`) | folded into the native `spotify` port |
 
-### 4.2 The test surface: `oxy test` is missing three of `bo test`'s four layers
+### 4.2 The test surface: `oxy test` is missing three of the four check layers
 
 `oxy test` today runs each extension's `testQuery` through the engine, and
-`--cases` runs the `.cases.json` assertions. Missing versus `bo test`:
+`--cases` runs the `.cases.json` assertions. Missing:
 
 - **manifest**: the JSON read the way the launcher reads it — `id` and
   `search` present, `view`/`tier` names the launcher knows, numbers are
@@ -701,11 +703,46 @@ the tools.
   with a field in it"), and the README already promises `wifi:` can "enter a
   password". A native `wifi` port is the natural place to cash that in.
 
-### 4.4 The `ask:` chat surface
+### 4.4 The `ask:` chat surface — the first native slice is in
 
-`docs/LLM-INTEGRATION.md` is a full design (provider registry, session model,
-streaming, budgets). Neither build implements it. It is the largest *new*
-capability in the backlog and depends on nothing in the porting batches.
+`docs/LLM-INTEGRATION.md` is the full design (provider registry, session
+model, streaming, budgets). The **api-kind, local-first slice is
+implemented**, in Rust, and it is the only part of this backlog that is not
+about porting a script:
+
+| done | where |
+|---|---|
+| `ask` in `oxy.json`: `endpoint`, `model`, `system`, `maxTokens` (800), `temperature` (0.4) | `settings/mod.rs`, `settings/defaults.rs` |
+| a minimal HTTP/1.1 client — loopback `http://` only, chunked-aware, streaming lines as they arrive | `provider/llm/http.rs` (274) |
+| the delta parser — OpenAI SSE, ollama NDJSON, llama.cpp `content`, in-stream errors, tolerant of the rest | `provider/llm/stream.rs` (173) |
+| the request builder — the `messages[]` shape, with history replay already in the signature | `provider/llm/mod.rs` (173) |
+| `Ctrl+Enter` answered in-process when an endpoint is configured; the CLI list is not probed | `engine/ask.rs` |
+| the registry chip naming the model (`Local · llama3.2`) | `engine/ask.rs` |
+| 13 tests: URL strictness, both body framings against a stub server, every delta shape, the settings merge | in the three modules |
+
+Verified live against a stub streaming server: `answerstart` with provider
+`Local · stub-1`, the deltas arriving as `answer` lines, `answerdone` with no
+error; a dead endpoint lands in the card as *"Could not reach
+127.0.0.1:19999 (…). Is the model server running?"*.
+
+**What is deliberately not done yet**, in the order the design asks for it:
+
+1. **Autodetect** — probe `localhost:11434` / `:1234` at registry time and
+   offer the local model when no endpoint is configured. Today an endpoint
+   must be named; the probe exists (`Local::probe`) but nothing calls it.
+2. **Token framing** — deltas are buffered into whole lines because the
+   wire's `answer` event is one line per event and the card appends a
+   newline between them (a token per event would render one word per line).
+   §4 of the design's 120ms flush needs the frontend to change with it.
+3. **The session file and multi-turn** — `ask:`/`chat` as a scope, turns
+   replayed as `messages[]`, idle expiry (design §6, §8). The request
+   builder already takes history.
+4. **The key'd providers and the CLI-kind transports** (design §5) — the
+   registry beyond local: subscription CLIs keep their own session handles.
+5. **`/` commands, markdown rendering, and the `oxy ask` verb** (§9).
+
+It depends on nothing in the porting batches, and the batches depend on
+nothing in it — it is a parallel track, not a batch.
 
 ### 4.5 Windows gaps
 
@@ -756,8 +793,8 @@ confirm bug.
    there is room to evaluate, not inside a batch of seven.
 5. **Then the network family** (C, F) once the HTTP decision is made.
 6. **`docker`/`shortcuts`/`omarchy`** (D) whenever; they are self-contained.
-7. **`agent` and `bo`** (G) last, `agent` as its own project with the 18 cases
-   as the acceptance suite.
+7. **`agent`** (G) last, as its own project with the 18 cases as the
+   acceptance suite.
 8. **In parallel, not in a batch**: `oxy test`'s missing layers + fixtures
    (§4.2) and the case files (§4.7).
 
@@ -803,9 +840,9 @@ confirm bug.
 
 ### 6.2 Row contracts: what each view reads
 
-`*` marks a field the view reads off the **first row** — the header object (`machine` for `processes`, `counts`/`offline` for `herdr`, `mode` for `menutree`, `repo` for `gitbranches`/`gitstashes`, `hostCores`/`hostMem` for `docker`). Putting such a field on every row would be the same object a dozen times; a port must put it on row zero.
+These are the fields each view documents and reads (its own header comment is the source); `*` marks a field carried on the **first row** — the header object (`machine` for `processes`, `counts`/`offline` for `herdr`, `mode` for `menutree`, `repo` for `gitbranches`/`gitstashes`). Putting such a field on every row would be the same object a dozen times; a port must put it on row zero. Where a view names a nested shape (`repo { … }`, `turns[] { … }`), the port owes that shape, not just the leaf names.
 
-| view | fields the view reads |
+| view | row fields (the view's own contract) |
 |---|---|
 | `list` | accent detail iconGlyph iconSource pending pinned source subtitle title |
 | `hero` | clock subtitle title |
@@ -814,35 +851,33 @@ confirm bug.
 | `grid` | accessory art detail iconSource subtitle title |
 | `dashboard` | accessory detail progress subtitle title |
 | `calendar` | accessory marks month subtitle title today weekStart year |
-| `player` | enabled glyph key on primary |
+| `player` | art controls lengthSeconds player progress seek status subtitle title |
 | `slider` | accent accessory max min setExec step title value |
 | `form` | exec ext fields label name onSubmit placeholder query readonly secret subtitle title value |
 | `zones` | accessory clock detail subtitle title zoneid |
 | `timegrid` | band best cells city delta detail label name ok people startsAt title |
-| `gitrepo` | commits label repo value |
-| `gitbranches` | accessory ahead behind current gone name subject trunkAhead trunkBehind upstream |
-| `gitstashes` | accessory added branch deleted files message ref |
-| `ghrepo` | label prs repo value waiting |
-| `ghpr` | checks label pr reviews value waiting |
-| `agent` | agentName allows answer blocked cwd denies did direct draft earlier hints kind note now plan state subtitle text title turns why you |
-| `docker` | band cpu fraction health hostCores hostMem label loud memBytes quiet reading scale value |
-| `notes` | excerpt fresh kind subtitle title words |
-| `processes` | age count cpu mem memShare own pid stopped title user windowed machine\* |
+| `gitrepo` | repo { name, path, branch, upstream, ahead, behind } · commits[] { hash, subject, author, age } |
+| `gitbranches` | accessory ahead author behind current gone name subject trunk trunkAhead trunkBehind upstream · repo\* { name, path, branch, trunk, staged, changed, conflicted, count } |
+| `gitstashes` | added age branch deleted files[] { path, added, deleted } message ref · repo\* { name, path, count } |
+| `ghrepo` | repo { slug, description, language, stars, forks, private, archived } · prs[] { number, title, author, draft, mark, review, age } |
+| `ghpr` | pr { repo, number, title, author, head, base, draft, state } · checks[] { name, mark, state, took } · reviews[] { who, state, mark, age } |
+| `agent` | allows denies direct draft hints plan state · turns[] { you, state, now, did[], earlier, steps, answer, blocked[] } |
+| `docker` | band cid cpu cpuFull cpuFullText exitCode full health hostCores hostMem image mem memBytes memCap memCapText memPct name oom ports[] project restarts service since status |
+| `notes` | detail excerpt fresh kind tally words |
+| `processes` | age cmd count cpu cpuLive mem memShare own pid stopped user winClass winTitle windowed windows workspace · machine\* { cpu, memUsed, memTotal, procs, matched } |
 | `emoji` | iconGlyph subtitle title |
-| `themes` | accent bg current fg surface swatches title |
+| `themes` | accent bg current dim fg mode surface swatches title total shown |
 | `windows` | cls floating focused fullscreen grouped iconGlyph monitor pinned session special title width height wsActive wsId wsName wsWindows xwayland |
 | `hosts` | alias hostName identity known port proxyJump sourceFile title user |
-| `radios` | battery deviceKind iconGlyph iface known mark meta radioOn secure signal signalLabel title |
-| `radioplayer` | actions art at controls danger exec glyph iconGlyph key kind on primary row subtitle title |
+| `radios` | battery deviceKind iface joined kind known mark meta radioOn radioLabel secure signal signalLabel title |
+| `radioplayer` | art controls elapsedSeconds kind muted station status subtitle title volume |
 | `files` | age art dir ext kind size title |
-| `repos` | ahead behind dirty drifted index path repo selected slug upstream |
-| `menutree` | children iconGlyph kind title trail mode\* |
+| `repos` | age ahead behind branch dirty name path repo slug title upstream |
+| `menutree` | children depth kind mode node title trail |
 | `snippets` | chars lines preview text title |
-| `vault` | folder name title |
-| `shortcuts` | accessory keys title |
-| `herdr` | band here kind n name note path session since tabCount tabLabel what wsLabel counts\* offline\* |
-| `marketplacehome` | kindWord meta subtitle title |
-| `marketplaceunit` | backLabel claims consequence facts path queued runsLines self state subtitle title |
+| `vault` | clearSeconds folder name store title tool |
+| `shortcuts` | accessory group keys title |
+| `herdr` | band counts here kind name note offline paneId path session since status tabCount tabLabel what wsLabel |
 
 ### 6.3 Extension → view(s)
 
@@ -852,7 +887,6 @@ Script-backed extensions (the porting targets):
 |---|---|
 | `agent` | agent |
 | `alarm` | hero, list |
-| `bo` | marketplace, marketplaceunit |
 | `branch` | gitbranches |
 | `bri`, `vol` | slider |
 | `bt`, `wifi` | radios |
@@ -891,7 +925,6 @@ list.
 | `$XDG_STATE_HOME/omarchy/oxy-repos.list` | `repo` (and its callers) | the discovery cache, 120s TTL |
 | `$XDG_STATE_HOME/omarchy/oxy-repo` | `repo` | the pinned repo |
 | `$XDG_STATE_HOME/omarchy/oxy-spotify.json` | `spotify-library` | the OAuth token (deliberately not in `oxy.json`) |
-| `$XDG_STATE_HOME/better-omarchy/oxy-bo.log` | `bo` | the marketplace log (`bo`'s own state dir, not ours) |
 | `$XDG_STATE_HOME/omarchy/oxy-agent.sock`, `oxy-agent-previews.json` | `agent` | the socket and the preview registry |
 | `$XDG_STATE_HOME/omarchy/oxy-calc-history.json` | `calc`/`calchist` (native) | the accepted answers |
 | `$XDG_STATE_HOME/omarchy/oxy-emoji-recent` | `emoji` (native) | the picker's MRU, written through `remember` |
@@ -899,7 +932,6 @@ list.
 | `$XDG_RUNTIME_DIR/oxy-note-saved` | `note` | the write stamp |
 | `$XDG_RUNTIME_DIR/oxy-herdr-seen.json` | `herdr` | the seen-tab bookkeeping (runtime, so a reboot clears it) |
 | `$XDG_RUNTIME_DIR/omarchy-reminders/` | `alarm` | the message files behind the systemd timers |
-| `$XDG_RUNTIME_DIR/oxy-bo.json`, `.linked`, `.seen` | `bo` | the runtime cache, the link state, the summon-readiness marker |
 | `~/.cache/oxy/define` | `def` | 500 entries, 30 days (`cacheDays`) |
 | `~/.cache/oxy/zones` | `tz` | the resolved zone-name cache |
 
@@ -914,7 +946,6 @@ batch A: the reading is the whole cost).
 |---|---|---|---|---|---|---|---|---|---|
 | agent | do | agent | oxy-agent | 2167 | hyprctl, systemctl, python3, git, gh | 600 | – | yes | XL |
 | gh | gh | list + ghrepo/ghpr | oxy-gh | 1047 | gh (GraphQL), jq, stat | 900 | – | yes | L |
-| bo | bo | marketplace + unit | oxy-bo | 891 | bo, hyprctl, python3 | – | – | yes | L |
 | tz | tz | hero/zones/timegrid/list | oxy-timezone | 838 | python3, date, timedatectl | – | – | yes | L |
 | unit | unit | list | oxy-unit | 838 | qalc, cal | – | 60000 | yes | L |
 | repo | repo | repos | oxy-repo | 776 | git, fd, stat | – | – | yes | L |
@@ -983,7 +1014,7 @@ header, and is the kind of thing a clean rewrite quietly loses.
 
 ```sh
 bash tests/run.sh                     # every check CI runs (static, behaviour, cases, cargo, guards)
-cd core && cargo test --workspace     # the engine suite
+cd core && cargo test --workspace     # the engine suite (60 tests)
 cd core && cargo clippy --workspace --all-targets -- -D warnings
 
 oxy test --cases <id>                 # that extension's assertions, through the engine (native first)
@@ -992,6 +1023,24 @@ oxy test <id>                         # its testQuery through the engine
 oxy query --local '<query>'           # one question through the in-process engine
 
 printf '{"op":"query","text":"run:","opened":true}\n' | oxy send   # the wire, by hand
+```
+
+The LLM slice has its own checks — the client and the parser are tested
+against a stub server inside `cargo test`, so no network and no model are
+needed:
+
+```sh
+cd core && cargo test -p oxy-core llm    # url, framing, deltas, request shape
+```
+
+To check it end to end by hand, run any streaming OpenAI-compatible server
+(or the stub the audits used: a `Transfer-Encoding: chunked` reply of
+`data: {"choices":[{"delta":{"content":"…"}}]}` frames), point `ask.endpoint`
+at it in a sandbox `oxy.json`, and send an `ask` op:
+
+```sh
+printf '{"op":"ask","text":"say hi"}\n' | oxy send
+# answerstart provider "Local · <model>" → answer lines → answerdone error ""
 ```
 
 The live smoke list the audits used, worth re-running after a batch lands:

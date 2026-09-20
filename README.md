@@ -136,7 +136,7 @@ tilde. `/~/Documents`, `//home/ada` and `/report.pdf` all become file searches.
 | `Down`, `Ctrl+N`, `Tab` | next |
 | `Up`, `Ctrl+Shift+P`, `Shift+Tab` | previous |
 | `PageDown` / `PageUp` | a screenful at a time |
-| `Left` / `Right` | move a cell, in the grid, dashboard, calendar, docker and marketplace views |
+| `Left` / `Right` | move a cell, in the grid, dashboard, calendar and docker views |
 | `Left` / `Right` | adjust, in the slider, timegrid, emoji, themes, windows, menutree and radioplayer views |
 | `Escape` | four stages, in order |
 
@@ -310,7 +310,6 @@ the combination and never fires it.
 | `run:` | `commands`, `>` | Omarchy commands only |
 | `web:` | `search`, `google`, `ddg`, `?` | search the web with the default engine |
 | `do:` | `agent`, `ai` | hand a local coding agent an instruction, and watch what it does |
-| `bo:` | `market`, `marketplace` | browse your marketplaces and switch a unit on or off. Needs `bo` |
 
 Three extensions declare settings today: `def:` (how long to keep definitions),
 `repo:` (where your repos live) and `tz:` (which zones to show). The form saves
@@ -347,56 +346,13 @@ each is namespaced by the extension's id, so two extensions can both offer
 
 ---
 
-## The marketplace: `bo:`
+## The deeplink
 
-`bo:` is better-omarchy inside the launcher. It has three levels. You walk them
-with `Enter` and leave them with `Escape`.
-
-| Level | What is on it |
-|---|---|
-| home | your marketplaces, and the units you have on |
-| a marketplace | its units, as tiles |
-| a unit | its own page: what it does, what it needs, and the switch |
-
-Typing narrows the level you are on and nothing else. On home a search reaches
-every unit and not only the ones you have, and the section takes the search as
-its label to say so. The reserved words are the kinds (`plugin`, `hypr`,
-`setting`), the states (`on`, `off`, `unavailable`) and the categories units
-declare. They are matched exactly, and a query that matches none of them is
-retried as plain text.
-
-The level is an address written into the box: `bo:@<marketplace>` is one
-marketplace and `bo:#<market>/<unit>` is one unit. Nobody types those. The
-launcher writes them when you press `Enter`, which is what keeps the level alive
-while you type.
-
-A unit page carries two rows: the way out, and the switch. Arriving selects the
-way out, so the first key you can press undoes the navigation rather than
-changing a system component. One `Down` lands on the switch and `Enter` commits.
-
-Turning a plugin unit on or off closes the launcher, runs `bo add` or
-`bo remove`, and summons the launcher back on the page you were on. It has to.
-The shell watches `~/.config/omarchy/plugins`, and a change in that directory
-unloads every panel, overlay and menu plugin. This launcher is an overlay.
-Nothing in the sequence is a timed sleep: the script waits for the surface to
-go, then for its own next invocation to come back carrying the address it asked
-for. A `hypr` or a `setting` unit changes nothing the shell watches, so its
-switch moves with the window still up.
-
-The unit that ships this launcher is the one that does not come back. Its page
-says so.
-
-A unit whose `needs` are not all on this machine cannot be turned on. `bo:`
-draws it faintest of the three states, with the reason where its summary would
-be, so you learn it before you press anything.
-
-### The deeplink
-
-That summon is a public entry point. Any payload with a `query` key opens the
-launcher on that query:
+Anything that can summon the launcher can summon it on a query: any payload
+with a `query` key opens the launcher there.
 
 ```bash
-omarchy-shell shell summon oma.oxy '{"query":"bo:"}'
+omarchy-shell shell summon oma.oxyrs '{"query":"run:"}'
 ```
 
 A payload that will not parse opens the launcher empty rather than not at all.
@@ -483,11 +439,32 @@ goes, and has to exit when it is done. It runs with stdin closed and stderr
 folded in, because a CLI that reads stdin otherwise waits, and some print a
 warning into the middle of the answer.
 
+A model server already running on this machine answers without a process in
+between — no CLI, no shell, no `stdbuf`. Point `ask.endpoint` at it:
+
+```json
+{
+  "ask": {
+    "endpoint": "http://127.0.0.1:11434/v1/chat/completions",
+    "model": "llama3.2"
+  }
+}
+```
+
+That is ollama's OpenAI-compatible route; LM Studio (`:1234`) and llama.cpp
+(`:8080`) speak the same one. `ask.system`, `ask.maxTokens` (800) and
+`ask.temperature` (0.4) have defaults written for a launcher card. Only
+`http://` is accepted, on purpose: the endpoint is your configuration, and a
+launcher should not be the thing that quietly sends a question to a remote
+host in plaintext. A configured endpoint replaces the CLI list; a server that
+is down says so in the card rather than falling back silently.
+
 Escape leaves the answer. So does typing.
 
 A multi-turn `ask:` chat surface — subscription CLIs, API-keyed endpoints and
 local models behind one provider registry — is designed in
-[docs/LLM-INTEGRATION.md](docs/LLM-INTEGRATION.md).
+[docs/LLM-INTEGRATION.md](docs/LLM-INTEGRATION.md). Its first slice is
+implemented: the local endpoint above, spoken to in-process.
 
 ---
 
@@ -528,6 +505,7 @@ keystroke. `/config` opens it.
 | `extensionSettings` | `{}` | what `settings:` writes, under each extension's id so two extensions wanting a `token` cannot read each other's |
 | `notesDir` | `~/Documents/Notes` | where `note:` keeps its markdown |
 | `askProvider` | `""` | force one `Ctrl+Enter` provider by id; a typo falls back to the list rather than going silent |
+| `ask` | `{}` | a local model endpoint: `endpoint`, `model`, `system`, `maxTokens`, `temperature`. Set, it answers `Ctrl+Enter` in-process and the CLI list is not probed |
 | `frecency` | `true` | rank by what you actually use. `false` ranks purely on match quality; pins still apply |
 | `maxRows` | `9` | rows shown, and what PageUp/PageDown jump by |
 | `cardWidth` | `620` | the card, in unscaled pixels |
@@ -717,7 +695,7 @@ The fields that matter most:
 | `when` | a shell test run once at load, with an eight-second bound — an extension for software you do not have costs nothing |
 | `filters` | extra `name:value` filters to parse out of the query; undeclared, `year:1959` stays literal text |
 | `cacheMs` / `refreshMs` | both off by default, on purpose: live state is wrong the moment you act on it, and a timer nobody asked for is a process a second |
-| `view` | one of ~37 layouts — `list`, `hero`, `calendar`, `timegrid`, `gitrepo`, `slider`, `agent`, `marketplace`… the full table is in [docs/EXTENSIONS.md](docs/EXTENSIONS.md) |
+| `view` | one of ~34 layouts — `list`, `hero`, `calendar`, `timegrid`, `gitrepo`, `slider`, `agent`, `docker`… the full table is in [docs/EXTENSIONS.md](docs/EXTENSIONS.md) |
 | `socket` | a unix socket to ask instead of a process per keystroke |
 
 Rows are `{ id, title, subtitle, exec }` plus whatever your own view needs:

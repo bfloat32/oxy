@@ -7,6 +7,7 @@
 //! and the epoch bookkeeping that keeps a slow answer from arriving after the
 //! question changed.
 
+pub mod llm;
 pub mod native;
 pub mod process;
 pub mod socket;

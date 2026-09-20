@@ -51,7 +51,7 @@ Item {
   readonly property int gutter: Style.space(18)
   readonly property int headHeight: Style.space(62)
   readonly property int textLeft: view.gutter + Style.space(16)
-  // Wide enough for "waiting" over "better-omarchy · review" at caption size.
+  // Wide enough for "waiting" over "feature/auth · review" at caption size.
   readonly property int rightWidth: Style.space(168)
 
   readonly property color dim: Qt.darker(view.launcher.foreground, 2.1)

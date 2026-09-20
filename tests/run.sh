@@ -154,8 +154,11 @@ python3 tests/cases.py || bad "extension cases"
 
 say "no legacy name"
 # This script names the word to search for it, so its own directory is skipped;
-# the workflow file in .github does the same.
-grep -ri omacast --exclude-dir=.git --exclude-dir=.github --exclude-dir=tests . && bad "an omacast reference survives"
+# the workflow file in .github does the same. Build outputs are skipped too:
+# every artifact under core/target embeds the checkout path, so a clone in a
+# directory still called `omacast` would match its own binaries and fail a
+# check that is about source files.
+grep -ri omacast --exclude-dir=.git --exclude-dir=.github --exclude-dir=tests --exclude-dir=target . && bad "an omacast reference survives"
 
 if ((failed)); then
   printf '\n\033[31m%s\033[0m\n\n' "checks failed"

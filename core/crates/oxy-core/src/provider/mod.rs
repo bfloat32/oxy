@@ -7,6 +7,7 @@
 //! and the epoch bookkeeping that keeps a slow answer from arriving after the
 //! question changed.
 
+pub mod native;
 pub mod process;
 pub mod socket;
 pub mod worker;
@@ -18,8 +19,8 @@ use std::sync::Arc;
 
 use serde_json::Value;
 
-use crate::extension::Extension;
-use crate::query::Query;
+use crate::model::query::Query;
+use crate::registry::Extension;
 use crate::settings::Settings;
 
 /// Everything a provider needs to know about the question it was asked.
@@ -44,7 +45,7 @@ pub enum NativeOutcome {
     /// output, so both paths produce identical rows.
     Rows(Vec<Value>),
     /// Rows already built — providers that know their own tier and score.
-    Built(Vec<crate::row::Row>),
+    Built(Vec<crate::model::row::Row>),
     /// Declined: fall through to the socket or command the file declares.
     Fallback,
     /// A real "no answer" — not a fallback.

@@ -9,25 +9,18 @@
 
 #![forbid(unsafe_code)]
 
-pub mod availability;
-pub mod cache;
-pub mod dirs;
 pub mod engine;
-pub mod extension;
-pub mod native;
+pub mod model;
 pub mod provider;
-pub mod query;
-pub mod rank;
-pub mod row;
-pub mod score;
+pub mod registry;
 pub mod settings;
-pub mod shellquote;
 pub mod state;
+pub mod support;
 
 pub use engine::{Engine, EngineCmd, EngineEvent};
-pub use extension::Extension;
-pub use query::Query;
-pub use row::{Action, Row};
+pub use model::query::Query;
+pub use model::row::{Action, Row};
+pub use registry::Extension;
 
 /// The version the wire and the log report — the plugin manifest's, not the
 /// crate's: a bug report reads `sess`, and `sess` must name what the user

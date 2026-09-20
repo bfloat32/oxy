@@ -213,5 +213,5 @@ pub fn run_sync(body: &str, timeout: Duration) -> Option<String> {
 
 /// Parse a script's stdout into rows: a JSON array, or one object per line.
 pub fn parse(text: &str) -> Vec<Value> {
-    crate::row::parse_rows(text)
+    crate::model::row::parse_rows(text)
 }

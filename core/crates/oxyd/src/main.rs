@@ -17,9 +17,9 @@
 use std::path::Path;
 use std::sync::Arc;
 
-use oxy_core::dirs;
 use oxy_core::engine::{Engine, EngineCmd, EngineEvent};
-use oxy_core::native;
+use oxy_core::provider::native;
+use oxy_core::settings::paths as dirs;
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{broadcast, mpsc};

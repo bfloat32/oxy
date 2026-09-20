@@ -15,7 +15,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use oxy_core::engine::{Engine, EngineCmd, EngineEvent};
-use oxy_core::{dirs, extension};
+use oxy_core::{registry as extension, settings::paths as dirs};
 use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
@@ -53,7 +53,7 @@ async fn local_engine() -> (
         cmd_rx,
         evt_tx,
         worker_tx,
-        oxy_core::native::construct,
+        oxy_core::provider::native::construct,
     )
     .await;
     let task = tokio::spawn(async move { engine.run(worker_rx).await });
@@ -451,7 +451,7 @@ async fn case_preflight(id: &str) -> bool {
 /// of `ext:<id>:<row-id>`; the scripts that own the cases say `glyph` and
 /// `id` — so those names are mapped back here rather than the cases being
 /// rewritten for the wire's spelling.
-fn case_view(row: &oxy_core::row::Row, ext_id: &str) -> Value {
+fn case_view(row: &oxy_core::model::row::Row, ext_id: &str) -> Value {
     let mut v = serde_json::to_value(row).unwrap_or(Value::Null);
     let Some(obj) = v.as_object_mut() else {
         return v;
@@ -618,7 +618,7 @@ async fn extensions() -> i32 {
             "title": ext.title,
             "aliases": ext.aliases,
             "view": ext.view,
-            "tier": oxy_core::rank::tier_name(ext.tier),
+            "tier": oxy_core::support::rank::tier_name(ext.tier),
             "native": ext.native,
             "search": ext.search,
             "socket": ext.socket,

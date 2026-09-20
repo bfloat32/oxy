@@ -9,10 +9,10 @@ use std::sync::Arc;
 use criterion::{Criterion, criterion_group, criterion_main};
 use serde_json::{Value, json};
 
-use oxy_core::extension::Extension;
-use oxy_core::query::Query;
-use oxy_core::rank;
-use oxy_core::row::{Row, to_row, to_row_owned};
+use oxy_core::model::query::Query;
+use oxy_core::model::row::{Row, to_row, to_row_owned};
+use oxy_core::registry::Extension;
+use oxy_core::support::rank;
 
 fn known() -> HashSet<String> {
     [

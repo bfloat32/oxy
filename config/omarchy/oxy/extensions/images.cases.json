@@ -1,0 +1,18 @@
+[
+  { "why": "the picture folders answer as thumbnails, newest first, at most sixty rows",
+    "requires": "command -v fd jq numfmt >/dev/null && find \"$HOME/Pictures\" \"$HOME/Downloads\" \"$HOME/Desktop\" \"$HOME/Documents\" -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' -o -iname '*.avif' -o -iname '*.bmp' -o -iname '*.svg' -o -iname '*.tiff' -o -iname '*.heic' \\) -print -quit 2>/dev/null | grep -q .",
+    "query": "", "minRows": 1, "maxRows": 60,
+    "fields": ["title", "subtitle", "art", "accessory", "exec", "actions"],
+    "matches": { "art": "^file://", "exec": "^xdg-open ",
+                 "accessory": "^[0-9.]+[KMGTPEZYRQ]?B$" },
+    "atMost": { "actions": 4 } },
+
+  { "why": "a name query narrows the same rows rather than changing their shape",
+    "requires": "command -v fd jq >/dev/null",
+    "query": "a",
+    "fields": ["title", "subtitle", "art", "exec"],
+    "atMost": { "actions": 4 } },
+
+  { "why": "a name nothing carries is an empty answer, not an error row",
+    "query": "zzz-no-image-is-named-this", "maxRows": 0, "fields": [] }
+]

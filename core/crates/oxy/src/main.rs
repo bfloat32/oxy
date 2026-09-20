@@ -2,6 +2,7 @@
 //!
 //!   oxy query [--local] TEXT   ask the engine a question, print the rows
 //!   oxy test [EXT]             run each extension's testQuery against it
+//!   oxy test --cases [EXT]     run each extension's *.cases.json assertions
 //!   oxy extensions             list the registry
 //!
 //! `--local` runs the engine in this process — how the tests exercise the
@@ -17,7 +18,7 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc;
 
 const USAGE: &str =
-    "oxy query [--local] TEXT | oxy test [EXT] | oxy extensions | oxy send";
+    "oxy query [--local] TEXT | oxy test [--cases] [EXT] | oxy extensions | oxy send";
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 4)]
 async fn main() {
@@ -214,6 +215,10 @@ async fn query_daemon(text: &str) -> std::io::Result<i32> {
 /// Every extension's `testQuery`, run through the in-process engine — the
 /// Rust counterpart of `tests/cases.py`'s live checks.
 async fn test(args: &[String]) -> i32 {
+    if args.iter().any(|a| a == "--cases") {
+        let only = args.iter().find(|a| !a.starts_with("--")).cloned();
+        return test_cases(only).await;
+    }
     let only = args.first().cloned();
     let settings = oxy_core::settings::Settings::load(&dirs::settings_file());
     let report = extension::load_dir(&dirs::extensions_dir(), &settings.extensions);
@@ -255,6 +260,19 @@ async fn test(args: &[String]) -> i32 {
             Some(n) => println!("ok   {} ({}): {} rows", ext.id, query_text, n),
         }
     }
+    if let Some(only) = &only {
+        if report.extensions.iter().all(|e| e.id != *only) {
+            eprintln!("oxy test: no extension '{only}'");
+            return 1;
+        }
+        if report
+            .extensions
+            .iter()
+            .any(|e| e.id == *only && e.test_query.is_empty())
+        {
+            println!("{only}: no testQuery declared");
+        }
+    }
     if report.extensions.is_empty() {
         eprintln!(
             "oxy test: no extensions found under {}",
@@ -263,6 +281,282 @@ async fn test(args: &[String]) -> i32 {
         return 1;
     }
     failures
+}
+
+/// `oxy test --cases [EXT]`: the shipped `*.cases.json` fixtures run through
+/// the engine — the assertions `tests/cases.py` makes against the scripts,
+/// made against the rows the merged pipeline actually returns. The same
+/// contract holds: cases whose extension cannot run here skip rather than
+/// fail, and a row assertion only checks when the row exists.
+async fn test_cases(only: Option<String>) -> i32 {
+    let settings = oxy_core::settings::Settings::load(&dirs::settings_file());
+    let report = extension::load_dir(&dirs::extensions_dir(), &settings.extensions);
+    let mut held = 0usize;
+    let mut failed = 0usize;
+    let mut skipped = 0usize;
+
+    // One engine for the whole run — each case is just the next query.
+    let (tx, mut rx, _task) = local_engine().await;
+
+    for ext in &report.extensions {
+        if let Some(only) = &only {
+            if ext.id != *only {
+                continue;
+            }
+        }
+        let cases_path = ext.source.with_extension("cases.json");
+        let Ok(text) = std::fs::read_to_string(&cases_path) else {
+            continue;
+        };
+        let cases: Vec<Value> = match serde_json::from_str(&text) {
+            Ok(c) => c,
+            Err(e) => {
+                println!("FAIL {} cases: {e}", ext.id);
+                failed += 1;
+                continue;
+            }
+        };
+
+        // The same "cannot answer here is a skip, not a failure" gates
+        // cases.py applies — for the script leg. A native provider answers
+        // in-process whatever `when` and `search` say, so those cases still
+        // run; ones needing the fallback report honestly when the machine
+        // lacks the script.
+        if ext.native.is_empty() {
+            if !ext.when.is_empty()
+                && !oxy_core::provider::process::check(&ext.when).await
+            {
+                println!("skip {} cases (when fails here)", ext.id);
+                skipped += 1;
+                continue;
+            }
+            let cmd = ext.search.split_whitespace().next().unwrap_or("");
+            if cmd.is_empty()
+                || !oxy_core::provider::process::check(&format!("command -v {cmd}")).await
+            {
+                println!("skip {} cases ({cmd} not on PATH)", ext.id);
+                skipped += 1;
+                continue;
+            }
+        }
+        if !case_preflight(&ext.id).await {
+            println!("skip {} cases (its data service is unreachable here)", ext.id);
+            skipped += 1;
+            continue;
+        }
+
+        let mut problems = 0usize;
+        for case in &cases {
+            let query = case.get("query").and_then(|q| q.as_str()).unwrap_or("");
+            let text = format!("{}:{query}", ext.keyword);
+            // Results queued by the previous case are its answer, not this
+            // one's — drain them so the loop below only sees this epoch.
+            while rx.try_recv().is_ok() {}
+            if tx
+                .send(EngineCmd::Query {
+                    text: text.clone(),
+                    opened: true,
+                })
+                .await
+                .is_err()
+            {
+                break;
+            }
+
+            let deadline = std::time::Instant::now()
+                + Duration::from_millis((ext.timeout_ms + ext.debounce_ms + 4000).max(8000));
+            let mut rows: Vec<Value> = Vec::new();
+            while let Ok(Some(event)) =
+                tokio::time::timeout_at(deadline.into(), rx.recv()).await
+            {
+                if let EngineEvent::Results {
+                    rows: r, waiting, ..
+                } = event
+                {
+                    rows = r
+                        .iter()
+                        .filter(|row| row.provider_id == ext.id)
+                        .map(|row| serde_json::to_value(row).unwrap_or(Value::Null))
+                        .collect();
+                    if !waiting.contains(&ext.id) {
+                        break;
+                    }
+                }
+            }
+
+            for prob in check_case(case, &rows) {
+                problems += 1;
+                println!("FAIL {} case: {prob}", ext.id);
+                let why = case.get("why").and_then(|w| w.as_str()).unwrap_or("");
+                if !why.is_empty() {
+                    println!("        ({why})");
+                }
+            }
+        }
+        if problems == 0 {
+            held += 1;
+            println!("ok   {} cases  {} held", ext.id, cases.len());
+        } else {
+            failed += problems;
+        }
+    }
+    println!("{held} held, {failed} broke, {skipped} skipped");
+    if failed > 0 {
+        1
+    } else {
+        0
+    }
+}
+
+/// The services some cases describe — unreachable here means skip, the same
+/// preflight cases.py runs.
+async fn case_preflight(id: &str) -> bool {
+    let probe = match id {
+        "define" => {
+            "curl -sf --max-time 6 -o /dev/null \
+             https://api.dictionaryapi.dev/api/v2/entries/en/ping"
+        }
+        "issue" | "pr" => "gh auth status",
+        // Names like saopaulo resolve through the IANA list in tzdata, not
+        // the shipped label table.
+        "timezone" => "timedatectl list-timezones >/dev/null 2>&1 || test -d /usr/share/zoneinfo",
+        _ => return true,
+    };
+    oxy_core::provider::process::check(probe).await
+}
+
+/// A field is absent when missing, "", [] or {}. 0 and false are real.
+fn present(v: Option<&Value>) -> bool {
+    match v {
+        None | Some(Value::Null) => false,
+        Some(Value::String(s)) => !s.is_empty(),
+        Some(Value::Array(a)) => !a.is_empty(),
+        Some(Value::Object(o)) => !o.is_empty(),
+        Some(_) => true,
+    }
+}
+
+/// `matches` patterns were written against Python's `str()`: a bool reads
+/// `True`, a list `['a', 'b']`, a dict `{'k': 'v'}` — so the row's value is
+/// rendered the same way before the regex sees it.
+fn py_str(v: &Value) -> String {
+    match v {
+        Value::String(s) => s.clone(),
+        Value::Bool(b) => if *b { "True" } else { "False" }.to_string(),
+        Value::Null => "None".into(),
+        Value::Number(n) => n.to_string(),
+        Value::Array(a) => format!(
+            "[{}]",
+            a.iter().map(py_repr).collect::<Vec<_>>().join(", ")
+        ),
+        Value::Object(o) => format!(
+            "{{{}}}",
+            o.iter()
+                .map(|(k, v)| format!("{}: {}", py_repr_str(k), py_repr(v)))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
+}
+
+fn py_repr(v: &Value) -> String {
+    match v {
+        Value::String(s) => py_repr_str(s),
+        other => py_str(other),
+    }
+}
+
+fn py_repr_str(s: &str) -> String {
+    format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
+}
+
+/// One case's assertions against the rows its extension answered — a port of
+/// `tests/cases.py`'s `check_case`. Row assertions only check when the row
+/// exists; `minRows` is how a case demands one.
+fn check_case(case: &Value, rows: &[Value]) -> Vec<String> {
+    let mut out = Vec::new();
+    let n = rows.len();
+    if let Some(min) = case.get("minRows").and_then(|v| v.as_u64()) {
+        if (n as u64) < min {
+            out.push(format!("{n} rows, wanted at least {min}"));
+            return out;
+        }
+    }
+    if let Some(max) = case.get("maxRows").and_then(|v| v.as_u64()) {
+        if (n as u64) > max {
+            out.push(format!("{n} rows, wanted at most {max}"));
+            return out;
+        }
+    }
+
+    let idx = case.get("row").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let Some(row) = rows.get(idx) else {
+        return out;
+    };
+
+    if let Some(view) = case.get("view").and_then(|v| v.as_str()) {
+        if row.get("view").and_then(|v| v.as_str()) != Some(view) {
+            out.push(format!(
+                "row {idx} view is {:?}, wanted {view:?}",
+                row.get("view")
+            ));
+            return out;
+        }
+    }
+    for f in case
+        .get("fields")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+    {
+        if let Some(name) = f.as_str() {
+            if !present(row.get(name)) {
+                out.push(format!("row {idx} {name} is empty"));
+            }
+        }
+    }
+    for f in case
+        .get("absent")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default()
+    {
+        if let Some(name) = f.as_str() {
+            if present(row.get(name)) {
+                out.push(format!("row {idx} {name} is {:?}, wanted absent", row.get(name)));
+            }
+        }
+    }
+    if let Some(caps) = case.get("atMost").and_then(|v| v.as_object()) {
+        for (f, cap) in caps {
+            let len = match row.get(f) {
+                Some(Value::String(s)) => Some(s.len()),
+                Some(Value::Array(a)) => Some(a.len()),
+                Some(Value::Object(o)) => Some(o.len()),
+                _ => None,
+            };
+            if let (Some(len), Some(cap)) = (len, cap.as_u64()) {
+                if len as u64 > cap {
+                    out.push(format!("row {idx} {f} has {len}, wanted at most {cap}"));
+                }
+            }
+        }
+    }
+    if let Some(pats) = case.get("matches").and_then(|v| v.as_object()) {
+        for (f, pat) in pats {
+            let Some(pat) = pat.as_str() else { continue };
+            let text = py_str(row.get(f).unwrap_or(&Value::Null));
+            let matched = fancy_regex::Regex::new(pat)
+                .ok()
+                .and_then(|re| re.is_match(&text).ok())
+                .unwrap_or(false);
+            if !matched {
+                let short: String = text.chars().take(120).collect();
+                out.push(format!("row {idx} {f} is {short:?}, wanted /{pat}/"));
+            }
+        }
+    }
+    out
 }
 
 async fn extensions() -> i32 {

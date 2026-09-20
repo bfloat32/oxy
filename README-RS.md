@@ -71,8 +71,10 @@ speaks (`docs/PROTOCOL.md` has the whole protocol).
 ```bash
 oxy query "cal:"        # ask the daemon; falls back to an in-process engine
 oxy query --local "2+2" # skip the daemon entirely
-oxy test                # run every extension's shipped .cases.json
-oxy test file           # one extension's cases
+oxy test                # every extension's testQuery through the engine
+oxy test file           # one extension's testQuery
+oxy test --cases        # the shipped *.cases.json assertions, engine-side
+oxy test --cases file   # one extension's cases
 oxy extensions          # the loaded registry
 printf '{"op":"ping"}\n' | oxy send   # talk to the socket directly
 ```

@@ -10,13 +10,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::sync::{mpsc, Mutex};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, Sleep};
 
 use crate::extension::{build_command, cache_key, Extension};
 use crate::provider::process;
-use crate::provider::socket::SocketConn;
+use crate::provider::socket::{self, SocketChan, SocketReq};
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::query::Query;
 use crate::row::{to_row, Row};
@@ -95,15 +95,6 @@ struct Live {
     pending: Pending,
 }
 
-/// A question for a socket daemon, with its reply channel.
-struct SocketReq {
-    epoch: u64,
-    arg: String,
-    filters: Arc<BTreeMap<String, String>>,
-    timeout: Duration,
-    reply: oneshot::Sender<Option<Vec<Value>>>,
-}
-
 /// One task per extension. `run` owns the loop; `Worker` is the handle the
 /// engine keeps.
 pub struct Worker;
@@ -132,7 +123,6 @@ pub async fn run(
     let mut debounce: Option<std::pin::Pin<Box<Sleep>>> = None;
     let mut refresh_at: Option<std::pin::Pin<Box<Sleep>>> = None;
     let mut proc_run: Option<JoinHandle<Option<String>>> = None;
-    let mut sock_run: Option<JoinHandle<Option<Vec<Value>>>> = None;
     let mut native_run: Option<JoinHandle<NativeOutcome>> = None;
     let mut native_partial: Option<mpsc::UnboundedReceiver<Vec<Value>>> = None;
     let mut run_epoch: u64 = 0;
@@ -140,8 +130,16 @@ pub async fn run(
     let mut run_pending: Option<Pending> = None;
     let mut refreshing_run = false;
     // The socket connection is an actor of its own, so a run can borrow it
-    // without borrowing the worker.
-    let mut socket: Option<mpsc::Sender<SocketReq>> = None;
+    // without borrowing the worker — and every line the daemon pushes lands
+    // on the push channel, not only the one answering the last question.
+    let mut socket: Option<SocketChan> = None;
+    // The question the socket daemon was last asked, kept after its first
+    // answer: pushes for the same epoch still have a question to belong to.
+    let mut sock_pending: Option<Pending> = None;
+    // A socket question owed its first answer; the deadline is the old
+    // `killer` timer — a daemon that never speaks resolves as a failed run.
+    let mut sock_waiting = false;
+    let mut sock_deadline: Option<std::pin::Pin<Box<Sleep>>> = None;
     let mut last_connect = Instant::now() - Duration::from_secs(60);
 
     // `when` is checked once at spawn; a failure re-checks only when the
@@ -199,11 +197,15 @@ pub async fn run(
                 && (was_refresh
                     || (!stale_shown_key.is_empty() && stale_shown_key == run_key));
             if keep_stale {
+                run_pending = None;
                 plog!("prov.stale", {"ep": run_epoch, "refresh": was_refresh});
                 arm_refresh!();
             } else {
                 match out {
-                    RunOut::Failed => emit!(run_epoch, Vec::new(), true),
+                    RunOut::Failed => {
+                        run_pending = None;
+                        emit!(run_epoch, Vec::new(), true)
+                    }
                     RunOut::Raw(mut raw) => {
                         raw.truncate(ext.max_rows);
                         if let Some(p) = run_pending.take() {
@@ -258,13 +260,16 @@ pub async fn run(
             if let Some(h) = proc_run.take() {
                 h.abort();
             }
-            if let Some(h) = sock_run.take() {
-                h.abort();
-            }
             if let Some(h) = native_run.take() {
                 h.abort();
             }
             native_partial = None;
+            // A socket ask has no task to abort: the line already went out,
+            // and its answer lands on the push channel — epoch-filtered on
+            // arrival, so a late one lands nowhere.
+            sock_deadline = None;
+            sock_waiting = false;
+            sock_pending = None;
         }};
     }
     macro_rules! cancel_run {
@@ -298,21 +303,43 @@ pub async fn run(
                 native_run = Some(tokio::spawn(
                     async move { n.lock().await.query(ctx, ptx).await },
                 ));
-            } else if let Some(sock) = socket.clone() {
-                let tmo = Duration::from_millis(ext.timeout_ms);
-                sock_run = Some(tokio::spawn(async move {
-                    let (reply, rx) = oneshot::channel();
-                    sock.send(SocketReq {
+            } else if socket.is_some() {
+                let sent = socket
+                    .as_mut()
+                    .unwrap()
+                    .req
+                    .send(SocketReq {
                         epoch: p.epoch,
-                        arg: p.arg,
-                        filters: p.filters,
-                        timeout: tmo,
-                        reply,
+                        arg: p.arg.clone(),
+                        filters: p.filters.clone(),
                     })
-                    .await
-                    .ok()?;
-                    rx.await.ok().flatten()
-                }));
+                    .is_ok();
+                if sent {
+                    sock_pending = Some(p.clone());
+                    sock_waiting = true;
+                    sock_deadline = Some(Box::pin(tokio::time::sleep_until(
+                        Instant::now() + Duration::from_millis(ext.timeout_ms),
+                    )));
+                    run_pending = Some(p);
+                } else {
+                    // The daemon's end of the socket is gone: drop the route
+                    // and fall through to the command, the way a dead socket
+                    // always degraded to the slow path.
+                    socket = None;
+                    sock_pending = None;
+                    if !p.command.is_empty() {
+                        let cmd = p.command.clone();
+                        let tmo = Duration::from_millis(ext.timeout_ms);
+                        proc_run =
+                            Some(tokio::spawn(async move { process::run(&cmd, tmo).await }));
+                        run_pending = Some(p);
+                    } else {
+                        if stale_shown_key.is_empty() || stale_shown_key != p.key {
+                            emit!(p.epoch, Vec::new(), true);
+                        }
+                        run_pending = None;
+                    }
+                }
             } else if !p.command.is_empty() {
                 let cmd = p.command.clone();
                 let tmo = Duration::from_millis(ext.timeout_ms);
@@ -417,8 +444,15 @@ pub async fn run(
                             && last_connect.elapsed() > Duration::from_millis(3000)
                         {
                             last_connect = Instant::now();
-                            if let Some(conn) = SocketConn::connect(&ext.socket).await.ok() {
-                                socket = Some(socket_actor(conn));
+                            if let Ok(chan) = socket::connect(
+                                &ext.socket,
+                                Duration::from_millis(2000).min(
+                                    Duration::from_millis(ext.timeout_ms.max(1)),
+                                ),
+                            )
+                            .await
+                            {
+                                socket = Some(chan);
                             }
                         }
                         let _ = tx
@@ -501,14 +535,45 @@ pub async fn run(
                 }
             }
 
-            out = async { sock_run.as_mut().unwrap().await }, if sock_run.is_some() => {
-                sock_run = None;
-                let out = match out.ok().flatten() {
-                    Some(rows) => RunOut::Raw(rows),
-                    None => RunOut::Failed,
-                };
-                if run_epoch == current_epoch {
-                    deliver!(out);
+            push = async { socket.as_mut().unwrap().push.recv().await },
+                if socket.is_some() =>
+            {
+                match push {
+                    // Every line the daemon sends for the live epoch is a
+                    // complete answer — an answer, or a later refinement of
+                    // one. `do:` streams its card this way.
+                    Some(p) if opened && p.epoch == current_epoch => {
+                        sock_deadline = None;
+                        sock_waiting = false;
+                        if run_pending.is_none() {
+                            run_pending = sock_pending
+                                .clone()
+                                .filter(|q| q.epoch == p.epoch);
+                        }
+                        run_epoch = p.epoch;
+                        run_key = sock_pending
+                            .as_ref()
+                            .filter(|q| q.epoch == p.epoch)
+                            .map(|q| q.key.clone())
+                            .unwrap_or_default();
+                        deliver!(RunOut::Raw(p.rows));
+                    }
+                    Some(_) => {}
+                    // The daemon hung up. The deadline, if a question is
+                    // owed, still resolves it; the next ask reconnects.
+                    None => socket = None,
+                }
+            }
+
+            _ = async { sock_deadline.as_mut().unwrap().await },
+                if sock_deadline.is_some() =>
+            {
+                sock_deadline = None;
+                if sock_waiting {
+                    sock_waiting = false;
+                    // The old killer: a refresh keeps its rows, stale keeps
+                    // stale, anything else is an empty answer.
+                    deliver!(RunOut::Failed);
                 }
             }
 
@@ -548,22 +613,33 @@ pub async fn run(
                                     process::run(&cmd, tmo).await
                                 }));
                                 run_pending = Some(p);
-                            } else if let Some(sock) = socket.clone() {
-                                let tmo = Duration::from_millis(ext.timeout_ms);
-                                let (ep, arg, filters) =
-                                    (p.epoch, p.arg.clone(), p.filters.clone());
-                                sock_run = Some(tokio::spawn(async move {
-                                    let (reply, rx) = oneshot::channel();
-                                    sock.send(SocketReq {
-                                        epoch: ep,
-                                        arg,
-                                        filters,
-                                        timeout: tmo,
-                                        reply,
-                                    }).await.ok()?;
-                                    rx.await.ok().flatten()
-                                }));
-                                run_pending = Some(p);
+                            } else if socket.is_some() {
+                                let sent = socket
+                                    .as_mut()
+                                    .unwrap()
+                                    .req
+                                    .send(SocketReq {
+                                        epoch: p.epoch,
+                                        arg: p.arg.clone(),
+                                        filters: p.filters.clone(),
+                                    })
+                                    .is_ok();
+                                if sent {
+                                    sock_pending = Some(p.clone());
+                                    sock_waiting = true;
+                                    sock_deadline =
+                                        Some(Box::pin(tokio::time::sleep_until(
+                                            Instant::now()
+                                                + Duration::from_millis(ext.timeout_ms),
+                                        )));
+                                    run_pending = Some(p);
+                                } else {
+                                    socket = None;
+                                    sock_pending = None;
+                                    if run_epoch == current_epoch {
+                                        deliver!(RunOut::Raw(Vec::new()));
+                                    }
+                                }
                             } else if run_epoch == current_epoch {
                                 deliver!(RunOut::Raw(Vec::new()));
                             }
@@ -596,8 +672,8 @@ pub async fn run(
                     && showing
                     && pending.is_none()
                     && proc_run.is_none()
-                    && sock_run.is_none()
                     && native_run.is_none()
+                    && !sock_waiting
                     && live.as_ref().is_some_and(|l| l.epoch == current_epoch)
                 {
                     let p = live.take().map(|l| l.pending).unwrap();
@@ -630,19 +706,3 @@ fn build_rows(ext: &Extension, raw: &[Value]) -> Vec<Row> {
     rows
 }
 
-/// The socket connection as an actor: questions in on a channel, answers out
-/// on a oneshot, so no run borrows the worker.
-fn socket_actor(mut conn: SocketConn) -> mpsc::Sender<SocketReq> {
-    let (tx, mut rx) = mpsc::channel::<SocketReq>(8);
-    tokio::spawn(async move {
-        while let Some(req) = rx.recv().await {
-            let rows = conn
-                .ask(req.epoch, &req.arg, &req.filters, req.timeout)
-                .await;
-            if req.reply.send(rows).is_err() {
-                // The run that asked was dropped — a newer query took the slot.
-            }
-        }
-    });
-    tx
-}

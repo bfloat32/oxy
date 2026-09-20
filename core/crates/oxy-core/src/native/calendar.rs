@@ -13,7 +13,6 @@ use serde_json::{json, Value};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
-use crate::shellquote::quote;
 
 pub struct Cal;
 
@@ -176,7 +175,10 @@ fn month_row(
         "today": today_mark,
         "weekStart": week_start,
         "marks": marks,
-        "exec": format!("printf %s {} | wl-copy", quote(&format!("{year:04}-{month:02}"))),
+        // `printf '%q'` on a `-`+digits word leaves it bare; the year-month
+        // this row copies is that word by construction, so the exec line is
+        // byte-identical to the one `oxy-calendar` writes.
+        "exec": format!("printf %s {year:04}-{month:02} | wl-copy"),
         "score": score,
         "view": "calendar",
     })

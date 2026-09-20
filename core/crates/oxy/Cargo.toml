@@ -11,3 +11,4 @@ serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 interprocess.workspace = true
+fancy-regex.workspace = true

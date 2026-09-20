@@ -204,6 +204,7 @@ dependencies = [
 name = "oxy"
 version = "0.1.0"
 dependencies = [
+ "fancy-regex",
  "interprocess",
  "oxy-core",
  "serde",

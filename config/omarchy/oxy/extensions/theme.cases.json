@@ -1,0 +1,25 @@
+[
+  { "why": "a bare query answers one launcher-full of painted cards",
+    "query": "", "minRows": 1, "view": "themes",
+    "fields": ["title", "swatches", "previewExec", "revertExec", "exec", "total", "shown"],
+    "matches": { "exec": "^omarchy theme set " } },
+
+  { "why": "the preview retints the shell directly — `theme set`'s 800ms is for Enter only",
+    "query": "", "minRows": 1,
+    "matches": { "previewExec": "^omarchy-shell shell applyTheme .+; oxy-theme-preview ",
+                 "revertExec": "^omarchy-shell shell applyTheme " } },
+
+  { "why": "theme:dark matches a theme's own mode, not only its name",
+    "query": "dark", "minRows": 1, "view": "themes",
+    "fields": ["title", "mode", "total", "shown"],
+    "matches": { "exec": "^omarchy theme set ", "total": "^[0-9]+$", "shown": "^[0-9]+$" } },
+
+  { "why": "theme:light is the other half of the same question — a box may ship none",
+    "query": "light", "view": "themes",
+    "fields": ["title", "exec", "previewExec"] },
+
+  { "why": "a name filter draws the same card — catppuccin where the box has it",
+    "query": "catppuccin", "view": "themes",
+    "fields": ["title", "swatches", "previewExec", "revertExec", "exec", "total", "shown"],
+    "matches": { "title": "[Cc]atppuccin", "exec": "^omarchy theme set " } }
+]

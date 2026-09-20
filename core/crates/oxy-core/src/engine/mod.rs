@@ -40,6 +40,35 @@ use crate::registry::{Extension, known_keywords};
 use crate::settings::Settings;
 use crate::state::State;
 
+/// One provider's timings: how many answers, how long they took in total,
+/// and the worst one. Enough for "what is slow" without a histogram nobody
+/// would read.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct Latency {
+    pub count: u64,
+    pub total_ms: u64,
+    pub max_ms: u64,
+}
+
+impl Latency {
+    pub fn mean_ms(&self) -> u64 {
+        self.total_ms.checked_div(self.count).unwrap_or(0)
+    }
+}
+
+/// The `n` slowest providers, worst first — ties broken by the mean so a
+/// provider with one slow outlier does not hide one that is always slow.
+pub fn slowest(latency: &HashMap<String, Latency>, n: usize) -> Vec<(String, Latency)> {
+    let mut all: Vec<(String, Latency)> = latency
+        .iter()
+        .filter(|(_, l)| l.count > 0)
+        .map(|(k, l)| (k.clone(), *l))
+        .collect();
+    all.sort_by_key(|(_, l)| (std::cmp::Reverse(l.max_ms), std::cmp::Reverse(l.mean_ms())));
+    all.truncate(n);
+    all
+}
+
 /// The constructor the daemon injects: extension `native` name → provider.
 pub type NativeCtor = Box<dyn Fn(&str) -> Option<Box<dyn NativeExt>> + Send + Sync>;
 
@@ -58,6 +87,9 @@ pub struct Engine {
     state: State,
     /// Which model answered, how often — the ledger `/stats` reports.
     usage: crate::state::usage::Usage,
+    /// Per-provider timing, from the `prov.done` lines the workers already
+    /// write. Nothing new is measured; the log is simply also counted.
+    latency: HashMap<String, Latency>,
     state_path: std::path::PathBuf,
     frecency_path: std::path::PathBuf,
 
@@ -231,6 +263,7 @@ impl Engine {
             worker_tx,
             state,
             usage,
+            latency: HashMap::new(),
             state_path: crate::settings::paths::state_file(),
             frecency_path: crate::settings::paths::frecency_file(),
             epoch: 0,

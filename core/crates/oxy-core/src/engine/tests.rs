@@ -116,6 +116,7 @@ fn bare_engine() -> Engine {
         ask_task: None,
         ask_pending: None,
         ollama_up: false,
+        latency: std::collections::HashMap::new(),
         usage: crate::state::usage::Usage::default(),
         ask_provider: None,
         llm: None,
@@ -204,4 +205,48 @@ fn def_stamp_covers_gate_fields() {
         crate::registry::def_stamp(base),
         crate::registry::def_stamp(&changed)
     );
+}
+
+#[test]
+fn the_slowest_providers_are_ranked_by_their_worst_answer() {
+    use std::collections::HashMap;
+    let mut latency: HashMap<String, crate::engine::Latency> = HashMap::new();
+    latency.insert(
+        "repo".into(),
+        crate::engine::Latency {
+            count: 2,
+            total_ms: 1_600,
+            max_ms: 900,
+        },
+    );
+    latency.insert(
+        "git".into(),
+        crate::engine::Latency {
+            count: 10,
+            total_ms: 1_400,
+            max_ms: 140,
+        },
+    );
+    latency.insert(
+        "emoji".into(),
+        crate::engine::Latency {
+            count: 0,
+            total_ms: 0,
+            max_ms: 0,
+        },
+    );
+
+    let top = crate::engine::slowest(&latency, 3);
+    assert_eq!(
+        top.len(),
+        2,
+        "a provider that never ran is not slow, it is absent"
+    );
+    assert_eq!(top[0].0, "repo");
+    assert_eq!(top[0].1.max_ms, 900);
+    assert_eq!(top[1].0, "git");
+    assert_eq!(top[1].1.mean_ms(), 140);
+
+    // The cap is a cap.
+    assert_eq!(crate::engine::slowest(&latency, 1).len(), 1);
 }

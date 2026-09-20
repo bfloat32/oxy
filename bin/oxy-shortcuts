@@ -132,10 +132,29 @@ oxy_binds() {
     ''           'NEXT'      'Down one page of results'
 }
 
-{
-  omarchy_binds || hyprctl_binds
-  oxy_binds
-} | jq -R -n -c --arg q "$query" '
+# The combination a system bind already owns. The launcher's keys are listed
+# whether or not anything else claims them, and when something does the key
+# may never reach the launcher at all — which is the one thing about a keymap
+# a reader most needs to know, and the one thing neither source says.
+records=$(
+  {
+    omarchy_binds || hyprctl_binds
+    oxy_binds
+  }
+)
+taken=$(
+  printf '%s
+' "$records" | jq -R -n -c '
+    [ inputs
+      | split("	")
+      | select(length >= 3 and .[0] != "Oxy")
+      | ((.[1] | split(" ") | sort | join("+")) + "|" + (.[2] | ascii_upcase))
+    ] | unique' 2>/dev/null
+)
+[[ -n $taken ]] || taken='[]'
+
+printf '%s
+' "$records" | jq -R -n -c --arg q "$query" --argjson taken "$taken" '
   # A modifier is drawn as a word, not as a shout. The chips are small and there
   # are up to four of them on a line, and SUPER SHIFT CTRL ALT in caps reads as
   # an error message.
@@ -225,7 +244,11 @@ oxy_binds() {
         # What hyprland.lua wants. Its own parser splits on "+" and matches each
         # piece against a modifier table, so "SUPER SHIFT + K" would be read as
         # a key called "SUPER SHIFT"; every piece gets its own plus.
-        config: ((.rawMods + [.rawKey]) | join(" + "))
+        config: ((.rawMods + [.rawKey]) | join(" + ")),
+        # The same combination reduced to something both sources agree on, for
+        # the one question that crosses between them: does the system already
+        # own this key?
+        comboKey: ((.rawMods | sort | join("+")) + "|" + (.rawKey | ascii_upcase))
       }
     )
 
@@ -283,8 +306,13 @@ oxy_binds() {
           scope: .scope,
           # Nothing on a system row: a chip saying "System" on two hundred rows
           # out of two hundred and seventeen is furniture. The seventeen that
-          # are not the system say so.
-          accessory: (if .scope == "Oxy" then "Oxy" else "" end),
+          # are not the system say so — and say when the system owns the same
+          # combination, because then the launcher may never see the key.
+          accessory: (.comboKey as $ck
+                      | if .scope == "Oxy"
+                        then (if ($taken | index($ck)) then "Oxy · also bound"
+                              else "Oxy" end)
+                        else "" end),
           view: "shortcuts",
           exec: $copyCombo,
           score: (99999 - $i),

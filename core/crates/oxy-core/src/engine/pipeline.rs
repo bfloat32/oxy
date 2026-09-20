@@ -144,6 +144,16 @@ impl Engine {
                 false
             }
             WorkerMsg::Log { id, ev, fields } => {
+                // The log already carries the timing, so `/stats` counts what
+                // is being written rather than measuring anything new.
+                if ev == "prov.done"
+                    && let Some(ms) = fields.get("ms").and_then(Value::as_u64)
+                {
+                    let entry = self.latency.entry(id.to_string()).or_default();
+                    entry.count += 1;
+                    entry.total_ms += ms;
+                    entry.max_ms = entry.max_ms.max(ms);
+                }
                 let mut f = fields.as_object().cloned().unwrap_or_default();
                 f.insert("id".into(), json!(id));
                 self.emit_log(ev, Value::Object(f)).await;

@@ -246,6 +246,16 @@ impl Engine {
                 if !usage.is_empty() {
                     text.push_str(&format!(" · ask: {usage}"));
                 }
+                // The worst three, from the answers that have run: a provider
+                // that takes a second is the usual reason a box feels slow.
+                let slow = super::slowest(&self.latency, 3);
+                if !slow.is_empty() {
+                    let parts: Vec<String> = slow
+                        .iter()
+                        .map(|(id, l)| format!("{id} {}ms", l.max_ms))
+                        .collect();
+                    text.push_str(&format!(" · slowest: {}", parts.join(", ")));
+                }
                 self.emit(EngineEvent::Notice { text }).await;
                 return;
             }

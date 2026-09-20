@@ -14,7 +14,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::rank;
 use crate::row::{Action, Row};
-use crate::score::{fuzzy, Entry};
+use crate::score::{Entry, fuzzy};
 use crate::settings::Quicklink;
 use crate::shellquote::quote;
 

@@ -13,7 +13,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::rank;
 use crate::row::Row;
-use crate::score::{fuzzy, Entry};
+use crate::score::{Entry, fuzzy};
 
 struct Cmd {
     id: &'static str,

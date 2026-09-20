@@ -9,7 +9,7 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
@@ -35,12 +35,13 @@ fn urldecode(s: &str) -> String {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let (Some(a), Some(b)) = (hex(bytes[i + 1]), hex(bytes[i + 2])) {
-                out.push((a * 16 + b) as u8);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let (Some(a), Some(b)) = (hex(bytes[i + 1]), hex(bytes[i + 2]))
+        {
+            out.push((a * 16 + b) as u8);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
@@ -112,15 +113,16 @@ fn kind_of(ext: &str) -> &'static str {
         | "heic" | "ico" => "image",
         "mp4" | "mkv" | "webm" | "mov" | "avi" | "m4v" | "wmv" | "flv" => "video",
         "mp3" | "flac" | "ogg" | "wav" | "m4a" | "opus" | "aac" | "wma" => "audio",
-        "pdf" | "epub" | "djvu" | "doc" | "docx" | "odt" | "rtf" | "txt" | "md" | "org"
-        | "tex" => "doc",
+        "pdf" | "epub" | "djvu" | "doc" | "docx" | "odt" | "rtf" | "txt" | "md" | "org" | "tex" => {
+            "doc"
+        }
         "csv" | "tsv" | "xlsx" | "xls" | "ods" => "sheet",
         "zip" | "tar" | "gz" | "xz" | "zst" | "7z" | "rar" | "bz2" | "tgz" => "archive",
-        "sh" | "bash" | "zsh" | "fish" | "py" | "js" | "mjs" | "ts" | "tsx" | "jsx"
-        | "rs" | "go" | "c" | "h" | "cpp" | "hpp" | "java" | "rb" | "lua" | "qml"
-        | "vim" | "pl" | "php" | "swift" | "kt" => "code",
-        "json" | "yaml" | "yml" | "toml" | "ini" | "conf" | "xml" | "html" | "css"
-        | "scss" | "sql" => "data",
+        "sh" | "bash" | "zsh" | "fish" | "py" | "js" | "mjs" | "ts" | "tsx" | "jsx" | "rs"
+        | "go" | "c" | "h" | "cpp" | "hpp" | "java" | "rb" | "lua" | "qml" | "vim" | "pl"
+        | "php" | "swift" | "kt" => "code",
+        "json" | "yaml" | "yml" | "toml" | "ini" | "conf" | "xml" | "html" | "css" | "scss"
+        | "sql" => "data",
         _ => "file",
     }
 }
@@ -238,7 +240,11 @@ impl NativeExt for Recent {
                 } else {
                     let ext = if base.len() > 1 && base[1..].contains('.') {
                         let e = base.rsplit('.').next().unwrap_or("");
-                        if e.len() <= 5 { e.to_string() } else { String::new() }
+                        if e.len() <= 5 {
+                            e.to_string()
+                        } else {
+                            String::new()
+                        }
                     } else {
                         String::new()
                     };

@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use oxy_core::engine::{Engine, EngineCmd, EngineEvent};
 use oxy_core::{dirs, extension};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc;
 
 const USAGE: &str =
@@ -225,10 +225,10 @@ async fn test(args: &[String]) -> i32 {
     let mut failures = 0;
 
     for ext in &report.extensions {
-        if let Some(only) = &only {
-            if ext.id != *only {
-                continue;
-            }
+        if let Some(only) = &only
+            && ext.id != *only
+        {
+            continue;
         }
         if ext.test_query.is_empty() {
             continue;
@@ -245,11 +245,11 @@ async fn test(args: &[String]) -> i32 {
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
         let mut answered: Option<usize> = None;
         while let Ok(Some(event)) = tokio::time::timeout_at(deadline.into(), rx.recv()).await {
-            if let EngineEvent::Results { rows, waiting, .. } = &event {
-                if !waiting.contains(&ext.id) {
-                    answered = Some(rows.len());
-                    break;
-                }
+            if let EngineEvent::Results { rows, waiting, .. } = &event
+                && !waiting.contains(&ext.id)
+            {
+                answered = Some(rows.len());
+                break;
             }
         }
         match answered {
@@ -299,10 +299,10 @@ async fn test_cases(only: Option<String>) -> i32 {
     let (tx, mut rx, _task) = local_engine().await;
 
     for ext in &report.extensions {
-        if let Some(only) = &only {
-            if ext.id != *only {
-                continue;
-            }
+        if let Some(only) = &only
+            && ext.id != *only
+        {
+            continue;
         }
         let cases_path = ext.source.with_extension("cases.json");
         let Ok(text) = std::fs::read_to_string(&cases_path) else {
@@ -323,9 +323,7 @@ async fn test_cases(only: Option<String>) -> i32 {
         // run; ones needing the fallback report honestly when the machine
         // lacks the script.
         if ext.native.is_empty() {
-            if !ext.when.is_empty()
-                && !oxy_core::provider::process::check(&ext.when).await
-            {
+            if !ext.when.is_empty() && !oxy_core::provider::process::check(&ext.when).await {
                 println!("skip {} cases (when fails here)", ext.id);
                 skipped += 1;
                 continue;
@@ -340,7 +338,10 @@ async fn test_cases(only: Option<String>) -> i32 {
             }
         }
         if !case_preflight(&ext.id).await {
-            println!("skip {} cases (its data service is unreachable here)", ext.id);
+            println!(
+                "skip {} cases (its data service is unreachable here)",
+                ext.id
+            );
             skipped += 1;
             continue;
         }
@@ -366,9 +367,7 @@ async fn test_cases(only: Option<String>) -> i32 {
             let deadline = std::time::Instant::now()
                 + Duration::from_millis((ext.timeout_ms + ext.debounce_ms + 4000).max(8000));
             let mut rows: Vec<Value> = Vec::new();
-            while let Ok(Some(event)) =
-                tokio::time::timeout_at(deadline.into(), rx.recv()).await
-            {
+            while let Ok(Some(event)) = tokio::time::timeout_at(deadline.into(), rx.recv()).await {
                 if let EngineEvent::Results {
                     rows: r, waiting, ..
                 } = event
@@ -401,11 +400,7 @@ async fn test_cases(only: Option<String>) -> i32 {
         }
     }
     println!("{held} held, {failed} broke, {skipped} skipped");
-    if failed > 0 {
-        1
-    } else {
-        0
-    }
+    if failed > 0 { 1 } else { 0 }
 }
 
 /// The services some cases describe — unreachable here means skip, the same
@@ -439,15 +434,15 @@ fn case_view(row: &oxy_core::row::Row, ext_id: &str) -> Value {
     if let Some(id) = row.key.strip_prefix(&prefix) {
         obj.insert("id".into(), json!(id));
     }
-    if !obj.contains_key("glyph") {
-        if let Some(g) = obj.get("iconGlyph").cloned() {
-            obj.insert("glyph".into(), g);
-        }
+    if !obj.contains_key("glyph")
+        && let Some(g) = obj.get("iconGlyph").cloned()
+    {
+        obj.insert("glyph".into(), g);
     }
-    if !obj.contains_key("icon") {
-        if let Some(i) = obj.get("iconSource").cloned() {
-            obj.insert("icon".into(), i);
-        }
+    if !obj.contains_key("icon")
+        && let Some(i) = obj.get("iconSource").cloned()
+    {
+        obj.insert("icon".into(), i);
     }
     v
 }
@@ -472,10 +467,7 @@ fn py_str(v: &Value) -> String {
         Value::Bool(b) => if *b { "True" } else { "False" }.to_string(),
         Value::Null => "None".into(),
         Value::Number(n) => n.to_string(),
-        Value::Array(a) => format!(
-            "[{}]",
-            a.iter().map(py_repr).collect::<Vec<_>>().join(", ")
-        ),
+        Value::Array(a) => format!("[{}]", a.iter().map(py_repr).collect::<Vec<_>>().join(", ")),
         Value::Object(o) => format!(
             "{{{}}}",
             o.iter()
@@ -503,17 +495,17 @@ fn py_repr_str(s: &str) -> String {
 fn check_case(case: &Value, rows: &[Value]) -> Vec<String> {
     let mut out = Vec::new();
     let n = rows.len();
-    if let Some(min) = case.get("minRows").and_then(|v| v.as_u64()) {
-        if (n as u64) < min {
-            out.push(format!("{n} rows, wanted at least {min}"));
-            return out;
-        }
+    if let Some(min) = case.get("minRows").and_then(|v| v.as_u64())
+        && (n as u64) < min
+    {
+        out.push(format!("{n} rows, wanted at least {min}"));
+        return out;
     }
-    if let Some(max) = case.get("maxRows").and_then(|v| v.as_u64()) {
-        if (n as u64) > max {
-            out.push(format!("{n} rows, wanted at most {max}"));
-            return out;
-        }
+    if let Some(max) = case.get("maxRows").and_then(|v| v.as_u64())
+        && (n as u64) > max
+    {
+        out.push(format!("{n} rows, wanted at most {max}"));
+        return out;
     }
 
     let idx = case.get("row").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
@@ -521,14 +513,14 @@ fn check_case(case: &Value, rows: &[Value]) -> Vec<String> {
         return out;
     };
 
-    if let Some(view) = case.get("view").and_then(|v| v.as_str()) {
-        if row.get("view").and_then(|v| v.as_str()) != Some(view) {
-            out.push(format!(
-                "row {idx} view is {:?}, wanted {view:?}",
-                row.get("view")
-            ));
-            return out;
-        }
+    if let Some(view) = case.get("view").and_then(|v| v.as_str())
+        && row.get("view").and_then(|v| v.as_str()) != Some(view)
+    {
+        out.push(format!(
+            "row {idx} view is {:?}, wanted {view:?}",
+            row.get("view")
+        ));
+        return out;
     }
     for f in case
         .get("fields")
@@ -536,10 +528,10 @@ fn check_case(case: &Value, rows: &[Value]) -> Vec<String> {
         .cloned()
         .unwrap_or_default()
     {
-        if let Some(name) = f.as_str() {
-            if !present(row.get(name)) {
-                out.push(format!("row {idx} {name} is empty"));
-            }
+        if let Some(name) = f.as_str()
+            && !present(row.get(name))
+        {
+            out.push(format!("row {idx} {name} is empty"));
         }
     }
     for f in case
@@ -548,10 +540,13 @@ fn check_case(case: &Value, rows: &[Value]) -> Vec<String> {
         .cloned()
         .unwrap_or_default()
     {
-        if let Some(name) = f.as_str() {
-            if present(row.get(name)) {
-                out.push(format!("row {idx} {name} is {:?}, wanted absent", row.get(name)));
-            }
+        if let Some(name) = f.as_str()
+            && present(row.get(name))
+        {
+            out.push(format!(
+                "row {idx} {name} is {:?}, wanted absent",
+                row.get(name)
+            ));
         }
     }
     if let Some(caps) = case.get("atMost").and_then(|v| v.as_object()) {
@@ -562,10 +557,10 @@ fn check_case(case: &Value, rows: &[Value]) -> Vec<String> {
                 Some(Value::Object(o)) => Some(o.len()),
                 _ => None,
             };
-            if let (Some(len), Some(cap)) = (len, cap.as_u64()) {
-                if len as u64 > cap {
-                    out.push(format!("row {idx} {f} has {len}, wanted at most {cap}"));
-                }
+            if let (Some(len), Some(cap)) = (len, cap.as_u64())
+                && len as u64 > cap
+            {
+                out.push(format!("row {idx} {f} has {len}, wanted at most {cap}"));
             }
         }
     }

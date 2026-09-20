@@ -9,12 +9,18 @@
 use std::future::Future;
 use std::pin::Pin;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 
 pub struct Cal;
+
+impl Default for Cal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Cal {
     pub fn new() -> Cal {
@@ -292,67 +298,17 @@ impl NativeExt for Cal {
             }
 
             // A month written as numbers: 2027-11, 11/2027, 2027/11.
-            if let Some((a, b)) = lower.split_once(['/', '-']) {
-                if let (Ok(x), Ok(y)) = (a.parse::<i64>(), b.parse::<i64>()) {
-                    let (year, month) = if a.len() == 4 {
-                        (x, y)
-                    } else if b.len() == 4 && (1..=12).contains(&x) {
-                        (y, x)
-                    } else {
-                        (0, 0)
-                    };
-                    if (1..=12).contains(&month) && year > 0 {
-                        return NativeOutcome::Rows(vec![month_row(
-                            "month",
-                            year,
-                            month,
-                            MONTHS_ABBR[(month - 1) as usize],
-                            95000,
-                            vec![],
-                            "",
-                        )]);
-                    }
-                }
-            }
-
-            // A bare month name: the next one leads, matching what
-            // `date:christmas` does with a name and no year, and the other
-            // year is a tab away rather than a retype.
-            if lower.chars().all(|c| c.is_ascii_lowercase()) {
-                if let Some(month) = month_number(&lower) {
-                    return NativeOutcome::Rows(if month >= tm {
-                        vec![
-                            month_row("m-now", ty, month, &ty.to_string(), 95000, vec![], ""),
-                            month_row(
-                                "m-next",
-                                ty + 1,
-                                month,
-                                &(ty + 1).to_string(),
-                                94000,
-                                vec![],
-                                "",
-                            ),
-                        ]
-                    } else {
-                        vec![
-                            month_row(
-                                "m-next",
-                                ty + 1,
-                                month,
-                                &(ty + 1).to_string(),
-                                95000,
-                                vec![],
-                                "",
-                            ),
-                            month_row("m-now", ty, month, &ty.to_string(), 94000, vec![], ""),
-                        ]
-                    });
-                }
-            }
-
-            // A month name with a year: "november 2027", "nov 2027".
-            if let Some((name, year)) = lower.split_once(' ') {
-                if let (Some(month), Ok(year)) = (month_number(name), year.parse::<i64>()) {
+            if let Some((a, b)) = lower.split_once(['/', '-'])
+                && let (Ok(x), Ok(y)) = (a.parse::<i64>(), b.parse::<i64>())
+            {
+                let (year, month) = if a.len() == 4 {
+                    (x, y)
+                } else if b.len() == 4 && (1..=12).contains(&x) {
+                    (y, x)
+                } else {
+                    (0, 0)
+                };
+                if (1..=12).contains(&month) && year > 0 {
                     return NativeOutcome::Rows(vec![month_row(
                         "month",
                         year,
@@ -363,6 +319,56 @@ impl NativeExt for Cal {
                         "",
                     )]);
                 }
+            }
+
+            // A bare month name: the next one leads, matching what
+            // `date:christmas` does with a name and no year, and the other
+            // year is a tab away rather than a retype.
+            if lower.chars().all(|c| c.is_ascii_lowercase())
+                && let Some(month) = month_number(&lower)
+            {
+                return NativeOutcome::Rows(if month >= tm {
+                    vec![
+                        month_row("m-now", ty, month, &ty.to_string(), 95000, vec![], ""),
+                        month_row(
+                            "m-next",
+                            ty + 1,
+                            month,
+                            &(ty + 1).to_string(),
+                            94000,
+                            vec![],
+                            "",
+                        ),
+                    ]
+                } else {
+                    vec![
+                        month_row(
+                            "m-next",
+                            ty + 1,
+                            month,
+                            &(ty + 1).to_string(),
+                            95000,
+                            vec![],
+                            "",
+                        ),
+                        month_row("m-now", ty, month, &ty.to_string(), 94000, vec![], ""),
+                    ]
+                });
+            }
+
+            // A month name with a year: "november 2027", "nov 2027".
+            if let Some((name, year)) = lower.split_once(' ')
+                && let (Some(month), Ok(year)) = (month_number(name), year.parse::<i64>())
+            {
+                return NativeOutcome::Rows(vec![month_row(
+                    "month",
+                    year,
+                    month,
+                    MONTHS_ABBR[(month - 1) as usize],
+                    95000,
+                    vec![],
+                    "",
+                )]);
             }
 
             // Everything else is whatever `date:` makes of it — a holiday, a

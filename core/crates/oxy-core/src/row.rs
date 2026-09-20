@@ -237,17 +237,7 @@ const RESERVED: &[&str] = &[
 ///
 /// A script's own `score` orders its rows against each other, clamped into
 /// `local`. It never crosses tiers.
-pub fn to_row(
-    ext_id: &str,
-    ext_title: &str,
-    ext_subtitle: &str,
-    ext_glyph: &str,
-    ext_tier: u32,
-    ext_view: &str,
-    ext_max_rows: usize,
-    raw: &Value,
-    index: usize,
-) -> Option<Row> {
+pub fn to_row(ext: &crate::extension::Extension, raw: &Value, index: usize) -> Option<Row> {
     let obj = raw.as_object()?;
 
     let id = obj
@@ -275,9 +265,9 @@ pub fn to_row(
         return None;
     }
 
-    let mut row = Row::new(format!("ext:{ext_id}:{id}"), ext_id);
+    let mut row = Row::new(format!("ext:{}:{id}", ext.id), &ext.id);
     row.group = if get_str("group").is_empty() {
-        ext_title.to_string()
+        ext.title.clone()
     } else {
         get_str("group").to_string()
     };
@@ -286,12 +276,12 @@ pub fn to_row(
         .get("subtitle")
         .and_then(|v| v.as_str())
         .map(String::from)
-        .unwrap_or_else(|| ext_subtitle.to_string());
+        .unwrap_or_else(|| ext.subtitle.clone());
     row.detail = get_str("detail").into();
     row.accessory = get_str("accessory").into();
     row.icon_source = get_str("icon").into();
     row.icon_glyph = if get_str("glyph").is_empty() {
-        ext_glyph.to_string()
+        ext.glyph.clone()
     } else {
         get_str("glyph").into()
     };
@@ -299,7 +289,7 @@ pub fn to_row(
     // Only the first row's view is read, so a script puts the row it wants to
     // set the layout first and the rest follow it.
     row.view = if get_str("view").is_empty() {
-        ext_view.to_string()
+        ext.view.clone()
     } else {
         get_str("view").into()
     };
@@ -338,7 +328,7 @@ pub fn to_row(
     row.max = obj.get("max").and_then(|v| v.as_f64()).unwrap_or(100.0);
     row.step = obj.get("step").and_then(|v| v.as_f64()).unwrap_or(1.0);
     row.set_exec = get_str("setExec").into();
-    row.tier = ext_tier;
+    row.tier = ext.tier;
     row.local = local;
     row.exec = get_str("exec").into();
     row.fill = get_str("fill").into();
@@ -395,7 +385,6 @@ pub fn to_row(
         row.extra.insert(field.clone(), value.clone());
     }
 
-    let _ = ext_max_rows;
     Some(row)
 }
 
@@ -408,7 +397,7 @@ pub fn parse_rows(text: &str) -> Vec<Value> {
         return Vec::new();
     }
 
-    let start = trimmed.find(|c| c == '[' || c == '{').unwrap_or(usize::MAX);
+    let start = trimmed.find(['[', '{']).unwrap_or(usize::MAX);
     let trimmed = if start == usize::MAX {
         ""
     } else {
@@ -454,10 +443,22 @@ mod tests {
         assert_eq!(rows.len(), 2);
     }
 
+    fn test_ext(id: &str) -> crate::extension::Extension {
+        crate::extension::Extension {
+            id: id.into(),
+            title: "Files".into(),
+            subtitle: "File".into(),
+            glyph: "F".into(),
+            tier: 4,
+            view: "files".into(),
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn to_row_copies_unknown_fields() {
         let raw = json!({"id":"x","title":"T","score":123,"custom":{"a":1},"exec":"true"});
-        let row = to_row("file", "Files", "File", "F", 4, "files", 8, &raw, 0).unwrap();
+        let row = to_row(&test_ext("file"), &raw, 0).unwrap();
         assert_eq!(row.key, "ext:file:x");
         assert_eq!(row.local, 123);
         assert_eq!(row.extra["custom"], json!({"a":1}));
@@ -467,6 +468,6 @@ mod tests {
     #[test]
     fn empty_title_is_dropped() {
         let raw = json!({"id":"x"});
-        assert!(to_row("e", "E", "E", "", 6, "list", 8, &raw, 0).is_none());
+        assert!(to_row(&test_ext("e"), &raw, 0).is_none());
     }
 }

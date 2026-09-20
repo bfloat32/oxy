@@ -71,18 +71,18 @@ impl Query {
 
         // A leading sigil is rewritten into its filter, so everything
         // downstream sees one shape rather than two.
-        if let Some(first) = trimmed.chars().next() {
-            if let Some(keyword) = sigil(first) {
-                let rest = trimmed[first.len_utf8()..].trim().to_string();
-                let keyword = if keyword == "command" && looks_like_path(&rest) {
-                    "file"
-                } else {
-                    keyword
-                };
-                let mut filters = BTreeMap::new();
-                filters.insert(keyword.to_string(), rest);
-                return Query::build(raw, "", filters, vec![keyword.to_string()], epoch);
-            }
+        if let Some(first) = trimmed.chars().next()
+            && let Some(keyword) = sigil(first)
+        {
+            let rest = trimmed[first.len_utf8()..].trim().to_string();
+            let keyword = if keyword == "command" && looks_like_path(&rest) {
+                "file"
+            } else {
+                keyword
+            };
+            let mut filters = BTreeMap::new();
+            filters.insert(keyword.to_string(), rest);
+            return Query::build(raw, "", filters, vec![keyword.to_string()], epoch);
         }
 
         let mut filters = BTreeMap::new();
@@ -149,7 +149,7 @@ impl Query {
         if self.scope.is_empty() || self.scope == provider_id {
             return true;
         }
-        aliases.iter().any(|a| *a == self.scope)
+        aliases.contains(&self.scope)
     }
 
     /// The text a scoped provider should search: the filter's own value when

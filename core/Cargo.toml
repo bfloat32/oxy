@@ -4,7 +4,7 @@ members = ["crates/oxy-core", "crates/oxyd", "crates/oxy"]
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "MIT"
 description = "The Rust core of Oxy: query routing, extension runtime, ranking and state."
 

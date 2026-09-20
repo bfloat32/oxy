@@ -13,7 +13,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
@@ -315,7 +315,10 @@ impl NativeExt for Emoji {
                     let k = v.get("k")?.as_str()?.to_lowercase().replace('_', " ");
                     Some(Entry {
                         e,
-                        w: k.split(' ').filter(|w| !w.is_empty()).map(String::from).collect(),
+                        w: k.split(' ')
+                            .filter(|w| !w.is_empty())
+                            .map(String::from)
+                            .collect(),
                         k,
                     })
                 })
@@ -344,8 +347,11 @@ impl NativeExt for Emoji {
                     }
                 }
             } else {
-                let tokens: Vec<String> =
-                    q.split(' ').filter(|t| !t.is_empty()).map(String::from).collect();
+                let tokens: Vec<String> = q
+                    .split(' ')
+                    .filter(|t| !t.is_empty())
+                    .map(String::from)
+                    .collect();
                 // What the words mean first, then what they name. The intent
                 // list is short, so a feeling leads without the ordinary
                 // hits being thrown away.

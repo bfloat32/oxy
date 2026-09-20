@@ -27,11 +27,11 @@ struct Bucket {
 
 impl Bucket {
     fn touch(&mut self, key: &str) {
-        if let Some(at) = self.keys.iter().position(|k| k == key) {
-            if at > 0 {
-                let key = self.keys.remove(at).unwrap();
-                self.keys.push_front(key);
-            }
+        if let Some(at) = self.keys.iter().position(|k| k == key)
+            && at > 0
+        {
+            let key = self.keys.remove(at).unwrap();
+            self.keys.push_front(key);
         }
     }
 }

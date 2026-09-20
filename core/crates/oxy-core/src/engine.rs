@@ -15,12 +15,12 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use serde::Serialize;
-use serde_json::{json, Map, Value};
-use tokio::sync::{mpsc, RwLock};
+use serde_json::{Map, Value, json};
+use tokio::sync::{RwLock, mpsc};
 
-use crate::extension::{known_keywords, Extension};
-use crate::provider::worker::{self, Shared, WorkerCmd, WorkerMsg};
+use crate::extension::{Extension, known_keywords};
 use crate::provider::NativeExt;
+use crate::provider::worker::{self, Shared, WorkerCmd, WorkerMsg};
 use crate::query::Query;
 use crate::rank;
 use crate::row::{Action, Row};
@@ -73,8 +73,9 @@ pub enum EngineCmd {
     StopAsk,
     /// An action the row did not declare — a form's `exec` with its `{field}`
     /// tokens substituted, built by the frontend because only it held the
-    /// answers.
-    Act { key: String, action: Action },
+    /// answers. Boxed: it is the fat variant, and this enum crosses a channel
+    /// on every client command.
+    Act { key: String, action: Box<Action> },
     /// The event log asks for a line of its own (the frontend's own events).
     Log { ev: String, fields: Value },
     /// Liveness.
@@ -164,6 +165,9 @@ pub enum EngineEvent {
 /// per keystroke, so recording them teaches nothing.
 const NO_FRECENCY: &[&str] = &["calc", "web"];
 
+/// The constructor the daemon injects: extension `native` name → provider.
+pub type NativeCtor = Box<dyn Fn(&str) -> Option<Box<dyn NativeExt>> + Send + Sync>;
+
 pub struct Engine {
     cmd_rx: mpsc::Receiver<EngineCmd>,
     evt_tx: mpsc::Sender<EngineEvent>,
@@ -173,7 +177,7 @@ pub struct Engine {
     extensions: Arc<Vec<Extension>>,
     workers: HashMap<String, mpsc::UnboundedSender<WorkerCmd>>,
     natives: HashMap<String, Box<dyn NativeExt>>,
-    native_for: Box<dyn Fn(&str) -> Option<Box<dyn NativeExt>> + Send + Sync>,
+    native_for: NativeCtor,
     worker_tx: mpsc::Sender<WorkerMsg>,
 
     state: State,
@@ -400,10 +404,10 @@ impl Engine {
     async fn on_query(&mut self, text: &str) {
         // A confirmation belongs to the query that raised it. Typing anything
         // else is walking away from the question.
-        if let Some(armed) = self.pending_confirm.clone() {
-            if text.trim() != format!("/{armed}") {
-                self.pending_confirm = None;
-            }
+        if let Some(armed) = self.pending_confirm.clone()
+            && text.trim() != format!("/{armed}")
+        {
+            self.pending_confirm = None;
         }
 
         self.epoch += 1;
@@ -480,17 +484,16 @@ impl Engine {
                 if name.is_empty() || !seen.insert(name.clone()) {
                     return;
                 }
-                let mut row = fill_row(
-                    "help",
-                    &format!("help:{name}"),
+                let mut row = fill_row(FillSpec {
+                    provider: "help",
+                    key: &format!("help:{name}"),
                     group,
                     title,
-                    &aliases.join(", "),
-                    &format!("{name}:"),
+                    subtitle: &aliases.join(", "),
+                    accessory: &format!("{name}:"),
                     glyph,
-                    &format!("{name}:"),
-                    0,
-                );
+                    fill: &format!("{name}:"),
+                });
                 // Listed in the order the list was built, so the rank only
                 // preserves it.
                 row.score = rank::score(rank::TIER_FORCED, 90000 - out.len() as i64 * 200, 0);
@@ -542,17 +545,16 @@ impl Engine {
             .iter()
             .enumerate()
             .map(|(i, entry)| {
-                let mut row = fill_row(
-                    "recents",
-                    &format!("past:{entry}"),
-                    "Recent",
-                    entry,
-                    "",
-                    "",
-                    "",
-                    entry,
-                    0,
-                );
+                let mut row = fill_row(FillSpec {
+                    provider: "recents",
+                    key: &format!("past:{entry}"),
+                    group: "Recent",
+                    title: entry,
+                    subtitle: "",
+                    accessory: "",
+                    glyph: "",
+                    fill: entry,
+                });
                 row.score = rank::score(rank::TIER_FORCED, 90000 - i as i64 * 200, 0);
                 row
             })
@@ -608,10 +610,10 @@ impl Engine {
         let arg = query.arg_for("settings", &[]).trim().to_lowercase();
 
         // A picked extension with fields is a form, not a list.
-        if let Some(ext) = self.extensions.iter().find(|e| e.id == arg) {
-            if !ext.settings.is_empty() {
-                return vec![self.settings_form(ext)];
-            }
+        if let Some(ext) = self.extensions.iter().find(|e| e.id == arg)
+            && !ext.settings.is_empty()
+        {
+            return vec![self.settings_form(ext)];
         }
 
         self.extensions
@@ -984,11 +986,12 @@ impl Engine {
 
         // Enter on a stale row ran the query the row was built from rather
         // than the one on screen. Held instead, and run when the answer lands.
-        if let Some((ep, rows)) = self.buckets.get(&row.provider_id) {
-            if *ep != self.epoch && !rows.is_empty() {
-                self.pending_activate = Some((key, action_index, Instant::now()));
-                return;
-            }
+        if let Some((ep, rows)) = self.buckets.get(&row.provider_id)
+            && *ep != self.epoch
+            && !rows.is_empty()
+        {
+            self.pending_activate = Some((key, action_index, Instant::now()));
+            return;
         }
 
         // A keyword from `?`, or a query you ran before: the point of picking
@@ -1265,10 +1268,10 @@ impl Engine {
     }
 
     fn unpreview(&mut self) {
-        if let Some((_, revert)) = self.previewed.take() {
-            if !revert.is_empty() {
-                crate::provider::process::run_detached(&revert);
-            }
+        if let Some((_, revert)) = self.previewed.take()
+            && !revert.is_empty()
+        {
+            crate::provider::process::run_detached(&revert);
         }
     }
 
@@ -1562,25 +1565,28 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Everything a fill row needs — named fields so the two call sites stay
+/// readable instead of juggling positional `&str`s.
+struct FillSpec<'a> {
+    provider: &'a str,
+    key: &'a str,
+    group: &'a str,
+    title: &'a str,
+    subtitle: &'a str,
+    accessory: &'a str,
+    glyph: &'a str,
+    fill: &'a str,
+}
+
 /// A row whose only business is putting text in the box.
-fn fill_row(
-    provider: &str,
-    key: &str,
-    group: &str,
-    title: &str,
-    subtitle: &str,
-    accessory: &str,
-    glyph: &str,
-    fill: &str,
-    _rank: i64,
-) -> Row {
-    let mut row = Row::new(key, provider);
-    row.group = group.into();
-    row.title = title.into();
-    row.subtitle = subtitle.into();
-    row.accessory = accessory.into();
-    row.icon_glyph = glyph.into();
-    row.fill = fill.into();
+fn fill_row(spec: FillSpec<'_>) -> Row {
+    let mut row = Row::new(spec.key, spec.provider);
+    row.group = spec.group.into();
+    row.title = spec.title.into();
+    row.subtitle = spec.subtitle.into();
+    row.accessory = spec.accessory.into();
+    row.icon_glyph = spec.glyph.into();
+    row.fill = spec.fill.into();
     // A self-reference, so the footer names what Enter does and Ctrl+K on the
     // row leads back through activate.
     let mut act = Action {
@@ -1588,7 +1594,7 @@ fn fill_row(
         shortcut: "↵".into(),
         ..Action::default()
     };
-    act.extra.insert("row".into(), json!(key));
+    act.extra.insert("row".into(), json!(spec.key));
     row.actions = Some(vec![act]);
     row
 }

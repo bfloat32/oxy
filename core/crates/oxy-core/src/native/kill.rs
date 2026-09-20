@@ -20,7 +20,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
@@ -29,6 +29,12 @@ const MAX_ROWS: usize = 20;
 
 pub struct Kill {
     sys: sysinfo::System,
+}
+
+impl Default for Kill {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Kill {
@@ -243,14 +249,15 @@ impl NativeExt for Kill {
                     return pid;
                 }
                 memo.insert(pid, pid);
-                if let Some(c) = cands.get(&pid) {
-                    if let Some(parent) = cands.get(&c.ppid) {
-                        if c.ppid != pid && parent.exe == c.exe && !c.exe.is_empty() {
-                            let l = leader_of(c.ppid, cands, memo, depth + 1);
-                            memo.insert(pid, l);
-                            return l;
-                        }
-                    }
+                if let Some(c) = cands.get(&pid)
+                    && let Some(parent) = cands.get(&c.ppid)
+                    && c.ppid != pid
+                    && parent.exe == c.exe
+                    && !c.exe.is_empty()
+                {
+                    let l = leader_of(c.ppid, cands, memo, depth + 1);
+                    memo.insert(pid, l);
+                    return l;
                 }
                 pid
             }
@@ -280,23 +287,22 @@ impl NativeExt for Kill {
                 fam.cpu += c.cpu;
                 fam.mem += c.mem;
                 fam.members += 1;
-                if fam.win.is_none() {
-                    if let Some(w) = wins.get(&(c.pid as u32)) {
-                        fam.win = Some(Win {
-                            addr: w.addr.clone(),
-                            class: w.class.clone(),
-                            title: w.title.clone(),
-                            workspace: w.workspace.clone(),
-                            count: w.count,
-                        });
-                    }
+                if fam.win.is_none()
+                    && let Some(w) = wins.get(&(c.pid as u32))
+                {
+                    fam.win = Some(Win {
+                        addr: w.addr.clone(),
+                        class: w.class.clone(),
+                        title: w.title.clone(),
+                        workspace: w.workspace.clone(),
+                        count: w.count,
+                    });
                 }
-                if let Some(w) = wins.get(&(c.pid as u32)) {
-                    if let Some(fam_win) = fam.win.as_mut() {
-                        if fam_win.addr != w.addr {
-                            fam_win.count += w.count;
-                        }
-                    }
+                if let Some(w) = wins.get(&(c.pid as u32))
+                    && let Some(fam_win) = fam.win.as_mut()
+                    && fam_win.addr != w.addr
+                {
+                    fam_win.count += w.count;
                 }
                 let hit = bare
                     || format!(

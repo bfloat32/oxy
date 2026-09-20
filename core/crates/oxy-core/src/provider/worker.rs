@@ -10,16 +10,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinHandle;
 use tokio::time::{Instant, Sleep};
 
-use crate::extension::{build_command, cache_key, Extension};
+use crate::extension::{Extension, build_command, cache_key};
 use crate::provider::process;
 use crate::provider::socket::{self, SocketChan, SocketReq};
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::query::Query;
-use crate::row::{to_row, Row};
+use crate::row::{Row, to_row};
 
 /// What the engine asks of a worker.
 pub enum WorkerCmd {
@@ -330,8 +330,7 @@ pub async fn run(
                     if !p.command.is_empty() {
                         let cmd = p.command.clone();
                         let tmo = Duration::from_millis(ext.timeout_ms);
-                        proc_run =
-                            Some(tokio::spawn(async move { process::run(&cmd, tmo).await }));
+                        proc_run = Some(tokio::spawn(async move { process::run(&cmd, tmo).await }));
                         run_pending = Some(p);
                     } else {
                         if stale_shown_key.is_empty() || stale_shown_key != p.key {
@@ -446,9 +445,8 @@ pub async fn run(
                             last_connect = Instant::now();
                             if let Ok(chan) = socket::connect(
                                 &ext.socket,
-                                Duration::from_millis(2000).min(
-                                    Duration::from_millis(ext.timeout_ms.max(1)),
-                                ),
+                                Duration::from_millis(2000)
+                                    .min(Duration::from_millis(ext.timeout_ms.max(1))),
                             )
                             .await
                             {
@@ -481,11 +479,10 @@ pub async fn run(
                         available = ok;
                         if ok {
                             let q = replay.or_else(|| recheck.take());
-                            if let Some(q) = q {
-                                if q.epoch == current_epoch {
+                            if let Some(q) = q
+                                && q.epoch == current_epoch {
                                     handle_ask!(q);
                                 }
-                            }
                         }
                     }
                     WorkerCmd::Opened(v) => {
@@ -688,21 +685,10 @@ pub async fn run(
 fn build_rows(ext: &Extension, raw: &[Value]) -> Vec<Row> {
     let mut rows = Vec::new();
     for (i, v) in raw.iter().enumerate().take(ext.max_rows) {
-        if let Some(mut row) = to_row(
-            &ext.id,
-            &ext.title,
-            &ext.subtitle,
-            &ext.glyph,
-            ext.tier,
-            &ext.view,
-            ext.max_rows,
-            v,
-            i,
-        ) {
+        if let Some(mut row) = to_row(ext, v, i) {
             row.score = crate::rank::score(row.tier, row.local, 0);
             rows.push(row);
         }
     }
     rows
 }
-

@@ -26,7 +26,7 @@ pub struct Setting {
     pub secret: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Extension {
     pub id: String,
     pub title: String,
@@ -158,30 +158,18 @@ impl Extension {
 
         let title = {
             let t = s(raw.title.as_ref());
-            if t.is_empty() {
-                id.clone()
-            } else {
-                t
-            }
+            if t.is_empty() { id.clone() } else { t }
         };
         let keyword = {
             let k = s(raw.keyword.as_ref());
-            if k.is_empty() {
-                id.clone()
-            } else {
-                k
-            }
+            if k.is_empty() { id.clone() } else { k }
         }
         .to_lowercase();
 
         Some(Extension {
             subtitle: {
                 let sub = s(raw.subtitle.as_ref());
-                if sub.is_empty() {
-                    title.clone()
-                } else {
-                    sub
-                }
+                if sub.is_empty() { title.clone() } else { sub }
             },
             id,
             title,
@@ -215,11 +203,7 @@ impl Extension {
             }),
             view: {
                 let v = s(raw.view.as_ref());
-                if v.is_empty() {
-                    "list".to_string()
-                } else {
-                    v
-                }
+                if v.is_empty() { "list".to_string() } else { v }
             },
             always: raw.always == Some(true),
             cache_ms: num(raw.cache_ms.as_ref(), 0.0).max(0.0) as u64,

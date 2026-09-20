@@ -10,13 +10,19 @@ use std::pin::Pin;
 use std::sync::OnceLock;
 
 use fancy_regex::Regex;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 
 pub struct Calc {
     history: Vec<(String, String)>,
+}
+
+impl Default for Calc {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Calc {
@@ -541,30 +547,29 @@ fn read_number(token: &str) -> Read {
 /// Is this literal a price? The unit written against it decides, and only a
 /// currency quoted to two decimals counts: `1.005 btc` is a real quantity.
 fn priced_in(text: &str, token: &NumberToken) -> bool {
-    if let Ok(Some(caps)) = unit_before_re().captures(&text[..token.start]) {
-        if let Some(word) = caps.get(1) {
-            if is_fiat(word.as_str()) {
-                return true;
-            }
+    if let Ok(Some(caps)) = unit_before_re().captures(&text[..token.start])
+        && let Some(word) = caps.get(1)
+        && is_fiat(word.as_str())
+    {
+        return true;
+    }
+
+    if let Ok(Some(caps)) = unit_after_re().captures(&text[token.end..])
+        && let Some(word) = caps.get(1)
+    {
+        let word = word.as_str();
+        if is_fiat(word) {
+            return true;
+        }
+        if !is_preposition(word) {
+            return false;
         }
     }
 
-    if let Ok(Some(caps)) = unit_after_re().captures(&text[token.end..]) {
-        if let Some(word) = caps.get(1) {
-            let word = word.as_str();
-            if is_fiat(word) {
-                return true;
-            }
-            if !is_preposition(word) {
-                return false;
-            }
-        }
-    }
-
-    if let Ok(Some(caps)) = target_re().captures(text) {
-        if let Some(target) = caps.get(1) {
-            return is_fiat(target.as_str());
-        }
+    if let Ok(Some(caps)) = target_re().captures(text)
+        && let Some(target) = caps.get(1)
+    {
+        return is_fiat(target.as_str());
     }
     false
 }
@@ -676,10 +681,10 @@ fn with_numbers(text: &str, notes: Option<&mut Vec<String>>) -> Option<String> {
                 } else {
                     return None;
                 };
-                if let Some(notes) = notes.as_deref_mut() {
-                    if value != token.text {
-                        notes.push(format!("{} read as {value}", token.text));
-                    }
+                if let Some(notes) = notes.as_deref_mut()
+                    && value != token.text
+                {
+                    notes.push(format!("{} read as {value}", token.text));
                 }
                 value
             }
@@ -976,8 +981,8 @@ mod tests {
     fn conversions_rewrite() {
         assert_eq!(for_qalc("40 miles in km"), "40 miles to km");
         assert_eq!(for_qalc("3 in"), "3 in"); // a quantity, not a conversion
-                                              // Codes pass through as written — qalc reads `brl` and `BRL` alike;
-                                              // only the ambiguous units get a canonical spelling.
+        // Codes pass through as written — qalc reads `brl` and `BRL` alike;
+        // only the ambiguous units get a canonical spelling.
         assert_eq!(for_qalc("100 usd into brl"), "100 usd to brl");
         assert!(for_qalc("100 reais em dolares").ends_with("to USD"));
     }

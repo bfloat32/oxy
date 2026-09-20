@@ -10,7 +10,7 @@ use std::future::Future;
 use std::path::Path;
 use std::pin::Pin;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
@@ -19,6 +19,12 @@ use crate::shellquote::quote;
 pub struct Sys {
     sys: sysinfo::System,
     disks: sysinfo::Disks,
+}
+
+impl Default for Sys {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Sys {
@@ -161,45 +167,44 @@ impl NativeExt for Sys {
             }
 
             // ---- disk
-            if matches(&q, "disk storage space root free") {
-                if let Some(disk) = self
+            if matches(&q, "disk storage space root free")
+                && let Some(disk) = self
                     .disks
                     .iter()
                     .find(|d| d.mount_point() == Path::new("/"))
-                {
-                    let total = disk.total_space();
-                    let avail = disk.available_space();
-                    let used = total.saturating_sub(avail);
-                    let percent = if total > 0 {
-                        used as f64 / total as f64 * 100.0
-                    } else {
-                        0.0
-                    };
-                    rows.push(json!({
-                        "id": "disk",
-                        "title": format!("{} free", human_bytes(avail)),
-                        "subtitle": "Disk",
-                        "detail": format!("{} of {} used", human_bytes(used), human_bytes(total)),
-                        "accessory": format!("{percent:.0}%"),
-                        "exec": copy_exec(&format!("{} free", human_bytes(avail))),
-                        "score": 92000,
-                        "progress": used as f64 / total.max(1) as f64,
-                    }));
-                }
+            {
+                let total = disk.total_space();
+                let avail = disk.available_space();
+                let used = total.saturating_sub(avail);
+                let percent = if total > 0 {
+                    used as f64 / total as f64 * 100.0
+                } else {
+                    0.0
+                };
+                rows.push(json!({
+                    "id": "disk",
+                    "title": format!("{} free", human_bytes(avail)),
+                    "subtitle": "Disk",
+                    "detail": format!("{} of {} used", human_bytes(used), human_bytes(total)),
+                    "accessory": format!("{percent:.0}%"),
+                    "exec": copy_exec(&format!("{} free", human_bytes(avail))),
+                    "score": 92000,
+                    "progress": used as f64 / total.max(1) as f64,
+                }));
             }
 
             // ---- address
-            if matches(&q, "ip address network local") {
-                if let Some((addr, iface)) = local_address() {
-                    rows.push(json!({
-                        "id": "ip",
-                        "title": addr,
-                        "subtitle": "Address",
-                        "detail": iface,
-                        "exec": copy_exec(&addr),
-                        "score": 91000,
-                    }));
-                }
+            if matches(&q, "ip address network local")
+                && let Some((addr, iface)) = local_address()
+            {
+                rows.push(json!({
+                    "id": "ip",
+                    "title": addr,
+                    "subtitle": "Address",
+                    "detail": iface,
+                    "exec": copy_exec(&addr),
+                    "score": 91000,
+                }));
             }
 
             // ---- temperature: first Celsius a thermal zone offers.
@@ -261,8 +266,8 @@ impl NativeExt for Sys {
             }
 
             // ---- omarchy
-            if matches(&q, "omarchy version") {
-                if let Some(version) = std::process::Command::new("omarchy")
+            if matches(&q, "omarchy version")
+                && let Some(version) = std::process::Command::new("omarchy")
                     .arg("version")
                     .output()
                     .ok()
@@ -273,15 +278,14 @@ impl NativeExt for Sys {
                             .map(|l| l.trim().to_string())
                     })
                     .filter(|v| !v.is_empty())
-                {
-                    rows.push(json!({
-                        "id": "omarchy",
-                        "title": version,
-                        "subtitle": "Omarchy",
-                        "exec": copy_exec(&version),
-                        "score": 87000,
-                    }));
-                }
+            {
+                rows.push(json!({
+                    "id": "omarchy",
+                    "title": version,
+                    "subtitle": "Omarchy",
+                    "exec": copy_exec(&version),
+                    "score": 87000,
+                }));
             }
 
             NativeOutcome::Rows(rows)

@@ -11,7 +11,7 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
@@ -89,11 +89,7 @@ fn expand_glob(target: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = std::fs::read_dir(parent)
         .map(|read| {
             read.flatten()
-                .filter(|e| {
-                    e.file_name()
-                        .to_str()
-                        .is_some_and(|n| glob_match(name, n))
-                })
+                .filter(|e| e.file_name().to_str().is_some_and(|n| glob_match(name, n)))
                 .map(|e| e.path())
                 .collect()
         })
@@ -188,10 +184,11 @@ fn known_hosts() -> Option<HashSet<String>> {
 fn split_key_value(line: &str) -> Option<(String, String)> {
     let line = line.trim_start();
     let mut buf = line.to_string();
-    if let Some(eq) = line.find('=') {
-        if line[..eq].chars().all(|c| c.is_ascii_alphabetic()) && !line[..eq].is_empty() {
-            buf.replace_range(eq..=eq, " ");
-        }
+    if let Some(eq) = line.find('=')
+        && line[..eq].chars().all(|c| c.is_ascii_alphabetic())
+        && !line[..eq].is_empty()
+    {
+        buf.replace_range(eq..=eq, " ");
     }
     let mut parts = buf.splitn(2, char::is_whitespace);
     let key = parts.next()?;
@@ -260,10 +257,10 @@ fn parse_hosts(files: &[PathBuf]) -> Vec<Host> {
                 // Only the first is kept: the row answers "is a key pinned
                 // here", not the keyring.
                 "identityfile" => {
-                    if let Some(h) = cur.as_mut() {
-                        if h.identity.is_empty() {
-                            h.identity = value;
-                        }
+                    if let Some(h) = cur.as_mut()
+                        && h.identity.is_empty()
+                    {
+                        h.identity = value;
                     }
                 }
                 "proxyjump" => {

@@ -18,16 +18,14 @@ use std::sync::Arc;
 use oxy_core::dirs;
 use oxy_core::engine::{Engine, EngineCmd, EngineEvent};
 use oxy_core::native;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{broadcast, mpsc};
 
 #[cfg(unix)]
-use interprocess::local_socket::{
-    tokio::prelude::*, GenericFilePath, ListenerOptions, ToFsName,
-};
+use interprocess::local_socket::{GenericFilePath, ListenerOptions, ToFsName, tokio::prelude::*};
 #[cfg(windows)]
-use interprocess::local_socket::{tokio::prelude::*, GenericNamespaced, ListenerOptions, ToNsName};
+use interprocess::local_socket::{GenericNamespaced, ListenerOptions, ToNsName, tokio::prelude::*};
 
 fn socket_name() -> std::io::Result<interprocess::local_socket::Name<'static>> {
     #[cfg(unix)]
@@ -138,7 +136,9 @@ fn parse_cmd(line: &str) -> Option<EngineCmd> {
             key: s("key").to_string(),
             // A synthesized action (a form's exec with {field} filled in):
             // not one of the row's declared actions, so it arrives whole.
-            action: serde_json::from_value(v.get("action").cloned().unwrap_or(Value::Null)).ok()?,
+            action: Box::new(
+                serde_json::from_value(v.get("action").cloned().unwrap_or(Value::Null)).ok()?,
+            ),
         },
         "pin" => EngineCmd::Pin {
             key: s("key").to_string(),

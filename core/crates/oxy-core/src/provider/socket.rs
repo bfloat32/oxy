@@ -14,14 +14,14 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 #[cfg(unix)]
-use interprocess::local_socket::{tokio::prelude::*, GenericFilePath, ToFsName};
+use interprocess::local_socket::{GenericFilePath, ToFsName, tokio::prelude::*};
 #[cfg(windows)]
-use interprocess::local_socket::{tokio::prelude::*, GenericNamespaced, ToNsName};
+use interprocess::local_socket::{GenericNamespaced, ToNsName, tokio::prelude::*};
 
 type Pipe = interprocess::local_socket::tokio::Stream;
 

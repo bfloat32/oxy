@@ -10,7 +10,7 @@ use std::path::Path;
 use std::pin::Pin;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
@@ -266,7 +266,7 @@ fn walk(root: &Path, query_lower: &str, format: &str, home: &Path) -> Vec<Hit> {
         }
     }
 
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
     scored.truncate(MAX_ROWS);
 
     scored

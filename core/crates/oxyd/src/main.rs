@@ -12,6 +12,8 @@
 //! the frontend is a teletype: it sends what the box says and draws what it
 //! is sent, and every ordering decision lives in the engine.
 
+#![forbid(unsafe_code)]
+
 use std::path::Path;
 use std::sync::Arc;
 
@@ -109,9 +111,9 @@ fn append_log(path: &Path, line: &str) {
 
 /// Parse a command line into an `EngineCmd`. Unknown ops are ignored rather
 /// than fatal: a newer frontend talking to an older daemon degrades, not
-/// dies.
-fn parse_cmd(line: &str) -> Option<EngineCmd> {
-    let v: Value = serde_json::from_str(line).ok()?;
+/// dies. Takes the already-parsed `Value` — the caller looked at `op` first,
+/// and a query line is parsed exactly once per keystroke.
+fn parse_cmd(v: Value) -> Option<EngineCmd> {
     let op = v.get("op")?.as_str()?;
     let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("");
     Some(match op {
@@ -212,7 +214,9 @@ async fn main() {
     let (cmd_tx, cmd_rx) = mpsc::channel::<EngineCmd>(256);
     let (evt_tx, mut evt_rx) = mpsc::channel::<EngineEvent>(512);
     let (worker_tx, worker_rx) = mpsc::channel(512);
-    let (bcast, _) = broadcast::channel::<String>(256);
+    // `Arc<[u8]>`: broadcast clones the payload per subscriber — a refcount
+    // bump instead of a fresh `String` for every client on every event.
+    let (bcast, _) = broadcast::channel::<Arc<[u8]>>(256);
 
     // Fan events out: every client hears every event, and `log` lines land in
     // the file the same way Logger.qml wrote them.
@@ -223,8 +227,11 @@ async fn main() {
             if let EngineEvent::Log { ev, fields } = &event {
                 append_log(&log_path, &log_line(ev, fields));
             }
-            if let Ok(text) = serde_json::to_string(&event) {
-                let _ = bcast_tx.send(format!("{text}\n"));
+            // `to_vec` writes straight into the buffer; `into_boxed_slice` +
+            // `Arc::from` share that allocation — no second copy per event.
+            if let Ok(mut buf) = serde_json::to_vec(&event) {
+                buf.push(b'\n');
+                let _ = bcast_tx.send(Arc::from(buf.into_boxed_slice()));
             }
         }
     });
@@ -295,7 +302,7 @@ async fn serve_with<R, W>(
     reader: R,
     writer: &mut W,
     cmd_tx: mpsc::Sender<EngineCmd>,
-    mut events: broadcast::Receiver<String>,
+    mut events: broadcast::Receiver<Arc<[u8]>>,
 ) where
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
@@ -306,14 +313,16 @@ async fn serve_with<R, W>(
             line = lines.next_line() => {
                 let Ok(Some(line)) = line else { return };
                 let line = line.trim();
+                // One parse per line — `op` is read off the same `Value` the
+                // command is built from.
+                let Ok(v) = serde_json::from_str::<Value>(line) else {
+                    continue;
+                };
                 // Once per open, never per keystroke: a URL on the clipboard
                 // is the first row of an empty box.
-                let is_open = serde_json::from_str::<Value>(line)
-                    .ok()
-                    .and_then(|v| v.get("op").and_then(|x| x.as_str()).map(String::from))
-                    .as_deref()
-                    == Some("open");
-                if let Some(cmd) = parse_cmd(line) {
+                let is_open =
+                    v.get("op").and_then(|x| x.as_str()) == Some("open");
+                if let Some(cmd) = parse_cmd(v) {
                     if is_open {
                         let tx = cmd_tx.clone();
                         tokio::spawn(async move {
@@ -332,7 +341,7 @@ async fn serve_with<R, W>(
                     // A slow client skips what it missed; a closed channel
                     // means the engine is gone and there is nothing to serve.
                     Ok(event) => {
-                        if writer.write_all(event.as_bytes()).await.is_err() {
+                        if writer.write_all(&event).await.is_err() {
                             return;
                         }
                     }
@@ -346,29 +355,34 @@ async fn serve_with<R, W>(
 
 /// What a reload watches: every extension file's name, size and mtime. A
 /// summon whose signature matches pays one stat and keeps every worker it
-/// already has.
-fn signature(dir: &Path) -> String {
-    let mut parts: Vec<String> = Vec::new();
+/// already has. The hash is XOR-accumulated so readdir order doesn't matter,
+/// and `DefaultHasher::new` uses fixed keys, so two polls are comparable.
+fn signature(dir: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut acc = 0u64;
     if let Ok(read) = std::fs::read_dir(dir) {
         for entry in read.flatten() {
             let path = entry.path();
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            if let Ok(meta) = entry.metadata() {
-                parts.push(format!(
-                    "{} {} {}",
-                    path.file_name().unwrap_or_default().to_string_lossy(),
-                    meta.len(),
-                    meta.modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs())
-                        .unwrap_or(0)
-                ));
+            let Ok(meta) = entry.metadata() else {
+                continue;
+            };
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            if let Some(name) = path.file_name() {
+                name.as_encoded_bytes().hash(&mut h);
             }
+            h.write_u64(meta.len());
+            h.write_u64(
+                meta.modified()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(0),
+            );
+            acc ^= h.finish();
         }
     }
-    parts.sort();
-    parts.join("\n")
+    acc
 }

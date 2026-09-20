@@ -232,7 +232,25 @@ fn as_entry(c: &Cmd) -> Entry {
     }
 }
 
-pub struct Commands;
+/// The fuzzy entries are static data — built once at construct, not
+/// re-stringified per keystroke.
+pub struct Commands {
+    entries: Vec<Entry>,
+}
+
+impl Commands {
+    pub fn new() -> Commands {
+        Commands {
+            entries: COMMANDS.iter().map(as_entry).collect(),
+        }
+    }
+}
+
+impl Default for Commands {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl NativeExt for Commands {
     fn query<'a>(
@@ -243,8 +261,8 @@ impl NativeExt for Commands {
         Box::pin(async move {
             let arg = ctx.arg.trim();
             let mut out = Vec::new();
-            for cmd in COMMANDS {
-                let f = fuzzy(&as_entry(cmd), arg);
+            for (cmd, entry) in COMMANDS.iter().zip(self.entries.iter()) {
+                let f = fuzzy(entry, arg);
                 if f < 0 {
                     continue;
                 }

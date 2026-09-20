@@ -14,7 +14,12 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 
-pub struct Cal;
+/// `week_start` is asked of `locale` once: the machine's locale does not
+/// change between keystrokes, and a bare year asks for twelve rows — twelve
+/// subprocesses per query was the alternative.
+pub struct Cal {
+    week_start: Option<i64>,
+}
 
 impl Default for Cal {
     fn default() -> Self {
@@ -24,7 +29,11 @@ impl Default for Cal {
 
 impl Cal {
     pub fn new() -> Cal {
-        Cal
+        Cal { week_start: None }
+    }
+
+    fn week_start(&mut self) -> i64 {
+        *self.week_start.get_or_insert_with(week_start)
     }
 }
 
@@ -142,6 +151,7 @@ fn month_number(name: &str) -> Option<i64> {
     None
 }
 
+#[allow(clippy::too_many_arguments)]
 fn month_row(
     id: &str,
     year: i64,
@@ -150,17 +160,13 @@ fn month_row(
     score: i64,
     marks: Vec<i64>,
     note: &str,
+    week_start: i64,
 ) -> Value {
     let (ty, tm, td) = today();
     // `today` is sent only when the month being drawn is the current one, so
     // the circle never lands on the wrong 18th.
     let today_mark = if year == ty && month == tm { td } else { 0 };
     let title = format!("{} {}", MONTHS[(month - 1) as usize], year);
-    // Locale's week start is answered by `cal` on the real box; Monday-first
-    // locales get their 1, everyone else 0. Read once per query like the
-    // script did — through `LC_TIME` rather than a subprocess, since the
-    // daemon holds no `cal`.
-    let week_start = week_start();
     let subtitle = if note.is_empty() && today_mark > 0 {
         format!(
             "{} {}, week {}",
@@ -248,6 +254,8 @@ impl NativeExt for Cal {
     ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
         Box::pin(async move {
             let (ty, tm, _td) = today();
+            // Resolved once and handed to every row — see the field comment.
+            let ws = self.week_start();
             let mut lower = ctx.arg.trim().to_lowercase();
             lower = translate_month(&lower);
 
@@ -272,9 +280,9 @@ impl NativeExt for Cal {
                 let (ny, nm) = add_months(ty, tm, 1);
                 let (py, pm) = add_months(ty, tm, -1);
                 return NativeOutcome::Rows(vec![
-                    month_row("now", ty, tm, "This month", 95000, vec![], ""),
-                    month_row("next", ny, nm, "Next", 94000, vec![], ""),
-                    month_row("prev", py, pm, "Last", 93000, vec![], ""),
+                    month_row("now", ty, tm, "This month", 95000, vec![], "", ws),
+                    month_row("next", ny, nm, "Next", 94000, vec![], "", ws),
+                    month_row("prev", py, pm, "Last", 93000, vec![], "", ws),
                 ]);
             }
 
@@ -291,6 +299,7 @@ impl NativeExt for Cal {
                             96000 - m * 100,
                             vec![],
                             "",
+                            ws,
                         )
                     })
                     .collect();
@@ -317,6 +326,7 @@ impl NativeExt for Cal {
                         95000,
                         vec![],
                         "",
+                        ws,
                     )]);
                 }
             }
@@ -329,7 +339,7 @@ impl NativeExt for Cal {
             {
                 return NativeOutcome::Rows(if month >= tm {
                     vec![
-                        month_row("m-now", ty, month, &ty.to_string(), 95000, vec![], ""),
+                        month_row("m-now", ty, month, &ty.to_string(), 95000, vec![], "", ws),
                         month_row(
                             "m-next",
                             ty + 1,
@@ -338,6 +348,7 @@ impl NativeExt for Cal {
                             94000,
                             vec![],
                             "",
+                            ws,
                         ),
                     ]
                 } else {
@@ -350,8 +361,9 @@ impl NativeExt for Cal {
                             95000,
                             vec![],
                             "",
+                            ws,
                         ),
-                        month_row("m-now", ty, month, &ty.to_string(), 94000, vec![], ""),
+                        month_row("m-now", ty, month, &ty.to_string(), 94000, vec![], "", ws),
                     ]
                 });
             }
@@ -368,6 +380,7 @@ impl NativeExt for Cal {
                     95000,
                     vec![],
                     "",
+                    ws,
                 )]);
             }
 

@@ -9,6 +9,8 @@
 //! whole core without a daemon, and how a machine without oxyd running still
 //! gets answers.
 
+#![forbid(unsafe_code)]
+
 use std::io::Write;
 use std::time::Duration;
 
@@ -246,7 +248,7 @@ async fn test(args: &[String]) -> i32 {
         let mut answered: Option<usize> = None;
         while let Ok(Some(event)) = tokio::time::timeout_at(deadline.into(), rx.recv()).await {
             if let EngineEvent::Results { rows, waiting, .. } = &event
-                && !waiting.contains(&ext.id)
+                && !waiting.iter().any(|w| &**w == ext.id.as_str())
             {
                 answered = Some(rows.len());
                 break;
@@ -377,7 +379,7 @@ async fn test_cases(only: Option<String>) -> i32 {
                         .filter(|row| row.provider_id == ext.id)
                         .map(|row| case_view(row, &ext.id))
                         .collect();
-                    if !waiting.contains(&ext.id) {
+                    if !waiting.iter().any(|w| &**w == ext.id.as_str()) {
                         break;
                     }
                 }

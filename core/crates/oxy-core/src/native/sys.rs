@@ -16,9 +16,12 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::shellquote::quote;
 
+/// sysinfo state lives behind a lock so the query body can run on
+/// `spawn_blocking` — `/sys` reads, `/proc` refreshes and the odd subprocess
+/// are synchronous work.
 pub struct Sys {
-    sys: sysinfo::System,
-    disks: sysinfo::Disks,
+    sys: std::sync::Arc<std::sync::Mutex<sysinfo::System>>,
+    disks: std::sync::Arc<std::sync::Mutex<sysinfo::Disks>>,
 }
 
 impl Default for Sys {
@@ -30,8 +33,8 @@ impl Default for Sys {
 impl Sys {
     pub fn new() -> Sys {
         Sys {
-            sys: sysinfo::System::new(),
-            disks: sysinfo::Disks::new(),
+            sys: std::sync::Arc::new(std::sync::Mutex::new(sysinfo::System::new())),
+            disks: std::sync::Arc::new(std::sync::Mutex::new(sysinfo::Disks::new())),
         }
     }
 }
@@ -88,12 +91,18 @@ impl NativeExt for Sys {
         ctx: Ctx,
         _progress: UnboundedSender<Vec<Value>>,
     ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
+        let sys = self.sys.clone();
+        let disks = self.disks.clone();
+        let arg = ctx.arg.clone();
         Box::pin(async move {
-            let q = ctx.arg.trim().to_lowercase();
-            let mut rows: Vec<Value> = Vec::new();
+            tokio::task::spawn_blocking(move || {
+                let q = arg.trim().to_lowercase();
+                let mut rows: Vec<Value> = Vec::new();
 
-            self.sys.refresh_memory();
-            self.disks.refresh(true);
+                // Refreshes are gated by the same match as the rows that read
+                // them — a `sys:ip` question pays no /proc walk.
+                let mut sys = sys.lock().unwrap();
+                let mut disks = disks.lock().unwrap();
 
             // ---- battery
             if matches(&q, "battery power charge") {
@@ -150,8 +159,9 @@ impl NativeExt for Sys {
 
             // ---- memory
             if matches(&q, "memory ram used free") {
-                let total = self.sys.total_memory();
-                let used = self.sys.used_memory();
+                sys.refresh_memory();
+                let total = sys.total_memory();
+                let used = sys.used_memory();
                 if total > 0 {
                     let percent = used as f64 / total as f64 * 100.0;
                     rows.push(json!({
@@ -167,30 +177,29 @@ impl NativeExt for Sys {
             }
 
             // ---- disk
-            if matches(&q, "disk storage space root free")
-                && let Some(disk) = self
-                    .disks
-                    .iter()
-                    .find(|d| d.mount_point() == Path::new("/"))
-            {
-                let total = disk.total_space();
-                let avail = disk.available_space();
-                let used = total.saturating_sub(avail);
-                let percent = if total > 0 {
-                    used as f64 / total as f64 * 100.0
-                } else {
-                    0.0
-                };
-                rows.push(json!({
-                    "id": "disk",
-                    "title": format!("{} free", human_bytes(avail)),
-                    "subtitle": "Disk",
-                    "detail": format!("{} of {} used", human_bytes(used), human_bytes(total)),
-                    "accessory": format!("{percent:.0}%"),
-                    "exec": copy_exec(&format!("{} free", human_bytes(avail))),
-                    "score": 92000,
-                    "progress": used as f64 / total.max(1) as f64,
-                }));
+            if matches(&q, "disk storage space root free") {
+                disks.refresh(true);
+                if let Some(disk) = disks.iter().find(|d| d.mount_point() == Path::new("/"))
+                {
+                    let total = disk.total_space();
+                    let avail = disk.available_space();
+                    let used = total.saturating_sub(avail);
+                    let percent = if total > 0 {
+                        used as f64 / total as f64 * 100.0
+                    } else {
+                        0.0
+                    };
+                    rows.push(json!({
+                        "id": "disk",
+                        "title": format!("{} free", human_bytes(avail)),
+                        "subtitle": "Disk",
+                        "detail": format!("{} of {} used", human_bytes(used), human_bytes(total)),
+                        "accessory": format!("{percent:.0}%"),
+                        "exec": copy_exec(&format!("{} free", human_bytes(avail))),
+                        "score": 92000,
+                        "progress": used as f64 / total.max(1) as f64,
+                    }));
+                }
             }
 
             // ---- address
@@ -288,7 +297,10 @@ impl NativeExt for Sys {
                 }));
             }
 
-            NativeOutcome::Rows(rows)
+                NativeOutcome::Rows(rows)
+            })
+            .await
+            .unwrap_or(NativeOutcome::Empty)
         })
     }
 }

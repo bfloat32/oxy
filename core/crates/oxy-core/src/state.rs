@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
@@ -102,17 +103,23 @@ pub fn frecency_prune(store: &mut Frecency, now_ms: u64) {
 const NEVER_REORDER: &[&str] = &["actions"];
 
 /// Rows arrive already scored by match quality. This only reorders within a
-/// tier.
-pub fn frecency_apply(rows: &mut [Row], store: &Frecency, now_ms: u64, query: &str) {
+/// tier. Returns whether any score moved, so the caller can skip a re-sort
+/// when nothing did.
+pub fn frecency_apply(rows: &mut [Arc<Row>], store: &Frecency, now_ms: u64, query: &str) -> bool {
+    let mut changed = false;
     for row in rows.iter_mut() {
         if row.key.is_empty() || NEVER_REORDER.contains(&row.provider_id.as_str()) {
             continue;
         }
         let extra = frecency_boost(store, &row.key, now_ms, query);
         if extra > 0 {
-            row.score += extra;
+            // PERF: `make_mut` clones only the boosted row — the bucket keeps
+            // its copy untouched, and unboosted rows stay shared.
+            Arc::make_mut(row).score += extra;
+            changed = true;
         }
     }
+    changed
 }
 
 // -------------------------------------------------------------------- pins
@@ -137,15 +144,25 @@ pub fn pin_toggle(pins: &mut Pins, key: &str) {
     }
 }
 
-/// `pinned` is written on every row, not only the pinned ones: a mark set once
-/// and never cleared would stay on a row after the pin came off.
-pub fn pins_apply(rows: &mut [Row], pins: &Pins) {
+/// `pinned` is written on every row whose mark differs, not only the pinned
+/// ones: a mark set once and never cleared would stay on a row after the pin
+/// came off. Returns whether any score moved (a flag-only write is not a
+/// reorder).
+pub fn pins_apply(rows: &mut [Arc<Row>], pins: &Pins) -> bool {
+    let mut changed = false;
     for row in rows.iter_mut() {
         if row.key.is_empty() {
             continue;
         }
-        row.pinned = pin_has(pins, &row.key);
-        if !row.pinned {
+        let want = pin_has(pins, &row.key);
+        // The common case — an unpinned row staying unpinned — writes nothing
+        // and clones nothing.
+        if !want && !row.pinned {
+            continue;
+        }
+        let row = Arc::make_mut(row);
+        row.pinned = want;
+        if !want {
             continue;
         }
         let tier = row.score.div_euclid(crate::rank::TIER_WIDTH);
@@ -153,7 +170,9 @@ pub fn pins_apply(rows: &mut [Row], pins: &Pins) {
             .score
             .saturating_add(PIN_BOOST)
             .min(tier * crate::rank::TIER_WIDTH + (crate::rank::TIER_WIDTH - 1));
+        changed = true;
     }
+    changed
 }
 
 // ----------------------------------------------------------------- recents

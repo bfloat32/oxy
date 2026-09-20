@@ -6,7 +6,7 @@
 //! asked.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 
 use serde_json::Value;
@@ -19,7 +19,11 @@ use crate::provider::process;
 use crate::provider::socket::{self, SocketChan, SocketReq};
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::query::Query;
-use crate::row::{Row, to_row};
+use crate::row::{Row, SharedRows, to_row_owned};
+
+/// The empty answer every quiet provider shares — `Vec::new` allocs nothing,
+/// so the Arc around it is the only allocation this saves.
+static EMPTY_ROWS: LazyLock<SharedRows> = LazyLock::new(|| Arc::new(Vec::new()));
 
 /// What the engine asks of a worker.
 pub enum WorkerCmd {
@@ -42,17 +46,19 @@ pub enum WorkerCmd {
 /// What a worker tells the engine.
 pub enum WorkerMsg {
     /// About to work on this epoch — the spinner's reason.
-    Waiting { id: String, epoch: u64 },
+    Waiting { id: Arc<str>, epoch: u64 },
     /// An answer for this epoch (`last` clears the wait). Empty is an answer.
+    /// Arc'd end to end: a cache hit is one refcount bump to the engine, and
+    /// the engine's bucket stores the same set the worker built.
     Rows {
-        id: String,
+        id: Arc<str>,
         epoch: u64,
-        rows: Vec<Row>,
+        rows: SharedRows,
         last: bool,
     },
     /// Log lines, relayed to the event stream.
     Log {
-        id: String,
+        id: Arc<str>,
         ev: String,
         fields: Value,
     },
@@ -63,7 +69,9 @@ pub enum WorkerMsg {
 pub struct Shared {
     pub cache: std::sync::Mutex<crate::cache::Cache>,
     pub availability: std::sync::Mutex<crate::availability::Availability>,
-    pub settings: tokio::sync::RwLock<crate::settings::Settings>,
+    /// Arc'd so a read is a refcount bump — 30+ workers clone it per
+    /// keystroke, and a deep `Settings` clone each time is not cheap.
+    pub settings: tokio::sync::RwLock<Arc<crate::settings::Settings>>,
     pub registry: tokio::sync::RwLock<Arc<Vec<Extension>>>,
 }
 
@@ -108,13 +116,21 @@ pub async fn run(
     tx: mpsc::Sender<WorkerMsg>,
     shared: Arc<Shared>,
 ) {
-    let id = ext.id.clone();
+    // `Arc<str>`: every Rows/Waiting/Log message clones the id — an atomic
+    // bump instead of a heap copy, a few dozen times per keystroke.
+    let id: Arc<str> = Arc::from(ext.id.as_str());
+    // Rows in the cache are valid only under the extension definition that
+    // built them — computed once; the worker dies with its ext on reload.
+    let ext_stamp = crate::cache::ext_stamp(&ext);
     let native = native.map(|n| Arc::new(Mutex::new(n)));
 
     // ---- internal state -------------------------------------------------
     let mut available = ext.when.is_empty();
     let mut recheck: Option<Arc<Query>> = None;
     let mut opened = true;
+    // Set on Opened(true), consumed by the first ask: providers whose data
+    // may have moved while the launcher was away rescan exactly then.
+    let mut fresh_open = true;
     let mut showing = false;
     let mut current_epoch: u64 = 0;
     let mut pending: Option<Pending> = None;
@@ -204,20 +220,28 @@ pub async fn run(
                 match out {
                     RunOut::Failed => {
                         run_pending = None;
-                        emit!(run_epoch, Vec::new(), true)
+                        emit!(run_epoch, EMPTY_ROWS.clone(), true)
                     }
                     RunOut::Raw(mut raw) => {
                         raw.truncate(ext.max_rows);
+                        // Built once, owned: this delivery, the cache entry,
+                        // and every later hit share the same Arc'd row set —
+                        // to_row never runs twice on one answer.
+                        let rows = share_rows(build_rows_owned(&ext, raw));
                         if let Some(p) = run_pending.take() {
-                            shared
-                                .cache
-                                .lock()
-                                .unwrap()
-                                .put(&id, &p.key, raw.clone(), ext.cache_ms);
+                            if ext.cache_ms > 0 {
+                                shared.cache.lock().unwrap().put(
+                                    &id,
+                                    &p.key,
+                                    rows.clone(),
+                                    ext.cache_ms,
+                                    ext_stamp,
+                                );
+                            }
                             live = Some(Live { epoch: p.epoch, pending: p });
                         }
                         stale_shown_key = String::new();
-                        emit!(run_epoch, build_rows(&ext, &raw), true);
+                        emit!(run_epoch, rows, true);
                     }
                     RunOut::Built(rows) => {
                         if let Some(p) = run_pending.take() {
@@ -226,7 +250,12 @@ pub async fn run(
                         stale_shown_key = String::new();
                         emit!(
                             run_epoch,
-                            rows.into_iter().take(ext.max_rows).collect::<Vec<_>>(),
+                            Arc::new(
+                                rows.into_iter()
+                                    .take(ext.max_rows)
+                                    .map(Arc::new)
+                                    .collect::<Vec<_>>()
+                            ),
                             true
                         );
                     }
@@ -297,9 +326,12 @@ pub async fn run(
                     query: p.query.clone(),
                     arg: p.arg.clone(),
                     filters: p.filters.clone(),
-                    settings: Arc::new(shared.settings.read().await.clone()),
+                    // Arc bump — no `Settings` deep clone per run.
+                    settings: shared.settings.read().await.clone(),
                     registry: shared.registry.read().await.clone(),
+                    fresh_open,
                 };
+                fresh_open = false;
                 native_run = Some(tokio::spawn(
                     async move { n.lock().await.query(ctx, ptx).await },
                 ));
@@ -334,7 +366,7 @@ pub async fn run(
                         run_pending = Some(p);
                     } else {
                         if stale_shown_key.is_empty() || stale_shown_key != p.key {
-                            emit!(p.epoch, Vec::new(), true);
+                            emit!(p.epoch, EMPTY_ROWS.clone(), true);
                         }
                         run_pending = None;
                     }
@@ -348,7 +380,7 @@ pub async fn run(
                 // nothing rather than leaving the spinner up — unless stale
                 // rows are already up, which are the better answer.
                 if stale_shown_key.is_empty() || stale_shown_key != p.key {
-                    emit!(p.epoch, Vec::new(), true);
+                    emit!(p.epoch, EMPTY_ROWS.clone(), true);
                 }
                 run_pending = None;
             }
@@ -382,16 +414,16 @@ pub async fn run(
                         let _ = self2.send(WorkerCmd::Available { ok, replay: None });
                     });
                 }
-                emit!(q.epoch, Vec::new(), true);
+                emit!(q.epoch, EMPTY_ROWS.clone(), true);
             } else if q.scope.is_empty() && !ext.always {
                 // Unscoped and not opted in: stay quiet.
-                emit!(q.epoch, Vec::new(), true);
+                emit!(q.epoch, EMPTY_ROWS.clone(), true);
             } else if !q.routes_to(&ext.keyword, &ext.aliases) {
-                emit!(q.epoch, Vec::new(), true);
+                emit!(q.epoch, EMPTY_ROWS.clone(), true);
             } else {
                 let arg = q.arg_for(&ext.keyword, &ext.aliases);
                 if arg.chars().count() < ext.min_chars {
-                    emit!(q.epoch, Vec::new(), true);
+                    emit!(q.epoch, EMPTY_ROWS.clone(), true);
                 } else {
                     let filters = Arc::new(q.extras(&ext.keyword, &ext.aliases));
                     let command = if ext.search.is_empty() {
@@ -416,22 +448,25 @@ pub async fn run(
                         // they die before any `.await` below — a MutexGuard
                         // is not Send and holding one across the emit would
                         // poison the whole task's future.
-                        let fresh = shared.cache.lock().unwrap().get(&id, &p.key);
+                        let fresh = shared.cache.lock().unwrap().get(&id, &p.key, ext_stamp);
                         if let Some(hit) = fresh {
-                            let rows = build_rows(&ext, &hit);
                             live = Some(Live {
                                 epoch: q.epoch,
                                 pending: p.clone(),
                             });
-                            emit!(q.epoch, rows, true);
+                            emit!(q.epoch, hit, true);
                             arm_refresh!();
                             answered = true;
                         }
                         if !answered {
-                            let stale = shared.cache.lock().unwrap().get_stale(&id, &p.key);
+                            let stale = shared
+                                .cache
+                                .lock()
+                                .unwrap()
+                                .get_stale(&id, &p.key, ext_stamp);
                             if let Some(stale) = stale {
                                 stale_shown_key = p.key.clone();
-                                emit!(q.epoch, build_rows(&ext, &stale), false);
+                                emit!(q.epoch, stale, false);
                             }
                         }
                     }
@@ -487,7 +522,9 @@ pub async fn run(
                     }
                     WorkerCmd::Opened(v) => {
                         opened = v;
-                        if !v {
+                        if v {
+                            fresh_open = true;
+                        } else {
                             pending = None;
                             live = None;
                             refresh_at = None;
@@ -580,7 +617,7 @@ pub async fn run(
                 if let Some(mut prx) = native_partial.take() {
                     while let Ok(raw) = prx.try_recv() {
                         if run_epoch == current_epoch {
-                            emit!(run_epoch, build_rows(&ext, &raw), false);
+                            emit!(run_epoch, share_rows(build_rows_owned(&ext, raw)), false);
                         }
                     }
                 }
@@ -653,7 +690,7 @@ pub async fn run(
             {
                 match raw {
                     Some(raw) if run_epoch == current_epoch => {
-                        emit!(run_epoch, build_rows(&ext, &raw), false);
+                        emit!(run_epoch, share_rows(build_rows_owned(&ext, raw)), false);
                     }
                     Some(_) => {}
                     None => native_partial = None,
@@ -681,11 +718,18 @@ pub async fn run(
     }
 }
 
-/// Build launchable rows out of raw provider output — the `build()` port.
-fn build_rows(ext: &Extension, raw: &[Value]) -> Vec<Row> {
-    let mut rows = Vec::new();
-    for (i, v) in raw.iter().enumerate().take(ext.max_rows) {
-        if let Some(mut row) = to_row(ext, v, i) {
+/// Wrap a built row set for the wire: one `Arc` per row for the engine's
+/// bucket, one over the vec so a cache hit or re-emit is a refcount bump.
+fn share_rows(rows: Vec<Row>) -> SharedRows {
+    Arc::new(rows.into_iter().map(Arc::new).collect())
+}
+
+/// Consuming form for the fresh-run path — each raw row is taken apart in
+/// place, so no field is cloned on its way into the launcher row.
+fn build_rows_owned(ext: &Extension, raw: Vec<Value>) -> Vec<Row> {
+    let mut rows = Vec::with_capacity(raw.len().min(ext.max_rows));
+    for (i, v) in raw.into_iter().enumerate().take(ext.max_rows) {
+        if let Some(mut row) = to_row_owned(ext, v, i) {
             row.score = crate::rank::score(row.tier, row.local, 0);
             rows.push(row);
         }

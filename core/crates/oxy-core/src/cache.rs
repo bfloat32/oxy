@@ -6,7 +6,8 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use serde_json::Value;
+use crate::extension::Extension;
+use crate::row::SharedRows;
 
 /// Bounds, because a daemon stays up for days and a launcher that leaks one
 /// entry per distinct query is a launcher that leaks.
@@ -14,8 +15,33 @@ const MAX_PER_PROVIDER: usize = 16;
 const MAX_PROVIDERS: usize = 48;
 
 struct Entry {
-    rows: Vec<Value>,
+    // Shared, not copied: a hit hands the caller an `Arc` bump, not a deep
+    // clone of every row — the rows are read-only after `put`. Built rows,
+    // not raw JSON: the conversion runs once at fill time instead of once
+    // per hit.
+    rows: SharedRows,
     expires: u64,
+    /// Fingerprint of the extension fields `to_row` reads. `Shared` — and so
+    /// this cache — outlives a registry reload, and rows built under an old
+    /// definition must not answer for the new one.
+    stamp: u64,
+}
+
+/// Cheap fingerprint of the `Extension` fields a row build consults — id,
+/// group/subtitle/glyph/view fallbacks, tier, and the row cap. Computed once
+/// per worker at spawn; extension files are trusted local config, so
+/// collision resistance beyond `DefaultHasher` buys nothing.
+pub fn ext_stamp(ext: &Extension) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    ext.id.hash(&mut h);
+    ext.title.hash(&mut h);
+    ext.subtitle.hash(&mut h);
+    ext.glyph.hash(&mut h);
+    ext.view.hash(&mut h);
+    ext.tier.hash(&mut h);
+    ext.max_rows.hash(&mut h);
+    h.finish()
 }
 
 #[derive(Default)]
@@ -49,11 +75,11 @@ fn now_ms() -> u64 {
 }
 
 impl Cache {
-    /// The parsed rows, or `None` for a miss or an expired entry. An expired
-    /// entry is kept rather than dropped: `get_stale` still serves it while
-    /// its replacement is fetched.
-    pub fn get(&mut self, provider: &str, key: &str) -> Option<Vec<Value>> {
-        self.get_stale(provider, key).filter(|_| {
+    /// The built rows, or `None` for a miss, an expired entry, or a stamp
+    /// mismatch. An expired entry is kept rather than dropped: `get_stale`
+    /// still serves it while its replacement is fetched.
+    pub fn get(&mut self, provider: &str, key: &str, stamp: u64) -> Option<SharedRows> {
+        self.get_stale(provider, key, stamp).filter(|_| {
             self.store
                 .get(provider)
                 .and_then(|b| b.entries.get(key))
@@ -63,9 +89,13 @@ impl Cache {
 
     /// The same lookup without the expiry check. A second-past-ttl answer is
     /// still the best thing to draw while the real one is being fetched.
-    pub fn get_stale(&mut self, provider: &str, key: &str) -> Option<Vec<Value>> {
+    pub fn get_stale(&mut self, provider: &str, key: &str, stamp: u64) -> Option<SharedRows> {
         let bucket = self.store.get_mut(provider)?;
-        let rows = bucket.entries.get(key)?.rows.clone();
+        let entry = bucket.entries.get(key)?;
+        if entry.stamp != stamp {
+            return None;
+        }
+        let rows = entry.rows.clone();
         bucket.touch(key);
         Some(rows)
     }
@@ -73,7 +103,7 @@ impl Cache {
     /// `ttl_ms == 0` means the extension did not ask to be cached, so nothing
     /// is stored. That is the default on purpose: an answer about live state
     /// is wrong the moment the user acts on it.
-    pub fn put(&mut self, provider: &str, key: &str, rows: Vec<Value>, ttl_ms: u64) {
+    pub fn put(&mut self, provider: &str, key: &str, rows: SharedRows, ttl_ms: u64, stamp: u64) {
         if ttl_ms == 0 || key.is_empty() {
             return;
         }
@@ -86,6 +116,7 @@ impl Cache {
             Entry {
                 rows,
                 expires: now_ms() + ttl_ms,
+                stamp,
             },
         );
         bucket.touch(key);

@@ -7,6 +7,8 @@
 //! The QML frontend is a thin client: it sends the raw text of the box and
 //! draws whatever `Results` the engine pushes back.
 
+#![forbid(unsafe_code)]
+
 pub mod availability;
 pub mod cache;
 pub mod dirs;

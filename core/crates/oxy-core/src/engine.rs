@@ -94,11 +94,13 @@ pub enum EngineEvent {
     /// The merged list for the current epoch.
     Results {
         epoch: u64,
-        rows: Vec<Row>,
+        /// Shared rows — a publish is refcount bumps, not a deep copy of
+        /// every row the merged list carries.
+        rows: Vec<Arc<Row>>,
         /// Provider ids still owed an answer.
-        waiting: Vec<String>,
+        waiting: Vec<Arc<str>>,
         /// Provider ids whose visible rows are one or more keystrokes old.
-        stale: Vec<String>,
+        stale: Vec<Arc<str>>,
         scope: String,
         #[serde(rename = "scopeLabel")]
         scope_label: String,
@@ -175,7 +177,7 @@ pub struct Engine {
     shared: Arc<Shared>,
     settings: Settings,
     extensions: Arc<Vec<Extension>>,
-    workers: HashMap<String, mpsc::UnboundedSender<WorkerCmd>>,
+    workers: HashMap<Arc<str>, mpsc::UnboundedSender<WorkerCmd>>,
     natives: HashMap<String, Box<dyn NativeExt>>,
     native_for: NativeCtor,
     worker_tx: mpsc::Sender<WorkerMsg>,
@@ -186,12 +188,17 @@ pub struct Engine {
 
     epoch: u64,
     raw: String,
+    /// The parsed form of `raw`, kept so `publish` does not re-parse the same
+    /// text on every provider answer.
+    query: Arc<Query>,
     opened: bool,
     /// provider → the rows it last answered, and the epoch they belong to.
-    buckets: HashMap<String, (u64, Vec<Row>)>,
-    waiting: HashSet<String>,
+    /// Arc'd twice over: the worker's Rows message, the cache entry, and this
+    /// bucket can all be the same allocation, and merging clones handles.
+    buckets: HashMap<Arc<str>, (u64, crate::row::SharedRows)>,
+    waiting: HashSet<Arc<str>>,
     /// The merged list as it stands — what `activate` resolves keys against.
-    rows: Vec<Row>,
+    rows: Vec<Arc<Row>>,
 
     /// The enter held for a placeholder row to resolve, and when it was
     /// asked — a keypress that fires a minute late is worse than one dropped,
@@ -240,7 +247,7 @@ impl Engine {
         let shared = Arc::new(Shared {
             cache: std::sync::Mutex::new(crate::cache::Cache::default()),
             availability: std::sync::Mutex::new(crate::availability::Availability::default()),
-            settings: RwLock::new(settings.clone()),
+            settings: RwLock::new(Arc::new(settings.clone())),
             registry: RwLock::new(Arc::new(Vec::new())),
         });
         *shared.registry.write().await = Arc::new(extensions.clone());
@@ -263,6 +270,7 @@ impl Engine {
             frecency_path: crate::dirs::frecency_file(),
             epoch: 0,
             raw: String::new(),
+            query: Arc::new(Query::parse("", 0, None)),
             opened: false,
             buckets: HashMap::new(),
             waiting: HashSet::new(),
@@ -286,7 +294,7 @@ impl Engine {
     /// leaves its worker answering nothing, and its cache survives in Shared.
     async fn spawn_workers(&mut self, extensions: &Arc<Vec<Extension>>) {
         for ext in extensions.iter() {
-            if self.workers.contains_key(&ext.id) {
+            if self.workers.contains_key(ext.id.as_str()) {
                 continue;
             }
             if ext.native.is_empty() && ext.search.is_empty() && ext.socket.is_empty() {
@@ -307,7 +315,13 @@ impl Engine {
                 self.worker_tx.clone(),
                 self.shared.clone(),
             ));
-            self.workers.insert(ext.id.clone(), tx);
+            // A worker born while the launcher is closed starts closed —
+            // `Opened` is otherwise only sent on transitions, and a spawn
+            // during reload is not one.
+            if !self.opened {
+                let _ = tx.send(WorkerCmd::Opened(false));
+            }
+            self.workers.insert(Arc::from(ext.id.as_str()), tx);
         }
     }
 
@@ -352,11 +366,24 @@ impl Engine {
             EngineCmd::Open { text } => {
                 // A summon re-sends the registry: the chips and the ask hint
                 // want extension titles before the first answer lands.
+                // Reopen wakes the workers too — without `Opened(true)` they
+                // keep the closed flag from the last close: refresh never
+                // re-arms and socket pushes are dropped on the floor.
+                if !self.opened {
+                    for tx in self.workers.values() {
+                        let _ = tx.send(WorkerCmd::Opened(true));
+                    }
+                }
                 self.opened = true;
                 self.emit_registry().await;
                 self.on_query(&text).await;
             }
             EngineCmd::Query { text, opened } => {
+                if opened != self.opened {
+                    for tx in self.workers.values() {
+                        let _ = tx.send(WorkerCmd::Opened(opened));
+                    }
+                }
                 self.opened = opened;
                 self.on_query(&text).await;
             }
@@ -384,7 +411,7 @@ impl Engine {
                     let query = Arc::new(Query::parse(&self.raw, self.epoch, Some(&self.known)));
                     let rows = self.answer_paste(&query);
                     self.put_inline("paste", query.epoch, rows);
-                    self.publish(query.epoch).await;
+                    self.publish(query.epoch, &query).await;
                 }
             }
             EngineCmd::Ask { text } => self.on_ask(&text).await,
@@ -413,6 +440,7 @@ impl Engine {
         self.epoch += 1;
         self.raw = text.to_string();
         let query = Arc::new(Query::parse(text, self.epoch, Some(&self.known)));
+        self.query = query.clone();
 
         // The inline answerers are the launcher asking itself: synchronous,
         // in the same pass, so their rows are never late.
@@ -433,12 +461,21 @@ impl Engine {
         }
         self.waiting.clear();
         for ext in self.extensions.iter() {
-            if self.workers.contains_key(&ext.id) && self.claims(&query, ext) {
-                self.waiting.insert(ext.id.clone());
+            if !self.claims(&query, ext) {
+                continue;
+            }
+            // The Arc<str> the worker map holds is what `waiting` carries —
+            // so `WorkerMsg::Waiting`'s insert compares against the same key.
+            if let Some(id) = self
+                .workers
+                .get_key_value(ext.id.as_str())
+                .map(|(k, _)| k.clone())
+            {
+                self.waiting.insert(id);
             }
         }
 
-        self.publish(query.epoch).await;
+        self.publish(query.epoch, &query).await;
     }
 
     /// Does this extension get asked this query at all? The same gates the
@@ -792,8 +829,11 @@ impl Engine {
     // ------------------------------------------------------------- merging
 
     /// An inline provider answered: write its bucket and rebuild.
-    fn put_inline(&mut self, provider: &str, epoch: u64, rows: Vec<Row>) {
-        self.buckets.insert(provider.to_string(), (epoch, rows));
+    fn put_inline(&mut self, provider: &'static str, epoch: u64, rows: Vec<Row>) {
+        self.buckets.insert(
+            Arc::from(provider),
+            (epoch, Arc::new(rows.into_iter().map(Arc::new).collect())),
+        );
     }
 
     /// A worker answered: write its bucket, clear its wait, rebuild.
@@ -812,9 +852,10 @@ impl Engine {
                 }
                 self.buckets.insert(id.clone(), (epoch, rows));
                 if last {
-                    self.waiting.remove(&id);
+                    self.waiting.remove(&*id);
                 }
-                self.publish(epoch).await;
+                let query = self.query.clone();
+                self.publish(epoch, &query).await;
             }
             WorkerMsg::Waiting { id, epoch } => {
                 if epoch == self.epoch {
@@ -830,26 +871,31 @@ impl Engine {
     }
 
     /// Merge every bucket, apply frecency and pins, publish the result — and
-    /// fire the Enter a placeholder was holding.
-    async fn publish(&mut self, epoch: u64) {
-        let query = Query::parse(&self.raw, epoch, Some(&self.known));
-
-        let buckets: Vec<(&str, &Vec<Row>)> = self
+    /// fire the Enter a placeholder was holding. `query` is the already-parsed
+    /// question — publish runs once per provider answer, so re-parsing the
+    /// same text each time would be per-keystroke waste.
+    async fn publish(&mut self, epoch: u64, query: &Query) {
+        let buckets: Vec<(&str, &[Arc<Row>])> = self
             .buckets
             .iter()
-            .map(|(id, (_, rows))| (id.as_str(), rows))
+            .map(|(id, (_, rows))| (&**id, rows.as_slice()))
             .collect();
         let mut rows = rank::merge(&buckets, &query.scope, 60);
 
+        let mut changed = false;
         if self.settings.frecency {
             let now = now_ms();
-            state::frecency_apply(&mut rows, &self.state.frecency, now, &self.raw);
+            changed = state::frecency_apply(&mut rows, &self.state.frecency, now, &self.raw);
         }
-        state::pins_apply(&mut rows, &self.state.pins);
-        rows.sort_by(rank::by_score);
+        // `|` not `||` — pins_apply's flag writes must run even when frecency
+        // already scored; it returns true only when a *score* moved.
+        changed = state::pins_apply(&mut rows, &self.state.pins) || changed;
+        if changed {
+            rows.sort_by_cached_key(|r| rank::sort_key(r));
+        }
 
         // Which providers' visible rows are older than the question.
-        let stale: Vec<String> = self
+        let stale: Vec<Arc<str>> = self
             .buckets
             .iter()
             .filter(|(_, (ep, rows))| *ep != epoch && !rows.is_empty())
@@ -866,7 +912,7 @@ impl Engine {
                 }
             })
             .unwrap_or_else(|| "list".to_string());
-        let scope_label = self.scope_label(&query);
+        let scope_label = self.scope_label(query);
         let help_mode = matches!(self.raw.trim(), "?" | ":" | "h:" | "help:");
         let recent_mode = self.settings.recents && self.raw.trim().is_empty();
         // The armed action's prompt, while one is armed: the empty state
@@ -950,7 +996,7 @@ impl Engine {
 
     // ------------------------------------------------------------ activating
 
-    fn find_row(&self, key: &str) -> Option<Row> {
+    fn find_row(&self, key: &str) -> Option<Arc<Row>> {
         self.rows.iter().find(|r| r.key == key).cloned()
     }
 
@@ -986,7 +1032,7 @@ impl Engine {
 
         // Enter on a stale row ran the query the row was built from rather
         // than the one on screen. Held instead, and run when the answer lands.
-        if let Some((ep, rows)) = self.buckets.get(&row.provider_id)
+        if let Some((ep, rows)) = self.buckets.get(row.provider_id.as_str())
             && *ep != self.epoch
             && !rows.is_empty()
         {
@@ -1245,7 +1291,9 @@ impl Engine {
             },
         })
         .await;
-        self.publish(self.epoch).await;
+        let epoch = self.epoch;
+        let query = self.query.clone();
+        self.publish(epoch, &query).await;
     }
 
     // ------------------------------------------------------------- preview
@@ -1440,7 +1488,7 @@ impl Engine {
             let _ = std::fs::rename(&tmp, &path);
         }
         self.settings = Settings::load(&path);
-        *self.shared.settings.write().await = self.settings.clone();
+        *self.shared.settings.write().await = Arc::new(self.settings.clone());
         // Back to the list, on the poll cadence: the write above re-reads
         // the file here, but the providers reading it next need the passes.
         self.emit(EngineEvent::Type {
@@ -1455,7 +1503,7 @@ impl Engine {
 
     async fn on_reload(&mut self) {
         self.settings = Settings::load(&crate::dirs::settings_file());
-        *self.shared.settings.write().await = self.settings.clone();
+        *self.shared.settings.write().await = Arc::new(self.settings.clone());
         let report =
             crate::extension::load_dir(&crate::dirs::extensions_dir(), &self.settings.extensions);
         for (path, why) in &report.bad {

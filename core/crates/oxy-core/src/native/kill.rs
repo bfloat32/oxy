@@ -27,8 +27,10 @@ use crate::provider::{Ctx, NativeExt, NativeOutcome};
 
 const MAX_ROWS: usize = 20;
 
+/// The process table behind a lock: the query body runs on `spawn_blocking`,
+/// where the `/proc` refresh and the `hyprctl` call belong.
 pub struct Kill {
-    sys: sysinfo::System,
+    sys: std::sync::Arc<std::sync::Mutex<sysinfo::System>>,
 }
 
 impl Default for Kill {
@@ -40,7 +42,7 @@ impl Default for Kill {
 impl Kill {
     pub fn new() -> Kill {
         Kill {
-            sys: sysinfo::System::new(),
+            sys: std::sync::Arc::new(std::sync::Mutex::new(sysinfo::System::new())),
         }
     }
 }
@@ -109,13 +111,11 @@ struct Win {
     count: usize,
 }
 
-fn user_of(uid: Option<&sysinfo::Uid>) -> String {
-    uid.and_then(|u| {
-        sysinfo::Users::new_with_refreshed_list()
-            .get_user_by_id(u)
-            .map(|u| u.name().to_string())
-    })
-    .unwrap_or_else(|| uid.map(|u| format!("uid {}", **u)).unwrap_or_default())
+/// `Users` is parsed once per query and passed in — building it per process
+/// re-reads the user database once per row.
+fn user_of(users: &sysinfo::Users, uid: Option<&sysinfo::Uid>) -> String {
+    uid.and_then(|u| users.get_user_by_id(u).map(|u| u.name().to_string()))
+        .unwrap_or_else(|| uid.map(|u| format!("uid {}", **u)).unwrap_or_default())
 }
 
 impl NativeExt for Kill {
@@ -124,20 +124,23 @@ impl NativeExt for Kill {
         ctx: Ctx,
         _progress: UnboundedSender<Vec<Value>>,
     ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
+        let sys = self.sys.clone();
+        let arg = ctx.arg.clone();
         Box::pin(async move {
-            let query = ctx.arg.trim().to_lowercase();
+            tokio::task::spawn_blocking(move || {
+            let mut sys = sys.lock().unwrap();
+            let query = arg.trim().to_lowercase();
             let bare = query.is_empty();
 
             // Refresh first: the ancestry walk and the uid lookup below read
             // the table this fills. sysinfo's cpu_usage is the delta since
             // the previous refresh, which refreshMs supplies.
             let wins = windows();
-            self.sys
-                .refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-            self.sys.refresh_memory();
+            sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
+            sys.refresh_memory();
             let my_uid = sysinfo::get_current_pid()
                 .ok()
-                .and_then(|pid| self.sys.process(pid))
+                .and_then(|pid| sys.process(pid))
                 .and_then(|p| p.user_id().cloned());
 
             // The daemon's own ancestry: everything whose death takes the
@@ -146,7 +149,7 @@ impl NativeExt for Kill {
             if let Ok(mut pid) = sysinfo::get_current_pid() {
                 for _ in 0..64 {
                     forbidden.insert(pid.as_u32() as usize);
-                    match self.sys.process(pid).and_then(|p| p.parent()) {
+                    match sys.process(pid).and_then(|p| p.parent()) {
                         Some(parent) if parent.as_u32() > 1 => pid = parent,
                         _ => break,
                     }
@@ -169,7 +172,7 @@ impl NativeExt for Kill {
             }
 
             let mut cands: HashMap<usize, Cand> = HashMap::new();
-            for (pid, proc_) in self.sys.processes() {
+            for (pid, proc_) in sys.processes() {
                 let pid = pid.as_u32() as usize;
                 let cmdline: Vec<String> = proc_
                     .cmd()
@@ -341,14 +344,15 @@ impl NativeExt for Kill {
             });
             order.truncate(MAX_ROWS);
 
-            let total = self.sys.total_memory();
-            let used = self.sys.used_memory();
-            let sys_cpu = self
-                .sys
+            let total = sys.total_memory();
+            let used = sys.used_memory();
+            let sys_cpu = sys
                 .cpus()
                 .first()
                 .map(|c| c.cpu_usage())
                 .unwrap_or(0.0);
+            // One parse of the user database serves every row.
+            let users = sysinfo::Users::new_with_refreshed_list();
             let home = crate::dirs::home().to_string_lossy().into_owned();
 
             let mut rows = Vec::new();
@@ -403,7 +407,7 @@ impl NativeExt for Kill {
                     "exec": format!("kill -TERM {leader}"),
                     "score": 90000 - i as i64 * 100,
                     "pid": leader,
-                    "user": user_of(c.uid.as_ref()),
+                    "user": user_of(&users, c.uid.as_ref()),
                     "own": c.uid == me,
                     "cpu": format!("{:.1}", fam.cpu).parse::<f64>().unwrap_or(0.0),
                     "cpuLive": true,
@@ -438,6 +442,9 @@ impl NativeExt for Kill {
                 rows.push(row);
             }
             NativeOutcome::Rows(rows)
+            })
+            .await
+            .unwrap_or(NativeOutcome::Empty)
         })
     }
 }

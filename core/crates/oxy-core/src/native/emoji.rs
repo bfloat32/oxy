@@ -10,8 +10,9 @@
 //! works with no script on PATH at all.
 
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
@@ -19,7 +20,44 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::shellquote::quote;
 
-pub struct Emoji;
+/// The parsed data file, behind a lock so the worker can run this provider
+/// on `spawn_blocking` — reading and ranking ~1900 entries is synchronous
+/// work, and it has no business on a runtime worker thread.
+///
+/// Keyed on the file's mtime: the picker ships this list with the shell, so
+/// it changes when the system updates, not between keystrokes.
+#[derive(Default)]
+pub struct Emoji {
+    cache: Arc<Mutex<Option<Cached>>>,
+}
+
+struct Cached {
+    mtime: Option<std::time::SystemTime>,
+    entries: Arc<Vec<Entry>>,
+}
+
+/// Read and parse the data file — the only caller that pays for it is a
+/// cache miss.
+fn load(path: &Path) -> Option<Arc<Vec<Entry>>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let data = serde_json::from_str::<Vec<Value>>(&text).ok()?;
+    let all: Vec<Entry> = data
+        .iter()
+        .filter_map(|v| {
+            let e = v.get("e")?.as_str()?.to_string();
+            let k = v.get("k")?.as_str()?.to_lowercase().replace('_', " ");
+            Some(Entry {
+                e,
+                w: k.split(' ')
+                    .filter(|w| !w.is_empty())
+                    .map(String::from)
+                    .collect(),
+                k,
+            })
+        })
+        .collect();
+    Some(Arc::new(all))
+}
 
 /// The file both pickers read. `OXY_EMOJI_DATA` exists so a dev checkout —
 /// or a test — can point at a copy without owning `/usr/share/omarchy`.
@@ -299,122 +337,128 @@ impl NativeExt for Emoji {
         ctx: Ctx,
         _progress: UnboundedSender<Vec<Value>>,
     ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
+        let cache = self.cache.clone();
+        let arg = ctx.arg.clone();
         Box::pin(async move {
-            let Ok(text) = std::fs::read_to_string(data_path()) else {
-                // Without the data file the script leg cannot run either —
-                // `when` already says so — so this is empty, not a fallback.
-                return NativeOutcome::Empty;
-            };
-            let Ok(data) = serde_json::from_str::<Vec<Value>>(&text) else {
-                return NativeOutcome::Empty;
-            };
-            let all: Vec<Entry> = data
-                .iter()
-                .filter_map(|v| {
-                    let e = v.get("e")?.as_str()?.to_string();
-                    let k = v.get("k")?.as_str()?.to_lowercase().replace('_', " ");
-                    Some(Entry {
-                        e,
-                        w: k.split(' ')
-                            .filter(|w| !w.is_empty())
-                            .map(String::from)
-                            .collect(),
-                        k,
-                    })
-                })
-                .collect();
-
-            // Trimmed and collapsed: "  thumbs   up " is one query.
-            let q = ctx
-                .arg
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-                .to_lowercase();
-
-            let mut picked: Vec<(&Entry, bool)> = Vec::new(); // (entry, mru)
-            if q.is_empty() {
-                // What you reached for lately, then the standing set — a
-                // character in both is kept once, at the position it earned.
-                for ch in recent_chars() {
-                    if let Some(e) = all.iter().find(|e| e.e == ch) {
-                        picked.push((e, true));
-                    }
-                }
-                for name in DEFAULTS {
-                    if let Some(e) = best(&all, name) {
-                        picked.push((e, false));
-                    }
-                }
-            } else {
-                let tokens: Vec<String> = q
-                    .split(' ')
-                    .filter(|t| !t.is_empty())
-                    .map(String::from)
-                    .collect();
-                // What the words mean first, then what they name. The intent
-                // list is short, so a feeling leads without the ordinary
-                // hits being thrown away.
-                // `[$q, $q|sub(...)] | unique` — jq's unique sorts, so the
-                // intent lookups run in lexicographic order, not query-then-
-                // stripped. One suffix only ever matches the end.
-                let mut keys = vec![q.clone()];
-                for suffix in [" face", " emoji", " emojis", " sign", " symbol", " icon"] {
-                    if let Some(stripped) = q.strip_suffix(suffix) {
-                        keys.push(stripped.to_string());
-                        break;
-                    }
-                }
-                keys.sort();
-                keys.dedup();
-                for key in &keys {
-                    for name in intents(key) {
-                        if let Some(e) = best(&all, name) {
-                            picked.push((e, false));
-                        }
-                    }
-                }
-                let mut ranked: Vec<(&Entry, i64)> = hits(&all, &tokens)
-                    .into_iter()
-                    .filter_map(|e| {
-                        let r = rank(e, &tokens, &q);
-                        (r > 0).then_some((e, r))
-                    })
-                    .collect();
-                ranked.sort_by_key(|a| std::cmp::Reverse(a.1));
-                picked.extend(ranked.into_iter().map(|(e, _)| (e, false)));
-
-                if picked.is_empty() {
-                    // Nothing matched every word: the words that did match
-                    // are added up, which is what turns "crying laughing
-                    // face" from silence into 😂 and 🤣.
-                    let mut loose: Vec<(&Entry, i64)> = all
-                        .iter()
-                        .filter_map(|e| {
-                            let r: i64 = tokens.iter().map(|t| rank1(e, t)).sum();
-                            (r > 0).then_some((e, r))
-                        })
-                        .collect();
-                    loose.sort_by_key(|a| std::cmp::Reverse(a.1));
-                    picked.extend(loose.into_iter().map(|(e, _)| (e, false)));
-                }
-            }
-
-            // Dedupe in order — sorting would throw away the ordering that
-            // is the whole point — and cap at a screen of grid.
-            let mut seen: Vec<&str> = Vec::new();
-            let mut rows = Vec::new();
-            for (e, mru) in picked {
-                if seen.contains(&e.e.as_str()) {
-                    continue;
-                }
-                seen.push(&e.e);
-                rows.push(row(e, mru, 90000 - rows.len() as i64 * 100));
-                if rows.len() >= 60 {
-                    break;
-                }
-            }
-            NativeOutcome::Rows(rows)
+            tokio::task::spawn_blocking(move || query_blocking(cache, &arg))
+                .await
+                .unwrap_or(NativeOutcome::Empty)
         })
     }
+}
+
+/// The whole question, off the runtime threads.
+fn query_blocking(cache: Arc<Mutex<Option<Cached>>>, arg: &str) -> NativeOutcome {
+    let path = data_path();
+    let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+    let all = {
+        let mut c = cache.lock().unwrap();
+        match c.as_ref() {
+            // An mtime we could not read is never trusted as a cache key.
+            Some(c) if c.mtime == mtime && mtime.is_some() => c.entries.clone(),
+            _ => match load(&path) {
+                Some(entries) => {
+                    *c = Some(Cached {
+                        mtime,
+                        entries: entries.clone(),
+                    });
+                    entries
+                }
+                // Without the data file the script leg cannot run either —
+                // `when` already says so — so this is empty, not a fallback.
+                None => return NativeOutcome::Empty,
+            },
+        }
+    };
+
+    // Trimmed and collapsed: "  thumbs   up " is one query.
+    let q = arg
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+
+    let mut picked: Vec<(&Entry, bool)> = Vec::new(); // (entry, mru)
+    if q.is_empty() {
+        // What you reached for lately, then the standing set — a
+        // character in both is kept once, at the position it earned.
+        for ch in recent_chars() {
+            if let Some(e) = all.iter().find(|e| e.e == ch) {
+                picked.push((e, true));
+            }
+        }
+        for name in DEFAULTS {
+            if let Some(e) = best(&all, name) {
+                picked.push((e, false));
+            }
+        }
+    } else {
+        let tokens: Vec<String> = q
+            .split(' ')
+            .filter(|t| !t.is_empty())
+            .map(String::from)
+            .collect();
+        // What the words mean first, then what they name. The intent
+        // list is short, so a feeling leads without the ordinary
+        // hits being thrown away.
+        // `[$q, $q|sub(...)] | unique` — jq's unique sorts, so the
+        // intent lookups run in lexicographic order, not query-then-
+        // stripped. One suffix only ever matches the end.
+        let mut keys = vec![q.clone()];
+        for suffix in [" face", " emoji", " emojis", " sign", " symbol", " icon"] {
+            if let Some(stripped) = q.strip_suffix(suffix) {
+                keys.push(stripped.to_string());
+                break;
+            }
+        }
+        keys.sort();
+        keys.dedup();
+        for key in &keys {
+            for name in intents(key) {
+                if let Some(e) = best(&all, name) {
+                    picked.push((e, false));
+                }
+            }
+        }
+        let mut ranked: Vec<(&Entry, i64)> = hits(&all, &tokens)
+            .into_iter()
+            .filter_map(|e| {
+                let r = rank(e, &tokens, &q);
+                (r > 0).then_some((e, r))
+            })
+            .collect();
+        ranked.sort_by_key(|a| std::cmp::Reverse(a.1));
+        picked.extend(ranked.into_iter().map(|(e, _)| (e, false)));
+
+        if picked.is_empty() {
+            // Nothing matched every word: the words that did match
+            // are added up, which is what turns "crying laughing
+            // face" from silence into 😂 and 🤣.
+            let mut loose: Vec<(&Entry, i64)> = all
+                .iter()
+                .filter_map(|e| {
+                    let r: i64 = tokens.iter().map(|t| rank1(e, t)).sum();
+                    (r > 0).then_some((e, r))
+                })
+                .collect();
+            loose.sort_by_key(|a| std::cmp::Reverse(a.1));
+            picked.extend(loose.into_iter().map(|(e, _)| (e, false)));
+        }
+    }
+
+    // Dedupe in order — sorting would throw away the ordering that
+    // is the whole point — and cap at a screen of grid.
+    let mut seen: Vec<&str> = Vec::new();
+    let mut rows = Vec::new();
+    for (e, mru) in picked {
+        if seen.contains(&e.e.as_str()) {
+            continue;
+        }
+        seen.push(&e.e);
+        rows.push(row(e, mru, 90000 - rows.len() as i64 * 100));
+        if rows.len() >= 60 {
+            break;
+        }
+    }
+    NativeOutcome::Rows(rows)
 }

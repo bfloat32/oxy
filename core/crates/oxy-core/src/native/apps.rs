@@ -24,7 +24,14 @@ struct App {
     icon: String,
 }
 
+/// The scan result behind a lock: the walk over every `applications` dir is
+/// filesystem work, so the query body runs on `spawn_blocking`.
 pub struct Apps {
+    state: std::sync::Arc<std::sync::Mutex<Scan>>,
+}
+
+#[derive(Default)]
+struct Scan {
     apps: Vec<App>,
     scanned: bool,
 }
@@ -38,19 +45,8 @@ impl Default for Apps {
 impl Apps {
     pub fn new() -> Apps {
         Apps {
-            apps: Vec::new(),
-            scanned: false,
+            state: std::sync::Arc::new(std::sync::Mutex::new(Scan::default())),
         }
-    }
-
-    /// The scan happens on first ask rather than at spawn: a daemon that is
-    /// only ever asked `file:` questions never pays for it.
-    fn ensure_scanned(&mut self) {
-        if self.scanned {
-            return;
-        }
-        self.scanned = true;
-        self.apps = scan_applications();
     }
 }
 
@@ -60,66 +56,80 @@ impl NativeExt for Apps {
         ctx: Ctx,
         _progress: UnboundedSender<Vec<Value>>,
     ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
+        let state = self.state.clone();
+        let arg = ctx.arg.clone();
+        let unscoped = ctx.query.scope.is_empty();
+        let fresh = ctx.fresh_open;
         Box::pin(async move {
-            self.ensure_scanned();
-            let query = ctx.arg.trim();
-            if query.is_empty() && ctx.query.scope.is_empty() {
-                return NativeOutcome::Empty;
-            }
-
-            let mut scored: Vec<(i64, &App)> = Vec::new();
-            for app in &self.apps {
-                let score = fuzzy(&app.entry, query);
-                if score < 0 {
-                    continue;
+            tokio::task::spawn_blocking(move || {
+                let mut scan = state.lock().unwrap();
+                // First ask, or the first ask of a fresh open: whatever was
+                // installed while the launcher was away is worth one rescan.
+                if !scan.scanned || fresh {
+                    scan.apps = scan_applications();
+                    scan.scanned = true;
                 }
-                scored.push((score, app));
-            }
-            // Empty query is alphabetical; a real query is by score then name.
-            scored.sort_by(|a, b| {
-                if !query.is_empty() && a.0 != b.0 {
-                    return b.0.cmp(&a.0);
+                let query = arg.trim();
+                if query.is_empty() && unscoped {
+                    return NativeOutcome::Empty;
                 }
-                a.1.entry
-                    .name
-                    .to_lowercase()
-                    .cmp(&b.1.entry.name.to_lowercase())
-            });
-            scored.truncate(20);
 
-            let rows: Vec<Row> = scored
-                .into_iter()
-                .map(|(fuzzy_score, app)| {
-                    let name = app.entry.name.clone();
-                    let id = app.entry.id.clone();
-                    let launch = format!("uwsm-app -- gtk-launch {}", shellquote::quote(&id));
-                    let mut row = Row::new(format!("app:{id}"), "apps");
-                    row.group = "Applications".into();
-                    row.title = name.clone();
-                    row.subtitle = app.entry.generic_name.clone();
-                    row.icon_source = app.icon.clone();
-                    row.extra.insert("copyText".into(), json!(name));
-                    row.tier = rank::tier_for_fuzzy(fuzzy_score);
-                    row.local = rank::local_for_fuzzy(fuzzy_score);
-                    row.score = rank::score(row.tier, row.local, 0);
-                    row.exec = launch.clone();
-                    row.actions = Some(vec![
-                        Action {
-                            title: "Open".into(),
-                            shortcut: "↵".into(),
-                            exec: launch,
-                            ..Action::default()
-                        },
-                        Action {
-                            title: "Copy Name".into(),
-                            exec: format!("printf %s {} | wl-copy", shellquote::quote(&name)),
-                            ..Action::default()
-                        },
-                    ]);
-                    row
-                })
-                .collect();
-            NativeOutcome::Built(rows)
+                let mut scored: Vec<(i64, &App)> = Vec::new();
+                for app in &scan.apps {
+                    let score = fuzzy(&app.entry, query);
+                    if score < 0 {
+                        continue;
+                    }
+                    scored.push((score, app));
+                }
+                // Empty query is alphabetical; a real query is by score then name.
+                scored.sort_by(|a, b| {
+                    if !query.is_empty() && a.0 != b.0 {
+                        return b.0.cmp(&a.0);
+                    }
+                    a.1.entry
+                        .name
+                        .to_lowercase()
+                        .cmp(&b.1.entry.name.to_lowercase())
+                });
+                scored.truncate(20);
+
+                let rows: Vec<Row> = scored
+                    .into_iter()
+                    .map(|(fuzzy_score, app)| {
+                        let name = app.entry.name.clone();
+                        let id = app.entry.id.clone();
+                        let launch = format!("uwsm-app -- gtk-launch {}", shellquote::quote(&id));
+                        let mut row = Row::new(format!("app:{id}"), "apps");
+                        row.group = "Applications".into();
+                        row.title = name.clone();
+                        row.subtitle = app.entry.generic_name.clone();
+                        row.icon_source = app.icon.clone();
+                        row.extra.insert("copyText".into(), json!(name));
+                        row.tier = rank::tier_for_fuzzy(fuzzy_score);
+                        row.local = rank::local_for_fuzzy(fuzzy_score);
+                        row.score = rank::score(row.tier, row.local, 0);
+                        row.exec = launch.clone();
+                        row.actions = Some(vec![
+                            Action {
+                                title: "Open".into(),
+                                shortcut: "↵".into(),
+                                exec: launch,
+                                ..Action::default()
+                            },
+                            Action {
+                                title: "Copy Name".into(),
+                                exec: format!("printf %s {} | wl-copy", shellquote::quote(&name)),
+                                ..Action::default()
+                            },
+                        ]);
+                        row
+                    })
+                    .collect();
+                NativeOutcome::Built(rows)
+            })
+            .await
+            .unwrap_or(NativeOutcome::Empty)
         })
     }
 }

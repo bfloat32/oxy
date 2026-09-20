@@ -167,6 +167,11 @@ pub struct Row {
     pub extra: Map<String, Value>,
 }
 
+/// One provider's answer set, shared end to end: the worker's Rows message,
+/// the cache entry, the engine's bucket, and the merge input can all be the
+/// same allocation — handing one along is a refcount bump, never a copy.
+pub type SharedRows = std::sync::Arc<Vec<std::sync::Arc<Row>>>;
+
 impl Row {
     /// The row a provider starts from: identity and nothing else.
     pub fn new(key: impl Into<String>, provider_id: impl Into<String>) -> Row {
@@ -233,157 +238,147 @@ const RESERVED: &[&str] = &[
     "glyph",
 ];
 
+/// Pull `key` out of the object as an owned `String` — moving the value out
+/// of the map instead of cloning it. Non-strings read as empty, matching the
+/// old `as_str().unwrap_or("")` behaviour.
+fn take_str(obj: &mut Map<String, Value>, key: &str) -> String {
+    match obj.remove(key) {
+        Some(Value::String(s)) => s,
+        _ => String::new(),
+    }
+}
+
 /// Build a launcher row from a provider's raw JSON row — the `toRow` port.
 ///
 /// A script's own `score` orders its rows against each other, clamped into
 /// `local`. It never crosses tiers.
+///
+/// Borrowed entry point — used where the raw rows must stay intact (the
+/// cache serves the same `Value`s again on the next hit). It clones once and
+/// delegates to the consuming version, so there is exactly one conversion to
+/// keep honest.
 pub fn to_row(ext: &crate::extension::Extension, raw: &Value, index: usize) -> Option<Row> {
-    let obj = raw.as_object()?;
+    match raw {
+        Value::Object(obj) => to_row_inner(ext, obj.clone(), index),
+        _ => None,
+    }
+}
 
-    let id = obj
-        .get("id")
-        .map(|v| match v {
-            Value::String(s) => s.clone(),
-            other => other.to_string(),
-        })
-        .unwrap_or_else(|| {
-            obj.get("title")
-                .and_then(|t| t.as_str().map(String::from))
-                .unwrap_or_else(|| index.to_string())
-        });
+/// The consuming entry point: the provider's map is taken apart field by
+/// field — every string moves into the row un-cloned, and what is left over
+/// *is* the passthrough map. Zero field copies on the fresh path.
+pub fn to_row_owned(ext: &crate::extension::Extension, raw: Value, index: usize) -> Option<Row> {
+    match raw {
+        Value::Object(obj) => to_row_inner(ext, obj, index),
+        _ => None,
+    }
+}
+
+fn to_row_inner(
+    ext: &crate::extension::Extension,
+    mut obj: Map<String, Value>,
+    index: usize,
+) -> Option<Row> {
+    let id_field = obj.remove("id");
+    let title = take_str(&mut obj, "title");
+    if title.is_empty() {
+        return None;
+    }
+    let id = match id_field {
+        Some(Value::String(s)) => s,
+        Some(other) => other.to_string(),
+        // No id field: the title names the row (non-empty — checked above).
+        None => title.clone(),
+    };
 
     let local = obj
-        .get("score")
+        .remove("score")
         .and_then(|s| s.as_f64())
         .map(|s| s.clamp(0.0, 99999.0) as i64)
         .unwrap_or_else(|| (90000 - index as i64 * 1000).max(0));
 
-    let get_str = |name: &str| obj.get(name).and_then(|v| v.as_str()).unwrap_or("");
-
-    let title = get_str("title").to_string();
-    if title.is_empty() {
-        return None;
-    }
+    let num = |obj: &mut Map<String, Value>, key: &str| obj.remove(key).and_then(|v| v.as_f64());
+    let int = |obj: &mut Map<String, Value>, key: &str| obj.remove(key).and_then(|v| v.as_i64());
+    let yes = |obj: &mut Map<String, Value>, key: &str| {
+        obj.remove(key).and_then(|v| v.as_bool()).unwrap_or(false)
+    };
 
     let mut row = Row::new(format!("ext:{}:{id}", ext.id), &ext.id);
-    row.group = if get_str("group").is_empty() {
-        ext.title.clone()
-    } else {
-        get_str("group").to_string()
+    row.group = {
+        let g = take_str(&mut obj, "group");
+        if g.is_empty() { ext.title.clone() } else { g }
     };
     row.title = title;
-    row.subtitle = obj
-        .get("subtitle")
-        .and_then(|v| v.as_str())
-        .map(String::from)
-        .unwrap_or_else(|| ext.subtitle.clone());
-    row.detail = get_str("detail").into();
-    row.accessory = get_str("accessory").into();
-    row.icon_source = get_str("icon").into();
-    row.icon_glyph = if get_str("glyph").is_empty() {
-        ext.glyph.clone()
-    } else {
-        get_str("glyph").into()
+    row.subtitle = match obj.remove("subtitle") {
+        Some(Value::String(s)) => s,
+        _ => ext.subtitle.clone(),
     };
-    row.art = get_str("art").into();
+    row.detail = take_str(&mut obj, "detail");
+    row.accessory = take_str(&mut obj, "accessory");
+    row.icon_source = take_str(&mut obj, "icon");
+    row.icon_glyph = {
+        let g = take_str(&mut obj, "glyph");
+        if g.is_empty() { ext.glyph.clone() } else { g }
+    };
+    row.art = take_str(&mut obj, "art");
     // Only the first row's view is read, so a script puts the row it wants to
     // set the layout first and the rest follow it.
-    row.view = if get_str("view").is_empty() {
-        ext.view.clone()
-    } else {
-        get_str("view").into()
+    row.view = {
+        let v = take_str(&mut obj, "view");
+        if v.is_empty() { ext.view.clone() } else { v }
     };
-    row.preview = get_str("preview").into();
-    row.mono = obj.get("mono").and_then(|v| v.as_bool()).unwrap_or(false);
-    row.progress = obj.get("progress").and_then(|v| v.as_f64());
-    row.year = obj.get("year").and_then(|v| v.as_i64());
-    row.month = obj.get("month").and_then(|v| v.as_i64());
-    row.today = obj.get("today").and_then(|v| v.as_i64());
-    row.week_start = obj.get("weekStart").and_then(|v| v.as_i64());
-    row.marks = obj.get("marks").and_then(|v| {
-        v.as_array()
-            .map(|a| a.iter().filter_map(|n| n.as_i64()).collect())
+    row.preview = take_str(&mut obj, "preview");
+    row.mono = yes(&mut obj, "mono");
+    row.progress = num(&mut obj, "progress");
+    row.year = int(&mut obj, "year");
+    row.month = int(&mut obj, "month");
+    row.today = int(&mut obj, "today");
+    row.week_start = int(&mut obj, "weekStart");
+    row.marks = obj.remove("marks").and_then(|v| match v {
+        Value::Array(a) => Some(a.iter().filter_map(|n| n.as_i64()).collect()),
+        _ => None,
     });
-    row.status = get_str("status").into();
-    row.player = get_str("player").into();
-    row.length_seconds = obj.get("lengthSeconds").and_then(|v| v.as_f64());
-    row.seek = get_str("seek").into();
-    row.controls = obj.get("controls").cloned();
-    row.shuffle = obj
-        .get("shuffle")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
-    row.loop_ = if get_str("loop").is_empty() {
-        "None".into()
-    } else {
-        get_str("loop").into()
+    row.status = take_str(&mut obj, "status");
+    row.player = take_str(&mut obj, "player");
+    row.length_seconds = num(&mut obj, "lengthSeconds");
+    row.seek = take_str(&mut obj, "seek");
+    row.controls = obj.remove("controls").filter(|v| !v.is_null());
+    row.shuffle = yes(&mut obj, "shuffle");
+    row.loop_ = {
+        let l = take_str(&mut obj, "loop");
+        if l.is_empty() { "None".into() } else { l }
     };
-    row.can_next = obj.get("canNext").and_then(|v| v.as_bool()).unwrap_or(true);
-    row.can_prev = obj.get("canPrev").and_then(|v| v.as_bool()).unwrap_or(true);
+    row.can_next = obj
+        .remove("canNext")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    row.can_prev = obj
+        .remove("canPrev")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+    // Owned, not cloned: the whole actions array moves without a deep copy.
     row.actions = obj
-        .get("actions")
-        .and_then(|v| serde_json::from_value::<Vec<Action>>(v.clone()).ok());
-    row.value = obj.get("value").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    row.min = obj.get("min").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    row.max = obj.get("max").and_then(|v| v.as_f64()).unwrap_or(100.0);
-    row.step = obj.get("step").and_then(|v| v.as_f64()).unwrap_or(1.0);
-    row.set_exec = get_str("setExec").into();
+        .remove("actions")
+        .and_then(|v| serde_json::from_value::<Vec<Action>>(v).ok());
+    row.value = num(&mut obj, "value").unwrap_or(0.0);
+    row.min = num(&mut obj, "min").unwrap_or(0.0);
+    row.max = num(&mut obj, "max").unwrap_or(100.0);
+    row.step = num(&mut obj, "step").unwrap_or(1.0);
+    row.set_exec = take_str(&mut obj, "setExec");
     row.tier = ext.tier;
     row.local = local;
-    row.exec = get_str("exec").into();
-    row.fill = get_str("fill").into();
-    row.preview_exec = get_str("previewExec").into();
-    row.revert_exec = get_str("revertExec").into();
+    row.exec = take_str(&mut obj, "exec");
+    row.fill = take_str(&mut obj, "fill");
+    row.preview_exec = take_str(&mut obj, "previewExec");
+    row.revert_exec = take_str(&mut obj, "revertExec");
 
-    // Anything the launcher has not already named is copied across untouched —
-    // an extension carries its own fields through for its own use.
-    for (field, value) in obj {
-        if RESERVED.contains(&field.as_str()) {
-            continue;
-        }
-        // The typed fields were all read above; skip only those names, keep
-        // everything else verbatim.
-        if matches!(
-            field.as_str(),
-            "id" | "group"
-                | "title"
-                | "subtitle"
-                | "detail"
-                | "accessory"
-                | "art"
-                | "view"
-                | "preview"
-                | "mono"
-                | "progress"
-                | "year"
-                | "month"
-                | "today"
-                | "weekStart"
-                | "marks"
-                | "status"
-                | "player"
-                | "lengthSeconds"
-                | "seek"
-                | "controls"
-                | "shuffle"
-                | "loop"
-                | "canNext"
-                | "canPrev"
-                | "actions"
-                | "value"
-                | "min"
-                | "max"
-                | "step"
-                | "setExec"
-                | "exec"
-                | "fill"
-                | "previewExec"
-                | "revertExec"
-        ) {
-            continue;
-        }
-        row.extra.insert(field.clone(), value.clone());
+    // Anything the launcher has not already named is carried across untouched.
+    // Every typed field was removed above; the launcher-owned leftovers go
+    // too, and what remains *is* the extra map — moved, not copied.
+    for key in RESERVED {
+        obj.remove(*key);
     }
+    row.extra = obj;
 
     Some(row)
 }

@@ -8,6 +8,7 @@
 
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedSender;
@@ -15,7 +16,38 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 use crate::shellquote::quote;
 
-pub struct Recent;
+/// The parsed bookmark list, keyed on the xbel's mtime — GTK apps rewrite
+/// the file when a document opens, so a match is safe to trust. Runs on
+/// `spawn_blocking`: parsing and per-row `stat`s are synchronous work.
+#[derive(Default)]
+pub struct Recent {
+    cache: Arc<Mutex<Option<RecentCache>>>,
+}
+
+/// `(modified, path)` pairs parsed from the xbel, stamped with its mtime.
+struct RecentCache {
+    stamp: Option<std::time::SystemTime>,
+    entries: Arc<Vec<(String, String)>>,
+}
+
+/// Every `<bookmark>` tag's (modified, decoded path), newest first — ISO
+/// strings sort chronologically as text. At most a page past the row cap.
+fn load_entries(path: &std::path::Path) -> Option<Vec<(String, String)>> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find("<bookmark") {
+        let tag = &rest[start..];
+        let Some(end) = tag.find('>') else { break };
+        if let Some(b) = bookmark(&tag[..=end]) {
+            entries.push(b);
+        }
+        rest = &tag[end + 1..];
+    }
+    entries.sort_by(|a, b| b.0.cmp(&a.0));
+    entries.truncate(60);
+    Some(entries)
+}
 
 /// XBEL hrefs are XML-escaped and then percent-encoded, in that order.
 /// Undoing them the other way round turns a literal "%26" in a filename into
@@ -184,105 +216,115 @@ impl NativeExt for Recent {
         ctx: Ctx,
         _progress: UnboundedSender<Vec<Value>>,
     ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
+        let cache = self.cache.clone();
+        let arg = ctx.arg.clone();
         Box::pin(async move {
-            let xbel = crate::dirs::data_home().join("recently-used.xbel");
-            let Ok(text) = std::fs::read_to_string(&xbel) else {
-                return NativeOutcome::Empty;
-            };
-            let needle = ctx.arg.trim().to_lowercase();
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0);
-
-            // Every <bookmark> tag, href+modified, newest first — ISO strings
-            // sort chronologically as text.
-            let mut entries: Vec<(String, String)> = Vec::new();
-            let mut rest = text.as_str();
-            while let Some(start) = rest.find("<bookmark") {
-                let tag = &rest[start..];
-                let Some(end) = tag.find('>') else { break };
-                if let Some(b) = bookmark(&tag[..=end]) {
-                    entries.push(b);
-                }
-                rest = &tag[end + 1..];
-            }
-            entries.sort_by(|a, b| b.0.cmp(&a.0));
-            entries.truncate(60); // parse at most a page past the cap
-
-            let home = crate::dirs::home().to_string_lossy().into_owned();
-            let mut rows = Vec::new();
-            for (modified, path) in entries {
-                if rows.len() >= 25 {
-                    break;
-                }
-                // Filtered before anything else reads the path.
-                if !needle.is_empty() && !path.to_lowercase().contains(&needle) {
-                    continue;
-                }
-                let meta = std::fs::metadata(&path).ok();
-                let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
-                if meta.is_none() {
-                    continue;
-                }
-                let delta = now - parse_stamp(&modified).unwrap_or(now);
-
-                let base = path.rsplit('/').next().unwrap_or(&path).to_string();
-                let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("/");
-                let display = if let Some(rest) = dir.strip_prefix(&home) {
-                    format!("~{rest}")
-                } else {
-                    dir.to_string()
-                };
-
-                let (ext, kind, size) = if is_dir {
-                    (String::new(), "folder", String::new())
-                } else {
-                    let ext = if base.len() > 1 && base[1..].contains('.') {
-                        let e = base.rsplit('.').next().unwrap_or("");
-                        if e.len() <= 5 {
-                            e.to_string()
-                        } else {
-                            String::new()
-                        }
-                    } else {
-                        String::new()
-                    };
-                    let kind = kind_of(&ext.to_lowercase());
-                    let size = human_size(meta.as_ref().map(|m| m.len()).unwrap_or(0));
-                    (ext.to_uppercase(), kind, size)
-                };
-                let art = if kind == "image" {
-                    format!("file://{path}")
-                } else {
-                    String::new()
-                };
-                let qpath = quote(&path);
-                let qdir = quote(dir);
-                rows.push(json!({
-                    "id": path,
-                    "title": base,
-                    "dir": display,
-                    "ext": ext,
-                    "kind": kind,
-                    "size": size,
-                    "age": short_age(delta),
-                    "art": art,
-                    "subtitle": display,
-                    "accessory": ago(delta),
-                    "exec": format!("xdg-open {qpath}"),
-                    "score": 90000 - rows.len() as i64 * 100,
-                    "actions": [
-                        { "title": "Open", "shortcut": "↵", "exec": format!("xdg-open {qpath}") },
-                        { "title": "Copy Path", "exec": format!("printf %s {qpath} | wl-copy") },
-                        { "title": "Open Folder", "exec": format!("xdg-open {qdir}") },
-                        { "title": "Reveal in Files", "exec": format!("nautilus --select {qpath}") },
-                    ]
-                }));
-            }
-            NativeOutcome::Rows(rows)
+            tokio::task::spawn_blocking(move || query_blocking(cache, &arg))
+                .await
+                .unwrap_or(NativeOutcome::Empty)
         })
     }
+}
+
+fn query_blocking(cache: Arc<Mutex<Option<RecentCache>>>, arg: &str) -> NativeOutcome {
+    let xbel = crate::dirs::data_home().join("recently-used.xbel");
+    let mtime = std::fs::metadata(&xbel).and_then(|m| m.modified()).ok();
+    let entries = {
+        let mut c = cache.lock().unwrap();
+        match c.as_ref() {
+            Some(c) if c.stamp == mtime && mtime.is_some() => c.entries.clone(),
+            _ => match load_entries(&xbel) {
+                Some(entries) => {
+                    let entries = Arc::new(entries);
+                    *c = Some(RecentCache {
+                        stamp: mtime,
+                        entries: entries.clone(),
+                    });
+                    entries
+                }
+                None => return NativeOutcome::Empty,
+            },
+        }
+    };
+    let needle = arg.trim().to_lowercase();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+
+    let home = crate::dirs::home().to_string_lossy().into_owned();
+    let mut rows = Vec::new();
+    for (modified, path) in entries.iter() {
+        if rows.len() >= 25 {
+            break;
+        }
+        // Filtered before anything else reads the path.
+        if !needle.is_empty() && !path.to_lowercase().contains(&needle) {
+            continue;
+        }
+        // The per-row stat stays live: the cache covers the list,
+        // not whether each file is still there.
+        let meta = std::fs::metadata(path).ok();
+        let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+        if meta.is_none() {
+            continue;
+        }
+        let delta = now - parse_stamp(modified).unwrap_or(now);
+
+        let base = path.rsplit('/').next().unwrap_or(path).to_string();
+        let dir = path.rsplit_once('/').map(|(d, _)| d).unwrap_or("/");
+        let display = if let Some(rest) = dir.strip_prefix(&home) {
+            format!("~{rest}")
+        } else {
+            dir.to_string()
+        };
+
+        let (ext, kind, size) = if is_dir {
+            (String::new(), "folder", String::new())
+        } else {
+            let ext = if base.len() > 1 && base[1..].contains('.') {
+                let e = base.rsplit('.').next().unwrap_or("");
+                if e.len() <= 5 {
+                    e.to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            let kind = kind_of(&ext.to_lowercase());
+            let size = human_size(meta.as_ref().map(|m| m.len()).unwrap_or(0));
+            (ext.to_uppercase(), kind, size)
+        };
+        let art = if kind == "image" {
+            format!("file://{path}")
+        } else {
+            String::new()
+        };
+        let qpath = quote(path);
+        let qdir = quote(dir);
+        rows.push(json!({
+            "id": path,
+            "title": base,
+            "dir": display,
+            "ext": ext,
+            "kind": kind,
+            "size": size,
+            "age": short_age(delta),
+            "art": art,
+            "subtitle": display,
+            "accessory": ago(delta),
+            "exec": format!("xdg-open {qpath}"),
+            "score": 90000 - rows.len() as i64 * 100,
+            "actions": [
+                { "title": "Open", "shortcut": "↵", "exec": format!("xdg-open {qpath}") },
+                { "title": "Copy Path", "exec": format!("printf %s {qpath} | wl-copy") },
+                { "title": "Open Folder", "exec": format!("xdg-open {qdir}") },
+                { "title": "Reveal in Files", "exec": format!("nautilus --select {qpath}") },
+            ]
+        }));
+    }
+    NativeOutcome::Rows(rows)
 }
 
 #[cfg(test)]

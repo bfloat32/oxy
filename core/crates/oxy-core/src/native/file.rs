@@ -34,6 +34,11 @@ const EXCLUDE: &[&str] = &[
 /// so the slice is wide and the ranking happens here.
 const MAX_WALK: usize = 400;
 const MAX_ROWS: usize = 20;
+/// Matches cap the result list, but a needle that hits nothing would still
+/// read every dirent under ~. Bounding *visited* entries keeps a keystroke's
+/// worst case proportional to a large-but-finite tree scan, not the whole
+/// home directory.
+const MAX_VISITED: usize = 100_000;
 
 /// What kind of thing this is, from the extension alone. Reading magic bytes
 /// would be more honest and would cost a syscall per row; the extension is
@@ -215,7 +220,12 @@ fn walk(root: &Path, query_lower: &str, format: &str, home: &Path) -> Vec<Hit> {
         .map(|d| d.as_secs())
         .unwrap_or(0);
 
+    let mut visited = 0usize;
     for entry in builder.build().flatten() {
+        visited += 1;
+        if visited > MAX_VISITED {
+            break;
+        }
         let path = entry.path();
         if !entry.file_type().is_some_and(|t| t.is_file()) {
             continue;

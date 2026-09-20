@@ -5,6 +5,8 @@
 //! inside a tier and is where a provider's own bias lives, so a bias can
 //! reorder equals but can never lift a weak match above a strong one.
 
+use std::sync::Arc;
+
 use crate::row::Row;
 
 pub const TIER_CALC: u32 = 9; // a calculator answer is what you asked for
@@ -69,13 +71,21 @@ pub fn by_score(a: &Row, b: &Row) -> std::cmp::Ordering {
         .then_with(|| a.title.to_lowercase().cmp(&b.title.to_lowercase()))
 }
 
+/// The total order as a key — `sort_by_cached_key` computes it once per row,
+/// so the lowercase happens n times instead of n·log n comparisons.
+pub fn sort_key(row: &Row) -> (std::cmp::Reverse<i64>, String) {
+    (std::cmp::Reverse(row.score), row.title.to_lowercase())
+}
+
 /// Merge every provider's bucket into one ranked list.
 ///
 /// The web row is a fallback, so it is dropped whenever anything real
 /// matched. `mode` forces one provider, and a forced web row survives.
-pub fn merge(buckets: &[(&str, &Vec<Row>)], mode: &str, limit: usize) -> Vec<Row> {
-    let mut rows: Vec<Row> = Vec::new();
+pub fn merge(buckets: &[(&str, &[Arc<Row>])], mode: &str, limit: usize) -> Vec<Arc<Row>> {
+    let mut rows: Vec<Arc<Row>> = Vec::new();
     for (_, bucket) in buckets {
+        // Arc bumps, not row copies: the bucket keeps its rows and the
+        // merged list borrows them.
         rows.extend(bucket.iter().cloned());
     }
 
@@ -84,7 +94,7 @@ pub fn merge(buckets: &[(&str, &Vec<Row>)], mode: &str, limit: usize) -> Vec<Row
         rows.retain(|r| r.provider_id != "web");
     }
 
-    rows.sort_by(by_score);
+    rows.sort_by_cached_key(|r| sort_key(r));
     if limit > 0 {
         rows.truncate(limit);
     }
@@ -92,7 +102,7 @@ pub fn merge(buckets: &[(&str, &Vec<Row>)], mode: &str, limit: usize) -> Vec<Row
 }
 
 /// Selection follows a row's identity, never its position.
-pub fn index_of_key(rows: &[Row], key: &str) -> Option<usize> {
+pub fn index_of_key(rows: &[Arc<Row>], key: &str) -> Option<usize> {
     rows.iter().position(|r| r.key == key)
 }
 
@@ -113,7 +123,11 @@ mod tests {
         let mut real = Row::new("r", "file");
         real.title = "report".into();
         real.score = score(TIER_FILE, 10, 0);
-        let rows = merge(&[("web", &vec![web]), ("file", &vec![real])], "", 0);
+        let rows = merge(
+            &[("web", &[Arc::new(web)]), ("file", &[Arc::new(real)])],
+            "",
+            0,
+        );
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].provider_id, "file");
     }

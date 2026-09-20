@@ -5,11 +5,13 @@ members = ["crates/oxy-core", "crates/oxyd", "crates/oxy"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
+# 1.88 stabilized let-chains on edition 2024, which the engine and natives use.
+rust-version = "1.88"
 license = "MIT"
 description = "The Rust core of Oxy: query routing, extension runtime, ranking and state."
 
 [workspace.dependencies]
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync", "io-util", "io-std", "fs", "signal"] }
 interprocess = { version = "2", features = ["tokio"] }
@@ -18,7 +20,11 @@ sysinfo = "0.33"
 ignore = "0.4"
 
 [profile.release]
-lto = "thin"
+opt-level = 3
+lto = "fat"
 codegen-units = 1
 panic = "abort"
-strip = true
+# Line tables keep perf/flamegraph output attributable; full debuginfo is
+# stripped from shipped binaries.
+debug = "line-tables-only"
+strip = "debuginfo"

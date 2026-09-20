@@ -32,6 +32,10 @@ pub struct Ctx {
     pub settings: Arc<Settings>,
     /// The loaded registry, for providers that list it (help).
     pub registry: Arc<Vec<Extension>>,
+    /// True on the first ask since the launcher opened — providers whose
+    /// data can change between sessions rescan here and stay cached until
+    /// the next open.
+    pub fresh_open: bool,
 }
 
 /// What a native provider decided.

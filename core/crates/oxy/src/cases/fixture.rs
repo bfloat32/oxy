@@ -296,19 +296,64 @@ esac
 // verbatim `run`, and a `when`-hidden node.
 fn omarchy_fixture(sandbox: &Path) -> std::io::Result<()> {
     let fakebin = sandbox.join("fakebin");
+    // The stub also answers `theme list`/`theme current`: `theme:` gates on
+    // the same `command -v omarchy`, so the stub's existence already opts its
+    // cases in — it owes them a real answer. Two themes are seeded under the
+    // sandboxed themes dir: one dark, one light, so both mode filters match.
+    let omarchy = r#"#!/usr/bin/env bash
+if [ "$1" = "theme" ]; then
+  case "$2" in
+    list) printf 'Catppuccin Mocha\nFlexoki Light\n' ;;
+    current) echo "Catppuccin Mocha" ;;
+  esac
+fi
+exit 0
+"#;
     for suffix in ["", ".cmd"] {
         let p = fakebin.join(format!("omarchy{suffix}"));
-        std::fs::write(&p, "#!/usr/bin/env bash\nexit 0\n")?;
+        std::fs::write(&p, omarchy)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
         }
     }
+    for (slug, colors) in [
+        ("catppuccin-mocha", THEME_DARK),
+        ("flexoki-light", THEME_LIGHT),
+    ] {
+        let dir = sandbox.join(format!(".config/omarchy/themes/{slug}"));
+        std::fs::create_dir_all(&dir)?;
+        std::fs::write(dir.join("colors.toml"), colors)?;
+    }
     let dir = sandbox.join(".config/omarchy/extensions");
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("omarchy-menu.jsonc"), OMARCHY_MENU)
 }
+
+// The flat `key = "value"` shape `theme_mode`/`parse_flat` read: a mode line
+// plus the six swatch colors and a background/foreground pair.
+const THEME_DARK: &str = r##"mode = "dark"
+background = "#1e1e2e"
+foreground = "#cdd6f4"
+red = "#f38ba8"
+yellow = "#f9e2af"
+green = "#a6e3a1"
+cyan = "#89dceb"
+blue = "#89b4fa"
+magenta = "#cba6f7"
+"##;
+
+const THEME_LIGHT: &str = r##"mode = "light"
+background = "#fffcf0"
+foreground = "#100f0f"
+red = "#af3029"
+yellow = "#ad8301"
+green = "#66800b"
+cyan = "#24837b"
+blue = "#205ea6"
+magenta = "#a02f6f"
+"##;
 
 const OMARCHY_MENU: &str = r#"{
   // The comment and the trailing comma are the point: the loader strips both.

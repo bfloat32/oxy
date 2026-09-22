@@ -1,0 +1,202 @@
+[
+  {
+    "why": "containers are drawn as a panel of machines, not a list — the docker view reads the tile fields, and the launcher still needs title and subtitle for recents and frecency",
+    "query": "",
+    "minRows": 4,
+    "row": 0,
+    "view": "docker",
+    "fields": [
+      "cid",
+      "full",
+      "image",
+      "status",
+      "band",
+      "since",
+      "ports",
+      "cpuFull",
+      "memCap",
+      "hostCores",
+      "hostMem"
+    ],
+    "matches": {
+      "id": "^docker:aaaa1111bbbb$",
+      "title": "^web$",
+      "subtitle": "^running$",
+      "detail": "^nginx:1.27$",
+      "health": "^healthy$",
+      "score": "^90000$"
+    }
+  },
+  {
+    "why": "running first, restarting next, stopped last — band is the sort key and the colour of the tile's edge",
+    "query": "",
+    "minRows": 4,
+    "row": 3,
+    "matches": {
+      "title": "^old$",
+      "band": "^2$",
+      "status": "^exited$"
+    }
+  },
+  {
+    "why": "within a band the ps order survives — ps listed web before db",
+    "query": "",
+    "minRows": 4,
+    "row": 1,
+    "matches": {
+      "title": "^db$",
+      "band": "^0$"
+    }
+  },
+  {
+    "why": "a crash loop is something you came to deal with — restarting sits between running and stopped, and the tile carries the count and the exit it keeps dying on",
+    "query": "",
+    "minRows": 4,
+    "row": 2,
+    "matches": {
+      "title": "^crashy$",
+      "band": "^1$",
+      "restarts": "^7$",
+      "exitCode": "^1$"
+    }
+  },
+  {
+    "why": "the primary action is the log tail, and the first action carries the enter key",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "matches": {
+      "exec": "^omarchy-launch-tui --app-id=org\\.omarchy\\.docker docker logs -f --tail 200 'aaaa1111bbbb",
+      "actions": "^\\[\\{'title': 'Follow Logs', 'shortcut': '↵'"
+    }
+  },
+  {
+    "why": "a wildcard bind reads as localhost and opens in a browser; an IPv6 literal needs brackets or nobody can parse the URL",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "matches": {
+      "accessory": "^8080 8443 9090$",
+      "ports": "'url': 'http://\\[::1\\]:9090'",
+      "actions": "'title': 'Open http://localhost:8080'"
+    }
+  },
+  {
+    "why": "the browser exec is the script's verbatim — omarchy-launch-browser on the quoted url",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "matches": {
+      "actions": "omarchy-launch-browser \\\\'http://localhost:8080\\\\'"
+    }
+  },
+  {
+    "why": "a known database port is copied, not opened — 5432 is on the deny list, and guessing wrong costs a dead browser tab",
+    "query": "",
+    "minRows": 2,
+    "row": 1,
+    "matches": {
+      "actions": "'title': 'Copy localhost:5432', 'exec': 'printf %s \\\\'localhost:5432\\\\' \\| wl-copy'"
+    }
+  },
+  {
+    "why": "Shell Inside exists only where a shell could — a running container gets it",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "matches": {
+      "actions": "'title': 'Shell Inside'"
+    }
+  },
+  {
+    "why": "a stopped tile has no shell — there is nothing to exec into",
+    "query": "",
+    "minRows": 4,
+    "row": 3,
+    "matches": {
+      "actions": "^((?!Shell Inside)[\\s\\S])*$"
+    }
+  },
+  {
+    "why": "stop, not start, for a container in a crash loop — it is already trying to run and stopping it is the thing you came to do",
+    "query": "",
+    "minRows": 3,
+    "row": 2,
+    "matches": {
+      "actions": "'title': 'Stop'",
+      "since": "^[0-9]+$"
+    }
+  },
+  {
+    "why": "a failed verb lands in a notification rather than failing invisibly once the launcher has closed",
+    "query": "",
+    "minRows": 1,
+    "row": 0,
+    "matches": {
+      "actions": "omarchy-notification-send \\\\'web stopped\\\\'"
+    }
+  },
+  {
+    "why": "a meter needs its denominator named — a 512MiB cap is a limit, no cap is the host",
+    "query": "",
+    "minRows": 2,
+    "row": 0,
+    "matches": {
+      "memCapText": "^512MiB limit$",
+      "cpuFull": "^15$",
+      "cpuFullText": "^0\\.15 cpus$"
+    }
+  },
+  {
+    "why": "an unlimited container is drawn against the whole machine and the tile says so",
+    "query": "",
+    "minRows": 2,
+    "row": 1,
+    "matches": {
+      "memCapText": " host$",
+      "cpuFullText": " cpus$",
+      "hostCores": "^[0-9]+$"
+    }
+  },
+  {
+    "why": "a word after the colon filters by name, so docker:db is one row and not a list to read",
+    "query": "db",
+    "minRows": 1,
+    "maxRows": 1,
+    "row": 0,
+    "matches": {
+      "title": "^db$"
+    }
+  },
+  {
+    "why": "ports are in the haystack — docker:8080 is you knowing which port answers and wanting the container behind it",
+    "query": "8080",
+    "minRows": 1,
+    "maxRows": 1,
+    "row": 0,
+    "matches": {
+      "title": "^web$"
+    }
+  },
+  {
+    "why": "the compose service name reaches the container even when the container's own name never said it",
+    "query": "storefront",
+    "minRows": 1,
+    "maxRows": 1,
+    "row": 0,
+    "matches": {
+      "title": "^web$"
+    }
+  },
+  {
+    "why": "a filter that matches no container answers nothing rather than falling back to every container",
+    "query": "zzz-no-such",
+    "maxRows": 0
+  },
+  {
+    "why": "the when gate is a live daemon, not a binary on PATH — a machine with docker installed and the daemon stopped shows nothing, not an error",
+    "query": "",
+    "setup": "touch \"$HOME/oxy-docker-down\"",
+    "maxRows": 0
+  }
+]

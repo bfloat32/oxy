@@ -247,6 +247,42 @@ exit 0
             }
         }
     }
+
+    // ------------------------------------------------------------ docker
+    // A canned daemon for the docker cases: `info` answers a fixed
+    // ServerVersion (the extension's `when` and the provider's per-query
+    // gate), `ps` four ids, `inspect` one object per line in ps order —
+    // a restarting container first, the two running ones apart, an exited
+    // one between, so the band sort has something to prove — and `stats`
+    // nothing, the cold-start answer. Touching `$HOME/oxy-docker-down`
+    // makes every call fail, which is how the absent-daemon case fakes a
+    // stopped daemon.
+    let docker = r#"#!/usr/bin/env bash
+[ -f "$HOME/oxy-docker-down" ] && exit 1
+case "$1" in
+  info) echo "25.0.0" ;;
+  ps) printf '%s\n' cccc3333dddd aaaa1111bbbb dddd4444eeee bbbb2222cccc ;;
+  stats) exit 0 ;;
+  inspect)
+    cat <<'JSON'
+{"id":"cccc3333dddd4444eeee5555ffff6666aaaa77778888bbbb","name":"/crashy","image":"broken:latest","restarts":7,"state":{"Status":"restarting","ExitCode":1,"OOMKilled":false,"StartedAt":"2025-05-30T12:00:00Z","FinishedAt":"2025-06-01T00:00:00Z"},"ports":{},"memCap":0,"nanoCpus":0,"project":"","service":""}
+{"id":"aaaa1111bbbb2222cccc3333dddd4444eeee5555ffff6666","name":"/web","image":"nginx:1.27","restarts":0,"state":{"Status":"running","Running":true,"ExitCode":0,"OOMKilled":false,"StartedAt":"2025-01-01T00:00:00Z","Health":{"Status":"healthy"}},"ports":{"8080/tcp":[{"HostIp":"0.0.0.0","HostPort":"8080"},{"HostIp":"::","HostPort":"8080"}],"8443/tcp":[{"HostIp":"127.0.0.1","HostPort":"8443"}],"9090/tcp":[{"HostIp":"::1","HostPort":"9090"}],"6379/tcp":null},"memCap":536870912,"nanoCpus":150000000,"project":"shop","service":"storefront"}
+{"id":"dddd4444eeee5555ffff6666aaaa77778888bbbb9999cccc","name":"/old","image":"alpine:3.20","restarts":0,"state":{"Status":"exited","ExitCode":0,"OOMKilled":false,"StartedAt":"2025-05-01T00:00:00Z","FinishedAt":"2025-06-01T12:00:00Z"},"ports":{"6379/tcp":null},"memCap":0,"nanoCpus":0,"project":"","service":""}
+{"id":"bbbb2222cccc3333dddd4444eeee5555ffff6666aaaa7777","name":"/db","image":"postgres:17","restarts":0,"state":{"Status":"running","Running":true,"ExitCode":0,"OOMKilled":false,"StartedAt":"2025-01-01T00:00:00Z"},"ports":{"5432/tcp":[{"HostIp":"0.0.0.0","HostPort":"5432"}]},"memCap":0,"nanoCpus":0,"project":"shop","service":"postgres"}
+JSON
+    ;;
+  *) exit 0 ;;
+esac
+"#;
+    for suffix in ["", ".cmd"] {
+        let p = fakebin.join(format!("docker{suffix}"));
+        std::fs::write(&p, docker)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
     Ok(())
 }
 

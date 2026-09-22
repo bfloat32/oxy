@@ -84,12 +84,15 @@ printf '{"op":"ping"}\n' | oxy send   # talk to the socket directly
 Extensions that declare `"native": "<name>"` are answered by a provider
 compiled into the daemon first — the built-ins apps, calc, commands,
 quicklinks and web, plus alarm, branch, bri, bt, cal, calchist, ch, date,
-emoji, file, git, herdr, img, kill, note, pass, recent, repo, snip, ssh,
-stash, sys, theme, vol, wifi and win — with their declared `search` or
+def, docker, emoji, file, git, herdr, img, kill, note, omarchy, pass,
+recent, repo, shortcuts, snip, ssh, stash, sys, theme, tz, unit, vol,
+wifi and win — with their declared `search` or
 `socket` kept as the fallback when the native provider declines. The four
-git-family providers share `vcs/repos.rs` — repo discovery, the
+git-family providers share `vcs/repos/` — repo discovery, the
 `--resolve` port, and the per-repo state cache — so `git:omarchy` answers
-which repo you meant without a `git status` per candidate. `cal`'s
+which repo you meant without a `git status` per candidate. `tz` resolves
+zone names and DST math in-process through `jiff`, so `tz:9am tokyo in
+london` costs no `date` processes at all. `cal`'s
 natural-language leg
 resolves through the same `date` parser in-process, so queries like
 `cal:christmas` need no script at all.

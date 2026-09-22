@@ -42,14 +42,14 @@ starts from a measured state:
 
 | fact | value |
 |---|---|
-| Rust files | 134 (37 before the restructure) |
-| total lines | 32 558 |
-| largest file | 1 066 lines (`provider/native/vcs/repos.rs` — over the 800 target, under the 1 200 cap; a `repos/` split is the known follow-up) |
-| tests | 375 passing (`cargo test --workspace`) |
+| Rust files | 155 (37 before the restructure) |
+| total lines | 41 397 |
+| largest file | 926 lines (`provider/native/time/tz/when.rs` — over the 800 target, under the 1 200 cap; the `date -d` grammar is dense; `system/docker/rows.rs` at 810 is the other overage. `vcs/repos.rs` was split into `repos/{mod,discover,state}`) |
+| tests | 471 passing (`cargo test --workspace`) |
 | lints | `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean |
 | guards | the file budget, the `model/` layering check and the **view-list sync** in `tests/run.sh`; `oxy test --only manifest` against this repo's extensions (it checks that every `native:` name is an arm in `construct`); clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
-| extensions | 40 (31 native — 26 declaring `"native"` plus the five built-ins; 14 script-backed) — the marketplace was removed |
-| case suites | 27 files, 443 assertions; the extensions without one are listed below |
+| extensions | 40 (37 native — 32 declaring `"native"` plus the five built-ins; 8 script-backed) — the marketplace was removed |
+| case suites | 30 files, 481 assertions; the extensions without one are listed below |
 | unchanged by the restructure | the wire, the row shapes, the state files, the script contract |
 
 The restructure was a move, not a behaviour change, so every claim below —
@@ -61,10 +61,11 @@ LLM slice landed (§4.4).
 
 ## 1. Where we stand
 
-**40 extensions ship. 31 answer through a native provider. 14 remain
-script-backed** — 11 distinct scripts plus `pr`, `issue` and `ci`, which are
-nine-line wrappers that set `OXY_GH_MODE` for `oxy-gh`. (`bo:` and its
-marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
+**40 extensions ship. 37 answer through a native provider. 8 remain
+script-backed** — `agent` (batch G, a rewrite), `radio`, `spotify-library`
+and `music` (batch F), and `gh` plus `pr`, `issue`, `ci` — the three
+nine-line wrappers that set `OXY_GH_MODE` for `oxy-gh` (batch C). (`bo:` and
+its marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
 
 | already native | area |
 |---|---|
@@ -75,15 +76,18 @@ marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
 | `file`, `recent` | files |
 | `kill`, `sys`, `ssh`, `ch` | system |
 | `vol`, `bri`, `win`, `bt`, `wifi`, `theme`, `alarm` | batch A — local state |
+| `repo`, `git`, `branch`, `stash` | batch B — the git family, over `vcs/` |
 | `herdr`, `img`, `pass`, `snip`, `note` | batch D/E — the cheap jq removals |
+| `docker`, `shortcuts`, `omarchy` | batch D remainder — session/system views |
+| `tz`, `unit`, `def` | batch E remainder — `jiff` tzdb, qalc engine, curl |
 
 | batch | extensions | script lines | why they belong together |
 |---|---|---|---|
 | ~~**A. local state**~~ ✅ | `vol`, `bri`, `win`, `bt`, `wifi`, `theme`, `alarm` | 1 691 | done — merged `fc76de2`…`a112f2e`, case files landed |
-| ~~**B. git family**~~ ✅ | `repo`, `git`, `branch`, `stash` | 1 713 | done — spawn+parse through `vcs/run.rs` + the shared `vcs/repos.rs` (discovery, `--resolve`, the v4 state cache); the case runner's fixture (`cases/fixture.rs`) builds the two throwaway repos so all 34 cases exercise the native legs |
+| ~~**B. git family**~~ ✅ | `repo`, `git`, `branch`, `stash` | 1 713 | done — spawn+parse through `vcs/run.rs` + the shared `vcs/repos/` module (discovery, `--resolve`, the v4 state cache); the case runner's fixture (`cases/fixture.rs`) builds the two throwaway repos so all 34 cases exercise the native legs |
 | **C. GitHub family** | `gh`, `pr`, `issue`, `ci` | 1 074 | one script in four modes (`OXY_GH_MODE`), GraphQL over `gh`, network |
-| **D. session & system views** | `docker`, `shortcuts`, `omarchy`, ~~`herdr`~~, ~~`img`~~ | 1 371 | `herdr`+`img` done; `docker`, `shortcuts`, `omarchy` remain |
-| **E. text & data** | `unit`, `tz`, `def`, ~~`snip`~~, ~~`note`~~, ~~`pass`~~ | 2 861 | `snip`/`note`/`pass` done; `unit`, `tz`, `def` remain — **`tz` decided: `jiff`** (chrono-tz is winding down; a table fails the 45-case contract) |
+| ~~**D. session & system views**~~ ✅ | `docker`, `shortcuts`, `omarchy`, `herdr`, `img` | 1 371 | done — `docker` keeps the `docker info` daemon probe (dead daemon → silence, not a missing gate) + the stats TSV behind an `AtomicBool` instead of `flock`; `shortcuts` reads `omarchy-menu-keybindings --print` then `hyprctl binds -j`; `omarchy` is pure data (JSONC layering, `bash -lc` when-fuse). All three authored their own case files + fixture stubs |
+| ~~**E. text & data**~~ ✅ | `unit`, `tz`, `def`, `snip`, `note`, `pass` | 2 861 | done — `tz` is pure `jiff` (system zoneinfo on Linux, bundled tzdb on Windows; `timedatectl`/`date`/`jq` all gone, and the `when` gate with them); `unit` keeps `qalc -f` as the engine and ports the strict gate + spelling tables; `def` keeps `curl`, adds the 500-entry cap |
 | **F. media** | `radio`, `spotify`, `spotify-library` | 1 019 | a player (mpv/MPRIS) plus a keyless or keyed catalogue lookup |
 | **G. the long-lived one** | `agent` | 2 167 | a process with its own protocol; a rewrite, not a port |
 
@@ -92,9 +96,9 @@ marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
 - **The script stays as the fallback.** A native provider answers first and
   returns `Fallback` where it declines, so a wrong port is a slower answer,
   never a missing one.
-- **A port is not done without a case file.** 13 of the 40 have none
-  (`calchist`, `ch`, `docker`, `file`, `kill`, `music`, `omarchy`, `radio`,
-  `recent`, `shortcuts`, `spotify-library`, `ssh`, `sys`).
+- **A port is not done without a case file.** 10 of the 40 have none
+  (`calchist`, `ch`, `file`, `kill`, `music`, `radio`, `recent`,
+  `spotify-library`, `ssh`, `sys`).
 
 ### 1.2 The budgets the scripts measured (the port's acceptance criteria)
 
@@ -133,7 +137,7 @@ process per keystroke.
 | `vol` | `command -v pactl` | PATH lookup (or the PipeWire socket) |
 | `wifi` | `command -v nmcli` | PATH lookup (or the NetworkManager D-Bus name) |
 | `unit` | `command -v qalc` | PATH lookup (the port still calls qalc) |
-| `tz` | `command -v jq` | **nothing** once the port drops jq — the gate disappears with the dependency (keep it if the script leg remains the only answer) |
+| `tz` | ~~`command -v jq`~~ | done — the native needs nothing external (`jiff` reads system zoneinfo / bundled tzdb); the manifest `when` was dropped with the dependency and the script leg still self-gates |
 | `def` | `command -v curl` | PATH lookup, or nothing if the port grows its own HTTP |
 | `repo` | `command -v git && command -v fd` | PATH lookup for `git`; `fd` goes away if the port walks the tree itself |
 | `git`, `branch`, `stash` | `command -v git` | PATH lookup |
@@ -149,25 +153,25 @@ process per keystroke.
 
 ### 1.4 The acceptance suites that already exist
 
-**387 assertions in 16 case files** — the porting wave's free acceptance
+**481 assertions in 30 case files** — the porting wave's free acceptance
 suite, because `oxy test --cases <id>` runs them through the engine (native
 provider first):
 
 | batch | case files | assertions |
 |---|---|---|
-| A | `alarm` | 45 |
+| A | `alarm` 45, `bluetooth` 3, `brightness` 7, `theme` 5, `volume` 9, `wifi` 3, `windows` 4 | 76 |
 | B | `repo` 4, `git` 11, `branch` 10, `stash` 9 | 34 |
 | C | `gh` 6, `issue` 4, `pr` 4, `ci` 2 | 16 |
-| D | *none* | 0 |
-| E | `unit` 72, `timezone` 45, `define` 30 | 147 |
+| D | `docker` 19, `shortcuts` 13, `omarchy` 6, `herdr` 5, `images` 3 | 46 |
+| E | `unit` 72, `timezone` 45, `define` 30, `notes` 9, `pass` 5, `snippets` 3 | 164 |
 | F | *none* | 0 |
 | G | `agent` 18 | 18 |
 | already native | `date` 56, `calendar` 30, `emoji` 41 | 127 |
 
 Two consequences worth stating plainly:
 
-- **Batches D and F have no coverage at all.** Their ports must write cases
-  *first*, or the only thing proving the port works is the script it replaced.
+- **Batch F has no coverage at all.** Its ports must write cases *first*, or
+  the only thing proving the port works is the script it replaced.
 - The behaviour suite runs nine scripts end to end (`oxy-docker`, the four git
   ones, `oxy-search-files`, `oxy-ssh`, `oxy-timezone-plan`, `oxy-wifi`). A
   native provider answers before the script, so that coverage stops being the
@@ -527,8 +531,10 @@ documents port as strings. A direct-REST port is a separate project.
   São Paulo, `la` → Los Angeles (initials beat substrings), a country → its
   main city, and a zone not in `timedatectl list-timezones` is dropped rather
   than read as UTC.
-- Dependency: a tz database (`jiff` bundles one; `chrono-tz` is the
-  conservative choice). This is the batch's real decision.
+- Dependency: landed as `jiff` — it reads the same `/usr/share/zoneinfo` on
+  Linux and bundles tzdb on Windows, so `TimeZone::system()` subsumes the
+  `timedatectl`→`/etc/localtime` chain and `tz::db().available()` replaces
+  `timedatectl list-timezones` plus the `~/.cache/oxy/zones` cache file.
 
 **`def`** (378) — `split`.
 
@@ -664,8 +670,8 @@ breaks on a patch release):
 | A | **none** if the ports spawn the CLIs they already call; optional `zbus` if `bt`/`wifi` move to D-Bus |
 | B | **none** (spawn `git`) |
 | C | **none** (spawn `gh`) — an HTTP client only if the direct-REST route is chosen |
-| D | **none** (spawn `docker`/`hyprctl`/`herdr`) |
-| E | **one**: a tz database for `tz` (`jiff` or `chrono-tz`). `def`/`unit`/`note`/`pass`/`snip` add nothing if `curl`/`qalc` stay the engines |
+| D | **none** (spawn `docker`/`hyprctl`/`herdr`) — landed clean |
+| E | **one, landed**: `jiff` for `tz` (chrono-tz was the other candidate and is winding down; a table fails the 45-case contract). `def`/`unit`/`note`/`pass`/`snip` added nothing — `curl`/`qalc` stayed the engines |
 | F | **none** if `curl` + `mpv` stay; optional `zbus` for MPRIS |
 | G | **none** (`tokio` is already a process supervisor); the agent's protocol is ours |
 
@@ -782,6 +788,10 @@ nothing in it — it is a parallel track, not a batch.
 - Extension sockets are Unix-only by design (`provider/socket.rs`).
 - Icon/art URLs are canonical now (`file_url`), which was the other
   platform-shaped gap.
+- ~~Git Bash rewrites any argv entry starting with `/` when it hands a line
+  to a native child~~ — `build_command` doubles a leading `/` on the
+  substituted query/filters (`//policy` → `/policy`), so `do:/policy` and
+  absolute-path queries reach the scripts intact. Inert on Linux.
 
 ### 4.6 Window-class icons (see Batch A, `win`)
 
@@ -792,7 +802,8 @@ through the frontend's app library. Decide whether that stays the contract
 ### 4.7 Case files for the 12 native providers that have none
 
 `apps`, `calc`, `calchist`, `ch`, `commands`, `file`, `kill`, `quicklinks`,
-`recent`, `ssh`, `sys`, `web` — plus the 17 script extensions in §1.1. A
+`recent`, `ssh`, `sys`, `web` — plus `music`, `radio` and `spotify-library`
+on the script side (the other five scripts all carry suites now). A
 `quicklinks` case would have caught the routing bug; a `/clear-all` case the
 confirm bug.
 
@@ -840,15 +851,17 @@ Where the wave has got to, against the plan it started with:
    (`util::on_path`, `util::shq`).
 3. **The cheap jq-removals** — **done**: `herdr`, `img` (D), `snip`, `note`,
    `pass` (E).
-4. **The two dependency decisions** — **in flight**: git (B) is scaffolded
-   (`native/vcs/run.rs`, the shared `git --no-optional-locks` runner) with its
-   providers landing; tz (E) is a stub, so the script still answers.
-5. **The network family** (C, F) — **next**, once the HTTP decision is made.
-6. **`docker`/`shortcuts`/`omarchy`** (D) — **next**; they are self-contained.
+4. **The two dependency decisions** — **done**: git (B) landed as
+   spawn+parse through `vcs/run.rs` + `vcs/repos/`; `tz` (E) is `jiff`.
+5. **`docker`/`shortcuts`/`omarchy` (D) and `unit`/`tz`/`def` (E)** — **done**:
+   D authored its case files and fixture stubs; E kept `qalc`/`curl` as the
+   engines and `tz` dropped the `jq` gate entirely.
+6. **The network family** (C, F) — **next**, once the HTTP decision is made:
+   `gh`, `pr`, `issue`, `ci`, `radio`, `spotify-library`, `music`.
 7. **`agent`** (G) — **last**, as its own project with the 18 cases as the
    acceptance suite.
 8. **In parallel, not in a batch** — `oxy test`'s `manifest` layer landed
-   (§4.2's cheapest third); the case files (§4.7) are 27 of 40.
+   (§4.2's cheapest third); the case files (§4.7) are 30 of 40.
 9. **The LLM track runs alongside all of it** (§4.4) and touches nothing the
    batches touch: retry, the key, the doctor, the `oxy ask` verb, the fallback
    chain, the soft interrupt and the usage ledger have landed; autodetect,
@@ -1004,7 +1017,11 @@ list.
 they read the machine every time (which is also why so many of them are in
 batch A: the reading is the whole cost).
 
-### 6.5 The remaining 18 script-backed, measured
+### 6.5 The script-backed inventory, measured
+
+*(This is the baseline table — every row in it has now been ported except
+`agent`, `gh` (+ the `ci`/`issue`/`pr` wrappers), `radio`, `spotify-library`
+and `spotify`; the measurements are still the numbers each port had to beat.)*
 | id | keyword | view | script | lines | CLI/tools | refreshMs | cacheMs | cases | size |
 |---|---|---|---|---|---|---|---|---|---|
 | agent | do | agent | oxy-agent | 2167 | hyprctl, systemctl, python3, git, gh | 600 | – | yes | XL |

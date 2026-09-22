@@ -26,9 +26,9 @@ pub fn build_command(
                 .map(|m| m.as_str().to_lowercase())
                 .unwrap_or_default();
             if key == "query" {
-                shellquote::quote(arg_text)
+                shellquote::quote(&msys_path(arg_text))
             } else if let Some(v) = filters.get(&key) {
-                shellquote::quote(v)
+                shellquote::quote(&msys_path(v))
             } else {
                 shellquote::quote("")
             }
@@ -36,6 +36,19 @@ pub fn build_command(
         .into_owned();
 
     settings_prefix(settings) + &command
+}
+
+/// Git Bash rewrites an argument that begins with `/` into a Windows path
+/// when it hands the line to a native child — `oxy-agent search /policy`
+/// arrives as `C:/Program Files/Git/policy`. Doubling the leading slash is
+/// MSYS's own escape: `//policy` converts to `/policy`, so literals and POSIX
+/// paths both survive. Anywhere else the query passes through untouched.
+fn msys_path(arg: &str) -> std::borrow::Cow<'_, str> {
+    if cfg!(windows) && arg.starts_with('/') {
+        format!("/{arg}").into()
+    } else {
+        arg.into()
+    }
 }
 
 fn placeholder_re() -> &'static fancy_regex::Regex {

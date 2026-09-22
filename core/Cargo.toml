@@ -20,6 +20,11 @@ interprocess = { version = "2", features = ["tokio"] }
 fancy-regex = "0.14"
 sysinfo = "0.33"
 ignore = "0.4"
+# The first dep past the seven-crate baseline, and only for `tz`: IANA zones
+# and DST math at arbitrary instants cannot be a table — `sao paulo` must
+# resolve. jiff reads the system zoneinfo on Linux and bundles tzdb on
+# Windows; chrono-tz was the other candidate and is winding down.
+jiff = "0.2"
 
 [profile.release]
 opt-level = 3

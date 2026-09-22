@@ -5,6 +5,7 @@
 pub mod bri;
 pub mod bt;
 pub mod clipboard;
+pub mod docker;
 pub mod file;
 pub mod herdr;
 pub mod img;

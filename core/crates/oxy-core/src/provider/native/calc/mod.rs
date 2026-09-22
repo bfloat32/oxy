@@ -8,6 +8,7 @@
 mod answer;
 mod money;
 mod numbers;
+pub mod unit;
 mod units;
 
 use std::future::Future;

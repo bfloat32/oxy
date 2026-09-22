@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, UNIX_EPOCH};
 
-use super::{mtime, now_secs, oxy_state_dir, repo_pin};
+use super::{mtime, now_secs, oxy_state_dir, repo_pin, state};
 use crate::provider::native::util::on_path;
 use crate::provider::process;
 use crate::settings::paths;
@@ -183,6 +183,10 @@ fn load_repos_from(state: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
     }
 
     let repos = discover(roots);
+    // A fresh walk is the one moment the live set is known — the per-repo
+    // state cache keeps a hash-keyed file for every repo ever visited, and
+    // this sweep is what removes the ones whose path no longer exists.
+    state::sweep_dead_repos();
     if !repos.is_empty() {
         let _ = std::fs::create_dir_all(state);
         let tmp = state.join(format!("oxy-repos.list.{}", std::process::id()));

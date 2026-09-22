@@ -95,7 +95,10 @@ async fn main() {
     };
     // The socket file is the access boundary — 0600 means only this user can
     // drive the launcher, whichever directory the address fell back into.
-    // (Windows has no socket file; the named pipe's session ACL stands in.)
+    // Windows has no socket file: the named pipe takes the process's default
+    // DACL — the creating user, SYSTEM and Administrators — the same user-only
+    // boundary on a single-user box, but not a session one: anything running
+    // as this user, in any session, can drive the launcher (including `act`).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

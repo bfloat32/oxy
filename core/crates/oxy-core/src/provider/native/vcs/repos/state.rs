@@ -14,7 +14,7 @@ const DIRTY_RECHECK_SECS: u64 = 3;
 
 const CACHE_KEEP: usize = 300;
 
-const REPO_STATE_FORMAT: u32 = 4;
+const REPO_STATE_FORMAT: u32 = 5;
 
 // Remotes
 // ------------------------------------------------------------------
@@ -317,9 +317,11 @@ pub(crate) fn prune_named_cache(name: &str, keep_dir: &Path) {
     }
 }
 
-/// repo-state v4 line: `stamp␟branch␟upstream␟ab␟dirty␟committed␟dirty_ts`.
+/// repo-state v5 line: `stamp␟branch␟upstream␟ab␟dirty␟committed␟dirty_ts␟path`.
 /// The row cache `repo:` reads per displayed repo; `repo_stamp` is the key
-/// and the last field is when the dirty count was last derived.
+/// and the last two fields are when the dirty count was last derived and
+/// which repo the entry belongs to — what the dead-repo sweep reads, since
+/// the filename is only a hash.
 #[derive(Debug, Clone)]
 pub(crate) struct RepoState {
     pub stamp: u64,
@@ -329,6 +331,7 @@ pub(crate) struct RepoState {
     pub dirty: u64,
     pub committed: u64,
     pub dirty_ts: u64,
+    pub path: String,
 }
 
 fn parse_state_line(line: &str) -> Option<RepoState> {
@@ -341,6 +344,7 @@ fn parse_state_line(line: &str) -> Option<RepoState> {
         dirty: f.next()?.parse().unwrap_or(0),
         committed: f.next()?.parse().unwrap_or(0),
         dirty_ts: f.next()?.parse().unwrap_or(0),
+        path: f.next()?.to_string(),
     })
 }
 
@@ -353,11 +357,12 @@ fn state_line(s: &RepoState) -> String {
         s.dirty.to_string(),
         s.committed.to_string(),
         s.dirty_ts.to_string(),
+        s.path.clone(),
     ]
     .join(&US.to_string())
 }
 
-/// One repo's state for the listing, served from the v4 cache while the
+/// One repo's state for the listing, served from the v5 cache while the
 /// stamp holds — a hit rewrites the line so its mtime says when it was last
 /// wanted (that is what the pruning reads), and a dirty count older than
 /// DIRTY_RECHECK spawns the background recompute rather than being trusted.
@@ -400,6 +405,7 @@ pub(crate) async fn repo_state(repo: &Path, gitdir: &Path) -> RepoState {
         dirty: status.entries,
         committed,
         dirty_ts: now_secs(),
+        path: repo.to_string_lossy().into_owned(),
     };
     write_state(&key, &state);
     state
@@ -432,10 +438,40 @@ fn refresh_state_async(repo: &Path) {
             dirty: status.entries,
             committed,
             dirty_ts: now_secs(),
+            path: repo.to_string_lossy().into_owned(),
         };
         let dir = named_cache_dir("repo-state", REPO_STATE_FORMAT);
         write_state(&dir.join(cache_key(&repo)), &state);
     });
+}
+
+/// The eviction the v4 cache never had: a v5 entry carries its repo's path,
+/// so a discovery refresh can delete entries whose repo no longer exists
+/// instead of only capping by count. Script-written lines share the dir but
+/// not the format — they fail the parse and are left alone, and so is an
+/// entry whose path still exists: leaving the roots is not being deleted.
+/// Runs on a fresh discovery, not per query — the answer is a day old at
+/// worst, and a deleted repo costs a few dozen bytes until then.
+pub(crate) fn sweep_dead_repos() {
+    let dir = named_cache_dir("repo-state", REPO_STATE_FORMAT);
+    prune_named_cache("repo-state", &dir);
+    sweep_dead_repos_in(&dir);
+}
+
+fn sweep_dead_repos_in(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file = entry.path();
+        let gone = std::fs::read_to_string(&file)
+            .ok()
+            .and_then(|line| parse_state_line(line.trim_end()))
+            .is_some_and(|s| !Path::new(&s.path).is_dir());
+        if gone {
+            let _ = std::fs::remove_file(&file);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -495,13 +531,48 @@ mod tests {
             dirty: 3,
             committed: 100,
             dirty_ts: 99,
+            path: "/tmp/repo".into(),
         };
         let parsed = parse_state_line(&state_line(&s)).unwrap();
         assert_eq!(parsed.stamp, 42);
         assert_eq!(parsed.branch, "main");
         assert_eq!(parsed.dirty, 3);
+        assert_eq!(parsed.path, "/tmp/repo");
         // An empty middle field survives the unit-separator round trip — the
         // whole reason the scripts moved off tabs.
         assert!(parsed.upstream.is_empty());
+    }
+
+    #[test]
+    fn the_sweep_drops_dead_repos_and_keeps_the_rest() {
+        let dir = std::env::temp_dir().join(format!("oxy-sweep-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("live-repo");
+        std::fs::create_dir_all(&live).unwrap();
+        let state = |path: &str| RepoState {
+            stamp: 1,
+            branch: "main".into(),
+            upstream: String::new(),
+            ab: String::new(),
+            dirty: 0,
+            committed: 0,
+            dirty_ts: 0,
+            path: path.into(),
+        };
+        // Ours, still on disk; ours, deleted; a seven-field line in the v4
+        // shape — the sweep cannot know whose repo it was, so it stays.
+        let ours_live = dir.join("aaaaaaaaaaaaaaaa");
+        let ours_dead = dir.join("bbbbbbbbbbbbbbbb");
+        let foreign = dir.join("cccccccccccccccc");
+        write_state(&ours_live, &state(&live.to_string_lossy()));
+        write_state(&ours_dead, &state(&dir.join("gone-repo").to_string_lossy()));
+        std::fs::write(&foreign, "1\u{1f}main\u{1f}\u{1f}\u{1f}0\u{1f}0\u{1f}0\n").unwrap();
+
+        sweep_dead_repos_in(&dir);
+
+        assert!(ours_live.exists());
+        assert!(!ours_dead.exists());
+        assert!(foreign.exists());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

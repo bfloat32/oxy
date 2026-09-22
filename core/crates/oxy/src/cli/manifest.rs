@@ -59,6 +59,9 @@ pub(crate) async fn run(only: Option<&str>, json: bool) -> i32 {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
+        // Counted before anything can go wrong: the summary says how many
+        // files were read, not how many happened to parse into objects.
+        checked += 1;
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) => {
@@ -96,7 +99,6 @@ pub(crate) async fn run(only: Option<&str>, json: bool) -> i32 {
         {
             continue;
         }
-        checked += 1;
 
         let mut problems = Vec::new();
         if id.is_empty() {
@@ -126,18 +128,21 @@ pub(crate) async fn run(only: Option<&str>, json: bool) -> i32 {
             problems.push("neither search nor socket".to_string());
         }
 
-        if let Some(view) = obj.get("view").and_then(Value::as_str)
-            && !view.is_empty()
-            && !known_view(view)
-        {
-            problems.push(format!("unknown view '{view}'"));
+        // A field that is there but the wrong type is a problem, not a
+        // silent default: the launcher reads `view: 5` as `list`, which is
+        // exactly the fallback this check exists to catch.
+        match obj.get("view") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(v)) if v.is_empty() || known_view(v) => {}
+            Some(Value::String(v)) => problems.push(format!("unknown view '{v}'")),
+            Some(_) => problems.push("view is not a string".to_string()),
         }
 
-        if let Some(tier) = obj.get("tier").and_then(Value::as_str)
-            && !tier.is_empty()
-            && rank::tier_name(rank::tier(tier)) != tier
-        {
-            problems.push(format!("unknown tier '{tier}'"));
+        match obj.get("tier") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(v)) if v.is_empty() || rank::tier_name(rank::tier(v)) == v => {}
+            Some(Value::String(v)) => problems.push(format!("unknown tier '{v}'")),
+            Some(_) => problems.push("tier is not a string".to_string()),
         }
 
         for key in NUMBERS {
@@ -148,13 +153,16 @@ pub(crate) async fn run(only: Option<&str>, json: bool) -> i32 {
             }
         }
 
-        if let Some(native) = obj.get("native").and_then(Value::as_str)
-            && !native.is_empty()
-            && oxy_core::provider::native::construct(native).is_none()
-        {
-            problems.push(format!(
-                "native '{native}' is not an arm in native::construct — the port would never run"
-            ));
+        match obj.get("native") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(n)) if n.is_empty() => {}
+            Some(Value::String(n)) if oxy_core::provider::native::construct(n).is_none() => {
+                problems.push(format!(
+                    "native '{n}' is not an arm in native::construct — the port would never run"
+                ));
+            }
+            Some(Value::String(_)) => {}
+            Some(_) => problems.push("native is not a string".to_string()),
         }
 
         if let Some(aliases) = obj.get("aliases")

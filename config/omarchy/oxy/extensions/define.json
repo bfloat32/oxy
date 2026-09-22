@@ -25,5 +25,6 @@
       "label": "Keep definitions for (days)",
       "value": "30"
     }
-  ]
+  ],
+  "native": "def"
 }

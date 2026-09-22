@@ -1,4 +1,5 @@
 mod check;
+mod fixture;
 mod view;
 
 use std::time::Duration;
@@ -20,6 +21,15 @@ use crate::engine_local::local_engine;
 /// `--json` swaps the human lines for one object, so a CI job can read the
 /// result instead of parsing prose.
 pub(crate) async fn run(only: Option<String>, json: bool) -> i32 {
+    // The git-family cases describe repos that do not exist on any real
+    // machine, so the run happens inside a fixture sandbox — built once,
+    // re-executed into, and removed when the child exits. `inside()` is the
+    // child's mark.
+    if !fixture::inside() {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        return fixture::sandboxed(&args);
+    }
+
     let settings = oxy_core::settings::Settings::load(&dirs::settings_file());
     let report = extension::load_dir(&dirs::extensions_dir(), &settings.extensions);
     let mut held = 0usize;

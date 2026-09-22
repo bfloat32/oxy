@@ -62,5 +62,39 @@ pub(crate) fn case_view(row: &oxy_core::model::row::Row, ext_id: &str) -> Value 
     // script that prints 87999 are then compared as equals, which is the
     // point.)
     obj.insert("score".into(), json!(row.local));
+
+    // The wire's `Action` is a fixed struct — `id`, `subtitle`, `glyph` are
+    // always there, empty or not — while a script's action object only
+    // carries what it sets. `matches` regexes anchor on that sparse shape
+    // (`^\[\{'title': …`), so the empty fields drop out here, the way a
+    // script row never had them. `keepOpen: false` goes too — scripts only
+    // ever emit it true — and the keys reorder to the scripts' emission
+    // order: title, then shortcut, then the exec/query it runs.
+    if let Some(Value::Array(actions)) = obj.get_mut("actions") {
+        for action in actions.iter_mut().filter_map(|a| a.as_object_mut()) {
+            action.retain(|_, v| crate::cases::check::present(Some(v)));
+            if action.get("keepOpen") == Some(&Value::Bool(false)) {
+                action.shift_remove("keepOpen");
+            }
+            let order = |k: &str| match k {
+                "title" => 0,
+                "subtitle" => 1,
+                "shortcut" => 2,
+                "exec" => 3,
+                "query" => 4,
+                "effect" => 5,
+                "confirm" => 6,
+                "keepOpen" => 7,
+                "id" => 8,
+                "glyph" => 9,
+                "keywords" => 10,
+                _ => 20,
+            };
+            let mut entries: Vec<(String, Value)> =
+                action.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+            entries.sort_by_key(|(k, _)| order(k));
+            *action = entries.into_iter().collect();
+        }
+    }
     v
 }

@@ -1,7 +1,7 @@
 use serde_json::Value;
 
 /// A field is absent when missing, "", [] or {}. 0 and false are real.
-fn present(v: Option<&Value>) -> bool {
+pub(crate) fn present(v: Option<&Value>) -> bool {
     match v {
         None | Some(Value::Null) => false,
         Some(Value::String(s)) => !s.is_empty(),

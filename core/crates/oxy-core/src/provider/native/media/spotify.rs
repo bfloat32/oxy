@@ -139,6 +139,17 @@ fn prop_x(out: &str) -> Option<u64> {
     rest[..digits].parse().ok().filter(|_| digits > 0)
 }
 
+/// SetPosition takes an object path and microseconds, and the view builds
+/// that call by substituting seconds into a shell string. `trackid` is text
+/// whichever process owns the bus name chose to emit, so it is confined to
+/// object-path characters — all shell-inert; anything else gets no seek.
+fn valid_trackid(trackid: &str) -> bool {
+    trackid.starts_with('/')
+        && trackid[1..]
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'/')
+}
+
 /// The player row, or nothing when no player is on the bus or it has no
 /// track — `[[ -z $player ]] || [[ -z $title ]]` in the script.
 async fn now_playing() -> Option<Value> {
@@ -215,12 +226,10 @@ async fn now_playing() -> Option<Value> {
     let can_next = prop_bool(&can_next).unwrap_or(true);
     let can_prev = prop_bool(&can_prev).unwrap_or(true);
 
-    // SetPosition takes an object path and microseconds. The view knows
-    // neither, so it substitutes the seconds it wants into this and runs it.
-    let seek = if trackid.is_empty() {
-        String::new()
-    } else {
+    let seek = if valid_trackid(&trackid) {
         format!("{call} SetPosition ox {trackid} $(( {{seconds}} * 1000000 ))")
+    } else {
+        String::new()
     };
 
     let pp = format!("{call} PlayPause");
@@ -459,6 +468,17 @@ mod tests {
         assert_eq!(prop_bool(""), None);
         assert_eq!(prop_x("x 12345678"), Some(12345678));
         assert_eq!(prop_x("s \"x\""), None);
+    }
+
+    #[test]
+    fn a_hostile_trackid_gets_no_seek_command() {
+        assert!(valid_trackid("/org/mpris/MediaPlayer2/Track/1234"));
+        assert!(valid_trackid("/com/spotify/track/abc_DEF"));
+        assert!(!valid_trackid("/x; rm -rf ~"));
+        assert!(!valid_trackid("$(reboot)"));
+        assert!(!valid_trackid("/x'`id`'"));
+        assert!(!valid_trackid(""));
+        assert!(!valid_trackid("no/slash/at/head"));
     }
 
     #[test]

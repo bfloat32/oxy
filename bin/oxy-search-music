@@ -93,9 +93,11 @@ now_playing() {
   trackid=$(field "$metadata" "mpris:trackid")
 
   # SetPosition takes an object path and microseconds. The view knows neither,
-  # so it substitutes the seconds it wants into this and runs it.
+  # so it substitutes the seconds it wants into this and runs it — through a
+  # shell. trackid is bus-controlled text, so it is confined to object-path
+  # characters, all of which are shell-inert.
   local seek=""
-  [[ -n $trackid ]] && seek="$call SetPosition ox $trackid \$(( {seconds} * 1000000 ))"
+  [[ $trackid =~ ^/[A-Za-z0-9_/]+$ ]] && seek="$call SetPosition ox $trackid \$(( {seconds} * 1000000 ))"
 
   jq -cn \
     --arg t "$title" --arg s "$artist" --arg d "$album" --arg art "$art" \

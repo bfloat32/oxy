@@ -337,6 +337,28 @@ pub async fn serve() -> i32 {
 
     let _ = std::fs::create_dir_all(agent::state_dir());
     let path = agent::socket_path();
+    // Held for the life of the process: two serves racing would otherwise
+    // both pass a liveness probe, and the second's unlink would orphan the
+    // first's live socket. A dead daemon's lock is free the moment it dies.
+    let _instance_lock = {
+        let lock_path = agent::state_dir().join("oxy-agent.lock");
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path);
+        match file.map(|f| f.try_lock().map(|()| f)) {
+            Ok(Ok(f)) => f,
+            Ok(Err(std::fs::TryLockError::WouldBlock)) => {
+                eprintln!("oxy-agent serve: already running on {}", path.display());
+                return 0;
+            }
+            _ => {
+                eprintln!("oxy-agent serve: cannot lock {}", lock_path.display());
+                return 1;
+            }
+        }
+    };
     match std::fs::remove_file(&path) {
         Ok(()) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}

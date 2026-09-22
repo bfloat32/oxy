@@ -56,7 +56,30 @@ async fn main() {
     // One daemon owns the address. A file left by a dead one is replaced; a
     // socket a live daemon is answering on is not — two frontends spawning at
     // once, or a hand-run oxyd beside a running one, would otherwise split
-    // the state in two and orphan whichever daemon bound first.
+    // the state in two and orphan whichever daemon bound first. The lock is
+    // held for the life of the process, which is what makes probe + unlink +
+    // bind atomic: without it two concurrent spawns could both pass the
+    // probe, and the second's unlink would orphan the first's live socket.
+    let _instance_lock = {
+        let lock_path = dirs::state_home().join("oxyd.lock");
+        let _ = std::fs::create_dir_all(dirs::state_home());
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path);
+        match file.map(|f| f.try_lock().map(|()| f)) {
+            Ok(Ok(f)) => f,
+            Ok(Err(std::fs::TryLockError::WouldBlock)) => {
+                eprintln!("oxyd: already running on {}", dirs::socket_name());
+                return;
+            }
+            _ => {
+                eprintln!("oxyd: cannot lock {}", lock_path.display());
+                return;
+            }
+        }
+    };
     {
         use interprocess::local_socket::tokio::Stream;
         let live = tokio::time::timeout(

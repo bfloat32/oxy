@@ -93,7 +93,9 @@ fn write_atomic(path: &Path, text: &str) -> std::io::Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let tmp = path.with_extension("tmp");
+    // A per-writer tmp name: `oxy test --local` and the daemon can both be
+    // mid-write on the same file, and one shared `.tmp` would interleave.
+    let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
     std::fs::write(&tmp, text)?;
     std::fs::rename(&tmp, path)
 }

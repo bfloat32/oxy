@@ -373,7 +373,7 @@ async fn themes() -> Vec<String> {
     static THEMES: LazyLock<Mutex<(f64, Vec<String>)>> =
         LazyLock::new(|| Mutex::new((0.0, Vec::new())));
     {
-        let cache = THEMES.lock().unwrap();
+        let cache = THEMES.lock().unwrap_or_else(|e| e.into_inner());
         if agent::now() - cache.0 <= 60.0 {
             return cache.1.clone();
         }
@@ -384,6 +384,7 @@ async fn themes() -> Vec<String> {
             .args(["theme", "list"])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
+            .kill_on_drop(true)
             .output(),
     )
     .await;
@@ -395,7 +396,7 @@ async fn themes() -> Vec<String> {
             .collect(),
         _ => Vec::new(),
     };
-    let mut cache = THEMES.lock().unwrap();
+    let mut cache = THEMES.lock().unwrap_or_else(|e| e.into_inner());
     cache.0 = agent::now();
     cache.1 = list;
     cache.1.clone()

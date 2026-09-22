@@ -4,33 +4,38 @@
 use std::collections::HashMap;
 
 #[cfg(unix)]
+use std::time::Duration;
+
+#[cfg(unix)]
 use serde_json::Value;
 
 /// The windows Hyprland knows about, keyed by pid. One cheap subprocess,
 /// same as the script; absent on any other compositor, which simply means no
-/// Focus action and no title match.
+/// Focus action and no title match. `probe` bounds it: a wedged compositor
+/// socket dies at the deadline instead of holding the blocking thread.
 #[cfg(unix)]
 pub(super) fn windows() -> HashMap<u32, Win> {
-    let Ok(out) = std::process::Command::new("hyprctl")
-        .args(["clients", "-j"])
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .output()
+    let Some(out) =
+        crate::provider::process::probe(&["hyprctl", "clients", "-j"], Duration::from_secs(2))
     else {
         return HashMap::new();
     };
-    let Ok(list) = serde_json::from_slice::<Vec<Value>>(&out.stdout) else {
+    let Ok(list) = serde_json::from_str::<Vec<Value>>(&out) else {
         return HashMap::new();
     };
     let mut by_pid: HashMap<u32, Win> = HashMap::new();
     for w in list {
-        let Some(pid) = w.get("pid").and_then(|p| p.as_i64()) else {
+        let Some(pid) = w
+            .get("pid")
+            .and_then(|p| p.as_i64())
+            .and_then(|p| u32::try_from(p).ok())
+        else {
             continue;
         };
-        if pid <= 0 || !w.get("mapped").and_then(|m| m.as_bool()).unwrap_or(false) {
+        if !w.get("mapped").and_then(|m| m.as_bool()).unwrap_or(false) {
             continue;
         }
-        let entry = by_pid.entry(pid as u32).or_insert_with(|| Win {
+        let entry = by_pid.entry(pid).or_insert_with(|| Win {
             addr: String::new(),
             class: String::new(),
             title: String::new(),

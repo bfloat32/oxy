@@ -225,7 +225,11 @@ fn warm(file: PathBuf, cmd: String) {
     {
         return;
     }
-    if !INFLIGHT.lock().unwrap().insert(file.clone()) {
+    if !INFLIGHT
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(file.clone())
+    {
         return; // `flock -n` lost — a warm is already out
     }
     tokio::spawn(async move {
@@ -244,7 +248,10 @@ fn warm(file: PathBuf, cmd: String) {
                 let _ = std::fs::remove_file(&tmp);
             }
         }
-        INFLIGHT.lock().unwrap().remove(&file);
+        INFLIGHT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&file);
     });
 }
 

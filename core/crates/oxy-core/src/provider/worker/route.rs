@@ -86,6 +86,9 @@ impl WorkerState {
         self.native_run = Some(tokio::spawn(
             async move { n.lock().await.query(ctx, ptx).await },
         ));
+        self.native_deadline = Some(Box::pin(tokio::time::sleep_until(
+            Instant::now() + Duration::from_millis(self.ext.timeout_ms),
+        )));
     }
 
     /// The command route: `prov.start` and the `search` spawned with the
@@ -275,6 +278,32 @@ impl WorkerState {
             // owed, still resolves it; the next ask reconnects.
             None => self.socket = None,
         }
+    }
+
+    /// The native run's deadline — the fuse the proc leg carries inside
+    /// `process::run` and the socket leg carries as `sock_deadline`. A
+    /// provider that never returns is a decline with prejudice: the
+    /// declared script leg gets its own bounded try rather than the
+    /// spinner hanging on a wedged native call.
+    pub(super) async fn on_native_deadline(&mut self) {
+        self.native_deadline = None;
+        // Take before abort: a dropped JoinHandle detaches the task, so
+        // its late completion lands nowhere instead of overwriting the
+        // fallback leg's run.
+        if let Some(h) = self.native_run.take() {
+            h.abort();
+        }
+        // A task wedged in a blocking call survives abort until it yields;
+        // dropping the receiver keeps its stale partials off the wire.
+        self.native_partial = None;
+        self.plog(
+            "prov.timeout",
+            json!({"ep": self.run_epoch,
+                "ms": self.ext.timeout_ms, "via": "native",
+                "refresh": self.refreshing_run}),
+        )
+        .await;
+        self.fallback().await;
     }
 
     /// The socket ask's deadline — the old `killer` timer: a daemon that

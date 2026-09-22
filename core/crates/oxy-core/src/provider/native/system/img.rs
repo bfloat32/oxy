@@ -105,6 +105,16 @@ fn walk(roots: &[PathBuf], query_lower: &str) -> Vec<Hit> {
     'roots: for root in roots {
         let mut builder = ignore::WalkBuilder::new(root);
         builder.follow_links(true);
+        // `--exclude` prunes: a `.git` or `node_modules` tree is never
+        // descended into, so its entries cannot burn the visited budget.
+        let prune_root = root.clone();
+        builder.filter_entry(move |e| {
+            if e.file_type().is_some_and(|t| t.is_dir()) {
+                !is_excluded(e.path(), &prune_root)
+            } else {
+                true
+            }
+        });
         for entry in builder.build().flatten() {
             visited += 1;
             if visited > MAX_VISITED {
@@ -197,13 +207,13 @@ fn row(hit: &Hit, home: &str, dimensions: String) -> Value {
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| hit.path.clone());
-    // `dir=${path%/*}` — everything before the last separator, or the whole
-    // string when there is none.
-    let dir = path
-        .parent()
-        .map(|d| d.to_string_lossy().into_owned())
-        .filter(|d| !d.is_empty())
-        .unwrap_or_else(|| hit.path.clone());
+    // `dir=${path%/*}` — everything before the last separator, the whole
+    // string when there is none, and "" for a file at the root: `Path`'s
+    // `parent()` would say "/" where the script said "".
+    let dir = match hit.path.rfind('/') {
+        Some(i) => hit.path[..i].to_string(),
+        None => hit.path.clone(),
+    };
     // `${dir/#$HOME/\~}` — anchored: only a leading $HOME folds.
     let subtitle = match dir.strip_prefix(home) {
         Some(rest) => format!("~{rest}"),

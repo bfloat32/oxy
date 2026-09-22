@@ -39,13 +39,14 @@ pub struct Bt;
 const BUSCTL_CALL: &str = "timeout 3s busctl --json=short call org.bluez / \
     org.freedesktop.DBus.ObjectManager GetManagedObjects";
 
-/// The fallback's three reads in one spawn, separated by the byte the script
-/// itself uses as a field separator — device chatter cannot contain it.
-const BLUETOOTHCTL_PROBE: &str = concat!(
-    "timeout 2s bluetoothctl show; printf '\\037'; ",
-    "timeout 3s bluetoothctl devices Connected; printf '\\037'; ",
-    "timeout 3s bluetoothctl devices Paired",
-);
+/// The fallback's three reads. The script ran them in one spawn separated by
+/// \037; here they run as three bounded `process::run`s at once — sequential
+/// `timeout` calls could sum past the worker deadline and read as "off".
+const BLUETOOTHCTL_PROBE: &[&str] = &[
+    "bluetoothctl show",
+    "bluetoothctl devices Connected",
+    "bluetoothctl devices Paired",
+];
 
 /// One row's worth of facts, from whichever reader ran. On the bluetoothctl
 /// path `rssi`, `battery` and `icon` are simply absent — as they are in the
@@ -520,19 +521,21 @@ async fn answer(needle: &str) -> NativeOutcome {
         None => {
             // The fallback: names and connectedness is all bluetoothctl
             // gives without a round trip per device. `show` not saying
-            // `Powered: yes` reads as off — including it not answering.
-            let probe = process::run(BLUETOOTHCTL_PROBE, Duration::from_secs(4)).await;
-            let (on, found) = match probe {
-                Some(out) => {
-                    let mut parts = out.stdout.split('\u{1f}');
-                    parse_bluetoothctl(
-                        parts.next().unwrap_or(""),
-                        parts.next().unwrap_or(""),
-                        parts.next().unwrap_or(""),
-                    )
-                }
-                None => (false, Vec::new()),
+            // `Powered: yes` reads as off — but a probe that timed out is
+            // "unknown", not "off": the script leg answers it instead of a
+            // slow stack being reported dead.
+            let (a, b, c) = tokio::join!(
+                process::run(BLUETOOTHCTL_PROBE[0], Duration::from_millis(2500)),
+                process::run(BLUETOOTHCTL_PROBE[1], Duration::from_millis(2500)),
+                process::run(BLUETOOTHCTL_PROBE[2], Duration::from_millis(2500)),
+            );
+            let (Some(a), Some(b), Some(c)) = (a, b, c) else {
+                return NativeOutcome::Fallback;
             };
+            if a.timed_out || b.timed_out || c.timed_out {
+                return NativeOutcome::Fallback;
+            }
+            let (on, found) = parse_bluetoothctl(&a.stdout, &b.stdout, &c.stdout);
             devices = found;
             on
         }

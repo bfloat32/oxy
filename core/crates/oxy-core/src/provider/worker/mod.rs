@@ -12,6 +12,8 @@
 
 mod route;
 mod state;
+#[cfg(test)]
+mod tests;
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, LazyLock};
@@ -176,6 +178,10 @@ pub async fn run(
 
             out = async { st.native_run.as_mut().unwrap().await }, if st.native_run.is_some() => {
                 st.on_native_done(out).await;
+            }
+
+            _ = async { st.native_deadline.as_mut().unwrap().await }, if st.native_deadline.is_some() => {
+                st.on_native_deadline().await;
             }
 
             raw = async { st.native_partial.as_mut().unwrap().recv().await },

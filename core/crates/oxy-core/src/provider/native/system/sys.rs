@@ -60,12 +60,15 @@ fn read_trimmed(path: &str) -> Option<String> {
         .filter(|t| !t.is_empty())
 }
 
-fn human_bytes(v: u64) -> String {
+/// `free -h --si` for memory, `df -h` for disk — the script printed SI for
+/// the first and 1024-based for the second, so the base is a parameter.
+fn human_bytes(v: u64, si: bool) -> String {
+    let base = if si { 1000.0 } else { 1024.0 };
     let units = ["B", "K", "M", "G", "T", "P"];
     let mut v = v as f64;
     let mut i = 0;
-    while v >= 1000.0 && i < units.len() - 1 {
-        v /= 1000.0;
+    while v >= base && i < units.len() - 1 {
+        v /= base;
         i += 1;
     }
     if i > 0 && v < 10.0 {
@@ -82,7 +85,19 @@ fn local_address() -> Option<(String, String)> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("1.1.1.1:80").ok()?;
     let addr = socket.local_addr().ok()?.ip().to_string();
-    (addr != "0.0.0.0").then_some((addr, String::new()))
+    // `ip route get` printed the interface as `dev` — the same name is the
+    // first field of the default route in /proc/net/route.
+    let iface = std::fs::read_to_string("/proc/net/route")
+        .ok()
+        .and_then(|t| {
+            t.lines().find_map(|l| {
+                let mut f = l.split_whitespace();
+                let (iface, dest, flags) = (f.next()?, f.next()?, f.next()?);
+                (dest == "00000000" && flags == "0003").then(|| iface.to_string())
+            })
+        })
+        .unwrap_or_default();
+    (addr != "0.0.0.0").then_some((addr, iface))
 }
 
 impl NativeExt for Sys {
@@ -101,52 +116,84 @@ impl NativeExt for Sys {
 
                 // Refreshes are gated by the same match as the rows that read
                 // them — a `sys:ip` question pays no /proc walk.
-                let mut sys = sys.lock().unwrap();
-                let mut disks = disks.lock().unwrap();
+                let mut sys = sys.lock().unwrap_or_else(|e| e.into_inner());
+                let mut disks = disks.lock().unwrap_or_else(|e| e.into_inner());
 
             // ---- battery
-            if matches(&q, "battery power charge") {
-                for entry in std::fs::read_dir("/sys/class/power_supply")
+            // The script matched `battery power charge $state` — the live
+            // state is part of the haystack, so `sys:charging` hits it.
+            {
+                let state = std::fs::read_dir("/sys/class/power_supply")
                     .into_iter()
                     .flatten()
                     .flatten()
-                {
-                    let supply = entry.path();
-                    if !entry.file_name().to_string_lossy().starts_with("BAT") {
-                        continue;
+                    .find(|e| e.file_name().to_string_lossy().starts_with("BAT"))
+                    .and_then(|e| {
+                        read_trimmed(&e.path().join("status").to_string_lossy())
+                    })
+                    .unwrap_or_default()
+                    .to_lowercase();
+                if matches(&q, &format!("battery power charge {state}")) {
+                    for entry in std::fs::read_dir("/sys/class/power_supply")
+                        .into_iter()
+                        .flatten()
+                        .flatten()
+                    {
+                        let supply = entry.path();
+                        if !entry.file_name().to_string_lossy().starts_with("BAT") {
+                            continue;
+                        }
+                        let Some(capacity) = read_trimmed(&supply.join("capacity").to_string_lossy())
+                        else {
+                            continue;
+                        };
+                        let state =
+                            read_trimmed(&supply.join("status").to_string_lossy()).unwrap_or_default();
+                        let fraction = capacity.parse::<f64>().unwrap_or(0.0) / 100.0;
+                        rows.push(json!({
+                            "id": "battery",
+                            "title": format!("{capacity}%"),
+                            "subtitle": "Battery",
+                            "detail": state,
+                            "accessory": entry.file_name().to_string_lossy(),
+                            "exec": copy_exec(&format!("{capacity}%")),
+                            "score": 95000,
+                            "progress": fraction,
+                        }));
+                        break;
                     }
-                    let Some(capacity) = read_trimmed(&supply.join("capacity").to_string_lossy())
-                    else {
-                        continue;
-                    };
-                    let state =
-                        read_trimmed(&supply.join("status").to_string_lossy()).unwrap_or_default();
-                    let fraction = capacity.parse::<f64>().unwrap_or(0.0) / 100.0;
-                    rows.push(json!({
-                        "id": "battery",
-                        "title": format!("{capacity}%"),
-                        "subtitle": "Battery",
-                        "detail": state,
-                        "accessory": entry.file_name().to_string_lossy(),
-                        "exec": copy_exec(&format!("{capacity}%")),
-                        "score": 95000,
-                        "progress": fraction,
-                    }));
-                    break;
                 }
             }
 
             // ---- uptime
             if matches(&q, "uptime running since boot") {
                 let secs = sysinfo::System::uptime();
-                let up = if secs >= 86400 {
-                    format!("{} days, {} hours", secs / 86400, (secs % 86400) / 3600)
-                } else if secs >= 3600 {
-                    format!("{} hours, {} minutes", secs / 3600, (secs % 3600) / 60)
+                // `uptime -p` lists each nonzero unit — weeks, days, hours,
+                // minutes — not just the top two.
+                let mut parts: Vec<String> = Vec::new();
+                for (n, unit) in [
+                    (secs / 604800, "week"),
+                    ((secs % 604800) / 86400, "day"),
+                    ((secs % 86400) / 3600, "hour"),
+                    ((secs % 3600) / 60, "minute"),
+                ] {
+                    if n > 0 {
+                        parts.push(format!("{n} {unit}{}", if n == 1 { "" } else { "s" }));
+                    }
+                }
+                let up = if parts.is_empty() {
+                    "0 minutes".to_string()
                 } else {
-                    format!("{} minutes", secs / 60)
+                    parts.join(", ")
                 };
-                let since = sysinfo::System::boot_time();
+                // `uptime -s` — the boot stamp as local "YYYY-MM-DD HH:MM:SS".
+                let since = jiff::Timestamp::from_second(sysinfo::System::boot_time() as i64)
+                    .map(|t| {
+                        t.to_zoned(jiff::tz::TimeZone::system())
+                            .strftime("%Y-%m-%d %H:%M:%S")
+                            .to_string()
+                    })
+                    .unwrap_or_else(|_| sysinfo::System::boot_time().to_string());
                 rows.push(json!({
                     "id": "uptime",
                     "title": up,
@@ -166,10 +213,10 @@ impl NativeExt for Sys {
                     let percent = used as f64 / total as f64 * 100.0;
                     rows.push(json!({
                         "id": "memory",
-                        "title": format!("{} of {}", human_bytes(used), human_bytes(total)),
+                        "title": format!("{} of {}", human_bytes(used, true), human_bytes(total, true)),
                         "subtitle": "Memory",
                         "detail": format!("{percent:.0}% used"),
-                        "exec": copy_exec(&format!("{} of {}", human_bytes(used), human_bytes(total))),
+                        "exec": copy_exec(&format!("{} of {}", human_bytes(used, true), human_bytes(total, true))),
                         "score": 93000,
                         "progress": used as f64 / total as f64,
                     }));
@@ -191,11 +238,11 @@ impl NativeExt for Sys {
                     };
                     rows.push(json!({
                         "id": "disk",
-                        "title": format!("{} free", human_bytes(avail)),
+                        "title": format!("{} free", human_bytes(avail, false)),
                         "subtitle": "Disk",
-                        "detail": format!("{} of {} used", human_bytes(used), human_bytes(total)),
+                        "detail": format!("{} of {} used", human_bytes(used, false), human_bytes(total, false)),
                         "accessory": format!("{percent:.0}%"),
-                        "exec": copy_exec(&format!("{} free", human_bytes(avail))),
+                        "exec": copy_exec(&format!("{} free", human_bytes(avail, false))),
                         "score": 92000,
                         "progress": used as f64 / total.max(1) as f64,
                     }));
@@ -276,17 +323,12 @@ impl NativeExt for Sys {
 
             // ---- omarchy
             if matches(&q, "omarchy version")
-                && let Some(version) = std::process::Command::new("omarchy")
-                    .arg("version")
-                    .output()
-                    .ok()
-                    .and_then(|o| {
-                        String::from_utf8_lossy(&o.stdout)
-                            .lines()
-                            .next()
-                            .map(|l| l.trim().to_string())
-                    })
-                    .filter(|v| !v.is_empty())
+                && let Some(version) = crate::provider::process::probe(
+                    &["omarchy", "version"],
+                    std::time::Duration::from_secs(2),
+                )
+                .and_then(|o| o.lines().next().map(|l| l.trim().to_string()))
+                .filter(|v| !v.is_empty())
             {
                 rows.push(json!({
                     "id": "omarchy",
@@ -300,7 +342,9 @@ impl NativeExt for Sys {
                 NativeOutcome::Rows(rows)
             })
             .await
-            .unwrap_or(NativeOutcome::Empty)
+            // A panic inside the blocking task is not "no answer" — the
+            // script leg gets its own bounded try.
+            .unwrap_or(NativeOutcome::Fallback)
         })
     }
 }

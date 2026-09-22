@@ -3,6 +3,7 @@
 
 pub mod availability;
 pub mod cache;
+pub mod lines;
 pub mod net;
 pub mod quote;
 pub mod rank;

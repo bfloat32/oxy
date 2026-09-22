@@ -130,9 +130,9 @@ struct Ranked {
 /// the name/path score, `git_dir`, the `branch:` filter against
 /// `.git/HEAD`, and the reflog's mtime. All string and metadata work;
 /// nothing in here forks.
-fn rank(query: &str, branch_filter: &str) -> Vec<Ranked> {
+fn rank(query: &str, branch_filter: &str, roots: Option<&str>) -> Vec<Ranked> {
     let mut ranked = Vec::new();
-    for repo in repos::load_repos() {
+    for repo in repos::load_repos(roots) {
         if !repo.is_dir() {
             continue;
         }
@@ -242,6 +242,7 @@ impl NativeExt for Repo {
             .unwrap_or("")
             .to_string();
         let visual = std::env::var("VISUAL").ok().filter(|v| !v.is_empty());
+        let roots = repos::roots_setting(&ctx.settings);
         Box::pin(async move {
             // The manifest's `when` also names fd, but discovery here is
             // the in-process walk in `repos` — git is the only binary the
@@ -251,9 +252,10 @@ impl NativeExt for Repo {
             }
             // Discovery and ranking are synchronous filesystem work —
             // keep them off the reactor thread.
-            let ranked = tokio::task::spawn_blocking(move || rank(&query, &branch_filter))
-                .await
-                .unwrap_or_default();
+            let ranked =
+                tokio::task::spawn_blocking(move || rank(&query, &branch_filter, roots.as_deref()))
+                    .await
+                    .unwrap_or_default();
             // No repos, or nothing survived the needle and the `branch:`
             // filter — the script's bare `exit 0`.
             if ranked.is_empty() {

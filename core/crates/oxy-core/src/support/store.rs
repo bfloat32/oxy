@@ -21,8 +21,17 @@ use serde::de::DeserializeOwned;
 ///   one a user is least likely to still want.
 ///
 /// An empty file counts as corrupt: every writer here writes an object, so a
-/// zero-byte file is a write that did not finish.
+/// zero-byte file is a write that did not finish. A file past the size a
+/// state file can honestly be is refused rather than read into memory — the
+/// daemon would otherwise be one giant dropped file away from a bad day.
 pub fn read_json<T: DeserializeOwned>(path: &Path, moved: &mut Vec<PathBuf>) -> Option<T> {
+    // 64 MiB is far past any state, settings or cache file this owns.
+    if std::fs::metadata(path)
+        .map(|m| m.len() > 64 * 1024 * 1024)
+        .unwrap_or(false)
+    {
+        return None;
+    }
     let text = std::fs::read_to_string(path).ok()?;
     match serde_json::from_str(&text) {
         Ok(value) => Some(value),

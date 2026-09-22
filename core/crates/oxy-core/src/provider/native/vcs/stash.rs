@@ -113,9 +113,9 @@ fn picker_row(repo: &StashedRepo, i: usize, now: u64) -> Value {
 /// `rev-parse` on its gitdir (a `.git` *file* resolves its `gitdir:` line)
 /// is the probe, `wc -l` on `stash list` the count, `log -1 %ct` the sort
 /// key — all by gitdir so no checkout has to exist around it.
-async fn picker_rows(now: u64) -> Vec<Value> {
+async fn picker_rows(now: u64, roots: Option<&str>) -> Vec<Value> {
     let mut found: Vec<StashedRepo> = Vec::new();
-    for path in repos::load_repos() {
+    for path in repos::load_repos(roots) {
         let Some(dir) = repos::git_dir(&path) else {
             continue;
         };
@@ -399,6 +399,7 @@ impl NativeExt for Stash {
         // The script trimmed its `$1` itself; `arg_for` already
         // whitespace-normalizes, so this only guards a hand-built Ctx.
         let query = ctx.arg.trim().to_string();
+        let roots = repos::roots_setting(&ctx.settings);
         Box::pin(async move {
             if !on_path("git") {
                 return NativeOutcome::Fallback;
@@ -409,7 +410,7 @@ impl NativeExt for Stash {
             // which would otherwise pin the answer to the current repo and
             // leave the picker unreachable whenever that repo holds one.
             if query.is_empty() {
-                let rows = picker_rows(now).await;
+                let rows = picker_rows(now, roots.as_deref()).await;
                 return if rows.is_empty() {
                     NativeOutcome::Empty
                 } else {
@@ -417,7 +418,7 @@ impl NativeExt for Stash {
                 };
             }
 
-            let Some((repo, leftover)) = repos::resolve(&query).await else {
+            let Some((repo, leftover)) = repos::resolve(&query, roots.as_deref()).await else {
                 return NativeOutcome::Empty;
             };
             let needle = leftover.to_lowercase();

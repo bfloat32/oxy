@@ -338,6 +338,7 @@ impl NativeExt for Branch {
         _progress: UnboundedSender<Vec<Value>>,
     ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
         let arg = ctx.arg.clone();
+        let roots = repos::roots_setting(&ctx.settings);
         Box::pin(async move {
             // The manifest's `when`, re-checked — a worker asks a native
             // even when it fails, and here that is a decline, not a list.
@@ -346,7 +347,7 @@ impl NativeExt for Branch {
             }
             // `oxy-repo --resolve`: which repo this query is about, and the
             // leftover as the filter — the same read `git:` and `stash:` make.
-            let Some((repo, leftover)) = repos::resolve(&arg).await else {
+            let Some((repo, leftover)) = repos::resolve(&arg, roots.as_deref()).await else {
                 return NativeOutcome::Empty;
             };
             if !repo.join(".git").exists() {

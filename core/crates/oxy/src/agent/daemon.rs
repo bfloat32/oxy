@@ -37,7 +37,7 @@ use std::time::Duration;
 #[cfg(unix)]
 use serde_json::{Value, json};
 #[cfg(unix)]
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 
 #[cfg(unix)]
 use crate::agent::run::{Run, Turn};
@@ -514,9 +514,10 @@ fn accept_client(
 
     let line_tx = tx.clone();
     tokio::spawn(async move {
-        let mut lines = BufReader::new(reader).lines();
+        let mut reader = BufReader::new(reader);
+        let mut buf = Vec::with_capacity(4096);
         loop {
-            match lines.next_line().await {
+            match oxy_core::support::lines::next(&mut reader, &mut buf, agent::MAX_LINE).await {
                 Ok(Some(line)) => {
                     if line_tx.send(Event::Line(id, line)).is_err() {
                         return;

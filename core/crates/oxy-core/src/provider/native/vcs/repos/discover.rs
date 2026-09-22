@@ -3,7 +3,7 @@
 //! `git:`, `branch:` and `stash:`.
 
 use std::path::{Path, PathBuf};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use super::{mtime, now_secs, oxy_state_dir, repo_pin, state};
 use crate::provider::native::util::on_path;
@@ -77,11 +77,14 @@ fn roots_from(setting: Option<&str>, home: &Path) -> Vec<PathBuf> {
         .collect()
 }
 
-pub(crate) fn repo_roots() -> Vec<PathBuf> {
-    let setting = std::env::var("OXY_REPO_ROOTS")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .or_else(|| std::env::var("OXY_ROOTS").ok().filter(|v| !v.is_empty()));
+/// The script reads `${OXY_REPO_ROOTS:-${OXY_ROOTS:-}}` — and for the script
+/// leg `OXY_ROOTS` *is* the `roots` setting, injected as env. The native leg
+/// keeps the same precedence: an exported `OXY_REPO_ROOTS` still wins, then
+/// the settings value, then a bare exported `OXY_ROOTS`.
+pub(crate) fn repo_roots(setting: Option<&str>) -> Vec<PathBuf> {
+    let setting = crate::provider::process::env_or_login("OXY_REPO_ROOTS")
+        .or_else(|| setting.filter(|v| !v.is_empty()).map(str::to_string))
+        .or_else(|| crate::provider::process::env_or_login("OXY_ROOTS"));
     roots_from(setting.as_deref(), &paths::home())
 }
 
@@ -114,12 +117,18 @@ pub(crate) fn git_dir(repo: &Path) -> Option<PathBuf> {
     dotgit.is_dir().then_some(dotgit)
 }
 
+/// The walk's own budget. A wedged `spawn_blocking` is only aborted at the
+/// await — a slow tree (network mount, huge checkout) would hold the worker
+/// to its fuse every keystroke, so the walk yields what it found when the
+/// budget runs out. A truly-stuck syscall still needs the script leg.
+const DISCOVER_BUDGET: Duration = Duration::from_millis(2500);
+
 /// One discovery pass over a root: `.git` directories, and `.git` *files*
 /// whose named gitdir still exists (worktrees and submodules — a stale file
 /// left behind by a deleted worktree is not a repo). `ignore::WalkBuilder`
 /// keeps fd's semantics: hidden entries included (`.git` is hidden), gitignore
 /// respected, links not followed, six levels like `--max-depth 6`.
-fn discover_in(root: &Path, out: &mut Vec<PathBuf>) {
+fn discover_in(root: &Path, deadline: Instant, out: &mut Vec<PathBuf>) {
     let mut builder = ignore::WalkBuilder::new(root);
     builder
         .hidden(false)
@@ -129,6 +138,9 @@ fn discover_in(root: &Path, out: &mut Vec<PathBuf>) {
             e.depth() == 0 || !EXCLUDED_DIRS.contains(&e.file_name().to_string_lossy().as_ref())
         });
     for entry in builder.build().flatten() {
+        if Instant::now() >= deadline {
+            break;
+        }
         if entry.file_name() != ".git" {
             continue;
         }
@@ -149,9 +161,13 @@ fn discover_in(root: &Path, out: &mut Vec<PathBuf>) {
 }
 
 fn discover(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let deadline = Instant::now() + DISCOVER_BUDGET;
     let mut out = Vec::new();
     for root in roots {
-        discover_in(root, &mut out);
+        if Instant::now() >= deadline {
+            break;
+        }
+        discover_in(root, deadline, &mut out);
     }
     out.sort();
     out.dedup();
@@ -203,8 +219,8 @@ fn load_repos_from(state: &Path, roots: &[PathBuf]) -> Vec<PathBuf> {
     repos
 }
 
-pub(crate) fn load_repos() -> Vec<PathBuf> {
-    load_repos_from(&oxy_state_dir(), &repo_roots())
+pub(crate) fn load_repos(roots_setting: Option<&str>) -> Vec<PathBuf> {
+    load_repos_from(&oxy_state_dir(), &repo_roots(roots_setting))
 }
 
 // Which repo a word names
@@ -384,8 +400,8 @@ pub(crate) fn resolve_with(
 
 /// `oxy-repo --resolve`: which repo this query is about, and what is left
 /// over as the filter. No git calls — string work over the cached list.
-pub(crate) async fn resolve(raw: &str) -> Option<(PathBuf, String)> {
-    let repos = load_repos();
+pub(crate) async fn resolve(raw: &str, roots: Option<&str>) -> Option<(PathBuf, String)> {
+    let repos = load_repos(roots);
     let (named, leftover) = split_resolve(raw, &repos);
     let target = match named {
         Some(t) => t,

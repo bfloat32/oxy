@@ -92,8 +92,12 @@ pub(super) fn shift_decimal(literal: &str, places: usize) -> String {
 pub(super) fn magnitude_after(text: &str, end: usize) -> Option<(usize, usize)> {
     let rest = &text[end..];
     for (suffix, zeros) in MAGNITUDE_SUFFIX {
-        if rest.len() >= suffix.len()
-            && rest[..suffix.len()].eq_ignore_ascii_case(suffix)
+        // `get` first: `rest` can open with a multibyte character (€, £),
+        // and an unchecked slice lands mid-char — a panic on every
+        // unscoped keystroke that carried one.
+        if rest
+            .get(..suffix.len())
+            .is_some_and(|p| p.eq_ignore_ascii_case(suffix))
             && !rest[suffix.len()..]
                 .chars()
                 .next()
@@ -110,14 +114,16 @@ pub(super) fn magnitude_after(text: &str, end: usize) -> Option<(usize, usize)> 
             // `1.5 milhoes de reais`: the preposition belongs to the number
             // word, and qalc has no use for it.
             let mut end = end + whole.len();
-            if let Ok(Some(t)) = Regex::new(r"(?i)^\s+(de|of)(?![A-Za-z])")
-                .unwrap()
-                .find(tail)
-            {
+            if let Ok(Some(t)) = de_of_re().find(tail) {
                 end += t.end();
             }
             return Some((zeros, end));
         }
     }
     None
+}
+
+fn de_of_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)^\s+(de|of)(?![A-Za-z])").unwrap())
 }

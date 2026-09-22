@@ -1,7 +1,5 @@
 use fancy_regex::Regex;
-use serde_json::Value;
 
-use super::Calc;
 use super::money::{names_currency, with_currencies};
 use super::numbers::with_numbers;
 use super::units::ambiguous_unit;
@@ -82,34 +80,6 @@ pub(super) fn parse(query: &str, stdout: &str) -> Option<String> {
     // qalc writes a U+2212 in an exponent; nothing that reads the answer back
     // knows it. Unicode stays on for μs and Ωs; this one character goes.
     Some(raw.replace('−', "-"))
-}
-
-// Accepted answers, so `calc:` has something to recall. The file is the one
-// `oxy-calc-history` writes; this provider records to it directly.
-pub(super) fn load_history() -> Vec<(String, String)> {
-    let path = crate::settings::paths::calc_history_file();
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Vec::new();
-    };
-    serde_json::from_str::<Value>(&text)
-        .ok()
-        .and_then(|v| v.as_array().cloned())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|e| {
-            Some((
-                e.get("expression")?.as_str()?.to_string(),
-                e.get("answer")?.as_str()?.to_string(),
-            ))
-        })
-        .collect()
-}
-
-#[allow(dead_code)]
-impl Calc {
-    fn history(&self) -> &[(String, String)] {
-        &self.history
-    }
 }
 
 #[cfg(test)]

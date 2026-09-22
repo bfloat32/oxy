@@ -140,11 +140,14 @@ fn key3(session: &str, field: Option<&Value>) -> Option<String> {
     }
 }
 
-/// `.snap.<key>[]?` — the iterate that `?` makes safe on scalars, plus the
-/// error it does not cover: `.key` on a snapshot that is not an object.
+/// `.snap.<key>[]?` — the `?` swallows `.key` on a non-object too, so a
+/// malformed `snapshot` iterates empty rather than failing the session that
+/// holds it (and, through the caller, every sibling session with it).
 /// Object values iterate their members, as jq does.
 fn members<'a>(snap: &'a Value, key: &str) -> Option<Vec<&'a Value>> {
-    let snap = snap.as_object()?;
+    let Some(snap) = snap.as_object() else {
+        return Some(Vec::new());
+    };
     match snap.get(key) {
         None | Some(Value::Null) => Some(Vec::new()),
         Some(Value::Array(list)) => Some(list.iter().collect()),

@@ -43,7 +43,7 @@ async fn socket_alive() -> bool {
 #[cfg(unix)]
 async fn talk(payload: Value, timeout: std::time::Duration) -> Option<Value> {
     use interprocess::local_socket::{GenericFilePath, ToFsName, tokio::prelude::*};
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncWriteExt, BufReader};
 
     let inner = async {
         let name = agent::socket_path()
@@ -58,8 +58,11 @@ async fn talk(payload: Value, timeout: std::time::Duration) -> Option<Value> {
         let line = agent::to_wire(&payload) + "\n";
         writer.write_all(line.as_bytes()).await.ok()?;
         writer.flush().await.ok()?;
-        let mut lines = BufReader::new(reader).lines();
-        let line = lines.next_line().await.ok()??;
+        let mut reader = BufReader::new(reader);
+        let mut buf = Vec::with_capacity(4096);
+        let line = oxy_core::support::lines::next(&mut reader, &mut buf, agent::MAX_LINE)
+            .await
+            .ok()??;
         serde_json::from_str::<Value>(&line).ok()
     };
     tokio::time::timeout(timeout, inner).await.ok().flatten()

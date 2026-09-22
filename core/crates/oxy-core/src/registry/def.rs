@@ -231,10 +231,13 @@ impl Extension {
             search,
             when: s(raw.when.as_ref()),
             glyph: s(raw.glyph.as_ref()),
-            min_chars: num(raw.min_chars.as_ref(), 1.0).max(0.0) as usize,
-            debounce_ms: num(raw.debounce_ms.as_ref(), 200.0).max(0.0) as u64,
-            timeout_ms: num(raw.timeout_ms.as_ref(), 4000.0).max(0.0) as u64,
-            max_rows: num(raw.max_rows.as_ref(), 8.0).max(0.0) as usize,
+            // Every numeric has a ceiling: these land in
+            // `Instant::now() + Duration::from_millis(v)` and similar sums,
+            // where an unclamped `1e19` overflows and panics the worker.
+            min_chars: num(raw.min_chars.as_ref(), 1.0).clamp(0.0, 256.0) as usize,
+            debounce_ms: num(raw.debounce_ms.as_ref(), 200.0).clamp(0.0, 5_000.0) as u64,
+            timeout_ms: num(raw.timeout_ms.as_ref(), 4000.0).clamp(0.0, 120_000.0) as u64,
+            max_rows: num(raw.max_rows.as_ref(), 8.0).clamp(0.0, 500.0) as usize,
             tier: rank::tier(&{
                 let t = s(raw.tier.as_ref());
                 if t.is_empty() {
@@ -248,8 +251,8 @@ impl Extension {
                 if v.is_empty() { "list".to_string() } else { v }
             },
             always: raw.always == Some(true),
-            cache_ms: num(raw.cache_ms.as_ref(), 0.0).max(0.0) as u64,
-            refresh_ms: num(raw.refresh_ms.as_ref(), 0.0).max(0.0) as u64,
+            cache_ms: num(raw.cache_ms.as_ref(), 0.0).clamp(0.0, 86_400_000.0) as u64,
+            refresh_ms: num(raw.refresh_ms.as_ref(), 0.0).clamp(0.0, 86_400_000.0) as u64,
             socket,
             native,
             actions: raw.actions.unwrap_or_default(),

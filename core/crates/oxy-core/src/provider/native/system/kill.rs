@@ -29,9 +29,11 @@ use crate::provider::{Ctx, NativeExt, NativeOutcome};
 const MAX_ROWS: usize = 20;
 
 /// The process table behind a lock: the query body runs on `spawn_blocking`,
-/// where the `/proc` refresh and the `hyprctl` call belong.
+/// where the `/proc` refresh and the `hyprctl` call belong. `primed` is set
+/// after the first refresh — `cpu_usage` is a delta against the previous
+/// refresh, so the first answer is a lifetime average, not a live one.
 pub struct Kill {
-    sys: std::sync::Arc<std::sync::Mutex<sysinfo::System>>,
+    sys: std::sync::Arc<std::sync::Mutex<(sysinfo::System, bool)>>,
 }
 
 impl Default for Kill {
@@ -43,7 +45,7 @@ impl Default for Kill {
 impl Kill {
     pub fn new() -> Kill {
         Kill {
-            sys: std::sync::Arc::new(std::sync::Mutex::new(sysinfo::System::new())),
+            sys: std::sync::Arc::new(std::sync::Mutex::new((sysinfo::System::new(), false))),
         }
     }
 }
@@ -65,7 +67,10 @@ impl NativeExt for Kill {
         let arg = ctx.arg.clone();
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-            let mut sys = sys.lock().unwrap();
+            // A panic while the guard is live must not brick `kill:` for the
+            // daemon's lifetime — the table is self-healing on next refresh.
+            let (ref mut sys, ref mut primed) = *sys.lock().unwrap_or_else(|e| e.into_inner());
+            let cpu_live = *primed;
             let query = arg.trim().to_lowercase();
             let bare = query.is_empty();
 
@@ -75,6 +80,8 @@ impl NativeExt for Kill {
             let wins = windows();
             sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
             sys.refresh_memory();
+            sys.refresh_cpu_usage();
+            *primed = true;
             let my_uid = sysinfo::get_current_pid()
                 .ok()
                 .and_then(|pid| sys.process(pid))
@@ -126,9 +133,12 @@ impl NativeExt for Kill {
                 if forbidden.contains(&pid) {
                     continue;
                 }
-                // The same net the script cast for the shell it ran under.
+                // The same net the script cast for the shell it ran under:
+                // the launcher, the shell, and every `oxy-*` helper whose
+                // path contains /oxy/ — killing any of them kills this.
                 if cmd.contains("quickshell")
                     || cmd.contains("omarchy") && cmd.contains("shell")
+                    || cmd.contains("/oxy/")
                     || cmd.contains("oxyd")
                 {
                     continue;
@@ -300,8 +310,10 @@ impl NativeExt for Kill {
                 if !home.is_empty() && cmd.starts_with(&format!("{home}/")) {
                     cmd = format!("~/{}", &cmd[home.len() + 1..]);
                 }
-                if cmd.len() > 96 {
-                    cmd = format!("{}\u{2026}", &cmd[..95]);
+                // The script's `substr(line, 1, 95)` is character-based —
+                // `cmd[..95]` would panic mid-codepoint on a multibyte line.
+                if cmd.chars().count() > 96 {
+                    cmd = format!("{}\u{2026}", cmd.chars().take(95).collect::<String>());
                 }
 
                 // A window title says what the thing is; a command line says
@@ -347,7 +359,11 @@ impl NativeExt for Kill {
                     "user": user_of(&users, c.uid.as_ref()),
                     "own": c.uid == me,
                     "cpu": format!("{:.1}", fam.cpu).parse::<f64>().unwrap_or(0.0),
-                    "cpuLive": true,
+                    // cpu_usage is a delta against the previous refresh; the
+                    // first answer after start is a lifetime average — the
+                    // script said the same with cpuLive:false until its
+                    // snapshot file existed.
+                    "cpuLive": cpu_live,
                     "mem": fam.mem,
                     "memShare": if total > 0 { fam.mem as f64 / total as f64 } else { 0.0 },
                     "age": c.age,
@@ -381,7 +397,9 @@ impl NativeExt for Kill {
             NativeOutcome::Rows(rows)
             })
             .await
-            .unwrap_or(NativeOutcome::Empty)
+            // A panic inside the blocking task is not "no answer" — the
+            // script leg gets its own bounded try.
+            .unwrap_or(NativeOutcome::Fallback)
         })
     }
 }

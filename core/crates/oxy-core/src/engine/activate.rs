@@ -22,6 +22,7 @@ impl Engine {
         action_index: Option<usize>,
         shift: bool,
         ctrl: bool,
+        depth: u8,
     ) {
         // Shift+Enter is the second action, by keystroke rather than through
         // the panel — "ask ChatGPT" instead of Google.
@@ -102,7 +103,7 @@ impl Engine {
             .or_else(|| row.actions.as_ref().and_then(|a| a.first()).cloned());
 
         if let Some(action) = action {
-            return self.run_action(&row, &action).await;
+            return self.run_action(&row, &action, depth).await;
         }
 
         if row.pending {
@@ -156,7 +157,7 @@ impl Engine {
 
     /// An action on a row: the panel's choice, or Enter on a row that carries
     /// one.
-    pub(super) async fn run_action(&mut self, row: &Row, action: &Action) {
+    pub(super) async fn run_action(&mut self, row: &Row, action: &Action, depth: u8) {
         // A confirmation asks in the box: a dialog would take the keyboard
         // from an overlay that holds it exclusively.
         if !action.confirm.is_empty() && self.pending_confirm.as_deref() != Some(action.id.as_str())
@@ -231,8 +232,18 @@ impl Engine {
                 return;
             }
             "stats" => {
-                let cached = self.shared.cache.lock().unwrap().entries();
-                let checks = self.shared.availability.lock().unwrap().stats();
+                let cached = self
+                    .shared
+                    .cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .entries();
+                let checks = self
+                    .shared
+                    .availability
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .stats();
                 let usage = self.usage.summary();
                 let mut text = format!(
                     "{} extensions · {} answers cached · {} checks, {} ok",
@@ -275,9 +286,19 @@ impl Engine {
         self.remember_mru(&action.extra);
 
         if let Some(row_key) = action.extra.get("row").and_then(|v| v.as_str()) {
-            // A self-reference: activate the row it names.
+            // A self-reference: activate the row it names — bounded, because
+            // two actions naming each other would recurse until the stack
+            // ran out.
+            if depth >= 8 {
+                self.emit_log(
+                    "act.chain",
+                    json!({ "row": row_key, "note": "self-reference chain exceeded 8 hops" }),
+                )
+                .await;
+                return;
+            }
             let key = row_key.to_string();
-            return Box::pin(self.on_activate(&key, None, false, false)).await;
+            return Box::pin(self.on_activate(&key, None, false, false, depth + 1)).await;
         }
 
         if !action.exec.is_empty() {

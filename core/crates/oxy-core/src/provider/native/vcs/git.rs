@@ -357,11 +357,12 @@ impl NativeExt for Git {
         _progress: UnboundedSender<Vec<Value>>,
     ) -> Pin<Box<dyn Future<Output = NativeOutcome> + Send + 'a>> {
         let arg = ctx.arg.clone();
+        let roots = repos::roots_setting(&ctx.settings);
         Box::pin(async move {
             if !on_path("git") {
                 return NativeOutcome::Fallback;
             }
-            let Some((repo, leftover)) = repos::resolve(&arg).await else {
+            let Some((repo, leftover)) = repos::resolve(&arg, roots.as_deref()).await else {
                 return NativeOutcome::Empty;
             };
             // `-e $repo/.git`, the script's own check after --resolve.

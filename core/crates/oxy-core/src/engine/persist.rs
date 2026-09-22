@@ -62,8 +62,10 @@ impl Engine {
         if trailing_newline && !text.ends_with('\n') {
             text.push('\n');
         }
-        // Atomic, the way every file this launcher owns is written.
-        let tmp = path.with_extension("tmp");
+        // Atomic, the way every file this launcher owns is written — and a
+        // per-writer tmp name, since a second engine (`oxy test --local`)
+        // can write the same file.
+        let tmp = path.with_extension(format!("{}.tmp", std::process::id()));
         if std::fs::write(&tmp, &text).is_ok() {
             let _ = std::fs::rename(&tmp, &path);
         }

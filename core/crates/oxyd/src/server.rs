@@ -5,7 +5,7 @@ use interprocess::local_socket::traits::tokio::{Listener as _, Stream as _};
 use oxy_core::engine::EngineCmd;
 use oxy_core::provider::worker::Shared;
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::{broadcast, mpsc};
 
 use crate::{clipboard, wire};
@@ -17,8 +17,14 @@ pub(crate) async fn serve(
     hello_src: Arc<Shared>,
 ) {
     loop {
-        let Ok(stream) = listener.accept().await else {
-            continue;
+        let stream = match listener.accept().await {
+            Ok(s) => s,
+            // A persistent accept error (fd exhaustion, EMFILE) would spin
+            // this loop hot — a short wait keeps the failure cheap.
+            Err(_) => {
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                continue;
+            }
         };
         let cmd_tx = engine_cmd.clone();
         let events = bcast.subscribe();
@@ -47,10 +53,14 @@ async fn serve_with<R, W>(
     R: tokio::io::AsyncRead + Unpin,
     W: tokio::io::AsyncWrite + Unpin,
 {
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
+    // Outside the loop: a cancelled select arm keeps the partial line.
+    let mut buf = Vec::with_capacity(4096);
     loop {
         tokio::select! {
-            line = lines.next_line() => {
+            line = oxy_core::support::lines::next(
+                &mut reader, &mut buf, oxy_core::support::lines::MAX_LINE,
+            ) => {
                 let Ok(Some(line)) = line else { return };
                 let line = line.trim();
                 // One parse per line — `op` is read off the same `Value` the

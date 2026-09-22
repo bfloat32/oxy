@@ -149,8 +149,12 @@ fn symbol_re() -> &'static Regex {
             "r\\$", "us\\$", "u\\$s", "c\\$", "ca\\$", "a\\$", "au\\$", "nz\\$", "hk\\$", "s\\$",
             "nt\\$", "mx\\$", "cn¥", "₺", "₩", "₫", "₴", "฿", "₪",
         ];
-        Regex::new(&format!("(^|[^0-9A-Za-z])({})(?![A-Za-z])", keys.join("|")))
-            .expect("symbol regex compiles")
+        // `(?i)`, as the JS carried: `US$ 50` and `us$ 50` are the same price.
+        Regex::new(&format!(
+            "(?i)(^|[^0-9A-Za-z])({})(?![A-Za-z])",
+            keys.join("|")
+        ))
+        .expect("symbol regex compiles")
     })
 }
 

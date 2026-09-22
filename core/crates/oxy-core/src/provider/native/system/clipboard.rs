@@ -63,16 +63,23 @@ fn history_path() -> std::path::PathBuf {
 
 fn query_blocking(cache: Arc<Mutex<Option<ClipCache>>>, arg: &str) -> NativeOutcome {
     let hist = history_path();
-    let mtime = std::fs::metadata(&hist).and_then(|m| m.modified()).ok();
+    let meta = std::fs::metadata(&hist).ok();
+    let mtime = meta.as_ref().and_then(|m| m.modified().ok());
     let entries = {
-        let mut c = cache.lock().unwrap();
+        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
         match c.as_ref() {
             Some(c) if c.stamp == mtime && mtime.is_some() => c.entries.clone(),
             _ => {
-                let parsed: Vec<Value> = std::fs::read_to_string(&hist)
-                    .ok()
-                    .and_then(|t| serde_json::from_str(&t).ok())
-                    .unwrap_or_default();
+                // A history file past 32 MiB is not a clipboard, it is an
+                // accident — refuse the parse rather than pay it per
+                // keystroke the way the script's jq did.
+                let parsed: Vec<Value> = match meta.as_ref().map(|m| m.len()) {
+                    Some(len) if len > 32 * 1024 * 1024 => Vec::new(),
+                    _ => std::fs::read_to_string(&hist)
+                        .ok()
+                        .and_then(|t| serde_json::from_str(&t).ok())
+                        .unwrap_or_default(),
+                };
                 let entries = Arc::new(parsed);
                 *c = Some(ClipCache {
                     stamp: mtime,
@@ -161,7 +168,7 @@ impl NativeExt for Clip {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || query_blocking(cache, &arg))
                 .await
-                .unwrap_or(NativeOutcome::Empty)
+                .unwrap_or(NativeOutcome::Fallback)
         })
     }
 }

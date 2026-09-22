@@ -72,7 +72,7 @@ pub(crate) async fn run(args: &[String]) -> i32 {
 
 /// The daemon route: connect, ask, print the first full answer.
 async fn query_daemon(text: &str) -> std::io::Result<i32> {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncWriteExt, BufReader};
 
     let stream = connect_daemon().await?;
     let (reader, mut writer) = tokio::io::split(stream);
@@ -88,9 +88,14 @@ async fn query_daemon(text: &str) -> std::io::Result<i32> {
             .as_bytes(),
         )
         .await?;
-    let mut lines = BufReader::new(reader).lines();
+    let mut reader = BufReader::new(reader);
+    let mut buf = Vec::with_capacity(4096);
     let deadline = std::time::Instant::now() + Duration::from_secs(8);
-    while let Ok(Ok(Some(line))) = tokio::time::timeout_at(deadline.into(), lines.next_line()).await
+    while let Ok(Ok(Some(line))) = tokio::time::timeout_at(
+        deadline.into(),
+        oxy_core::support::lines::next(&mut reader, &mut buf, oxy_core::support::lines::MAX_LINE),
+    )
+    .await
     {
         let Ok(v) = serde_json::from_str::<Value>(&line) else {
             continue;

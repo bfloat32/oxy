@@ -119,7 +119,7 @@ fn parse_stamp(s: &str) -> Option<i64> {
     if b.len() < 19 || b[4] != b'-' || b[7] != b'-' || (b[10] != b'T' && b[10] != b't') {
         return None;
     }
-    let num = |a: usize, z: usize| s[a..z].parse::<i64>().ok();
+    let num = |a: usize, z: usize| s.get(a..z)?.parse::<i64>().ok();
     let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
     let (h, mi, sec) = (num(11, 13)?, num(14, 16)?, num(17, 19)?);
     if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
@@ -127,7 +127,7 @@ fn parse_stamp(s: &str) -> Option<i64> {
     }
     let mut stamp = days_from_civil(y, mo, d) * 86400 + h * 3600 + mi * 60 + sec;
     // A trailing offset: Z means UTC, ±HH:MM (or ±HHMM) shifts the other way.
-    let rest = &s[19..];
+    let rest = s.get(19..)?;
     if rest.starts_with('+') || rest.starts_with('-') {
         let digits: String = rest[1..].chars().filter(|c| c.is_ascii_digit()).collect();
         if digits.len() >= 4 {
@@ -171,7 +171,7 @@ impl NativeExt for Recent {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || query_blocking(cache, &arg))
                 .await
-                .unwrap_or(NativeOutcome::Empty)
+                .unwrap_or(NativeOutcome::Fallback)
         })
     }
 }
@@ -201,7 +201,7 @@ fn query_blocking(cache: Arc<Mutex<Option<RecentCache>>>, arg: &str) -> NativeOu
     let xbel = crate::settings::paths::data_home().join("recently-used.xbel");
     let mtime = std::fs::metadata(&xbel).and_then(|m| m.modified()).ok();
     let entries = {
-        let mut c = cache.lock().unwrap();
+        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
         match c.as_ref() {
             Some(c) if c.stamp == mtime && mtime.is_some() => c.entries.clone(),
             _ => match load_entries(&xbel) {
@@ -255,7 +255,14 @@ fn query_blocking(cache: Arc<Mutex<Option<RecentCache>>>, arg: &str) -> NativeOu
         let (ext, kind, size) = if is_dir {
             (String::new(), "folder", String::new())
         } else {
-            let ext = if base.len() > 1 && base[1..].contains('.') {
+            // The script's `?*.*` glob is character-based: `base[1..]` would
+            // panic on a basename whose first codepoint is multibyte.
+            let after_first = base
+                .char_indices()
+                .nth(1)
+                .map(|(i, _)| &base[i..])
+                .unwrap_or("");
+            let ext = if after_first.contains('.') {
                 let e = base.rsplit('.').next().unwrap_or("");
                 if e.len() <= 5 {
                     e.to_string()

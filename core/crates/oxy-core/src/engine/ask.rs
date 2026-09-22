@@ -90,11 +90,19 @@ impl Engine {
         let worker_tx = self.worker_tx.clone();
         let title = spec.title.clone();
         self.ask_task = Some(tokio::spawn(async move {
-            use tokio::io::AsyncBufReadExt;
             let mut answered = false;
             if let Some(stdout) = child.stdout.take() {
-                let mut lines = tokio::io::BufReader::new(stdout).lines();
-                while let Ok(Some(line)) = lines.next_line().await {
+                // The same bounded reader the sockets use: a provider that
+                // streams one giant line cannot grow the buffer without end.
+                let mut reader = tokio::io::BufReader::new(stdout);
+                let mut buf = Vec::with_capacity(4096);
+                while let Ok(Some(line)) = crate::support::lines::next(
+                    &mut reader,
+                    &mut buf,
+                    crate::support::lines::MAX_LINE,
+                )
+                .await
+                {
                     answered = true;
                     if evt.send(EngineEvent::Answer { line }).await.is_err() {
                         return;

@@ -56,11 +56,16 @@ impl Board {
         // `tz:` query does, and the setting wins over the file for the usual
         // reason: the thing just typed means more than the file edited last
         // month. Empty stays empty — a cleared field is not an instruction.
+        // A profile-exported OXY_ZONES is the same channel for a script, so
+        // the native reads it through the login environment too.
         let env = settings
             .settings_for("tz")
             .and_then(|m| m.get("zones"))
             .and_then(Value::as_str)
-            .unwrap_or("");
+            .filter(|v| !v.is_empty())
+            .map(str::to_string)
+            .or_else(|| crate::provider::process::env_or_login("OXY_ZONES"))
+            .unwrap_or_default();
         if !env.is_empty() {
             let probe = Board {
                 local: local.clone(),

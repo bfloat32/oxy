@@ -37,8 +37,15 @@ impl Cal {
         Cal { week_start: None }
     }
 
-    fn week_start(&mut self) -> i64 {
-        *self.week_start.get_or_insert_with(week_start)
+    async fn week_start(&mut self) -> i64 {
+        match self.week_start {
+            Some(w) => w,
+            None => {
+                let w = week_start().await;
+                self.week_start = Some(w);
+                w
+            }
+        }
     }
 }
 
@@ -132,19 +139,12 @@ fn month_row(
     })
 }
 
-fn week_start() -> i64 {
+async fn week_start() -> i64 {
     // `locale first_weekday` says it on glibc systems; anything else is
     // Sunday-first, which is also the answer the fallback gives off it.
-    std::process::Command::new("locale")
-        .arg("first_weekday")
-        .output()
-        .ok()
-        .and_then(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .trim()
-                .parse::<i64>()
-                .ok()
-        })
+    crate::provider::process::run("locale first_weekday", std::time::Duration::from_secs(2))
+        .await
+        .and_then(|o| o.stdout.trim().parse::<i64>().ok())
         .map(|v| if v == 2 { 1 } else { 0 })
         .unwrap_or(0)
 }
@@ -158,7 +158,7 @@ impl NativeExt for Cal {
         Box::pin(async move {
             let (ty, tm, _td) = today();
             // Resolved once and handed to every row — see the field comment.
-            let ws = self.week_start();
+            let ws = self.week_start().await;
             let mut lower = ctx.arg.trim().to_lowercase();
             lower = translate_month(&lower);
 

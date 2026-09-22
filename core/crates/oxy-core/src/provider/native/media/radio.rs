@@ -90,7 +90,7 @@ async fn alive() -> bool {
 #[cfg(unix)]
 async fn mpv_ipc(commands: &[Vec<Value>]) -> Option<Vec<Value>> {
     use std::os::unix::fs::FileTypeExt;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncWriteExt, BufReader};
     use tokio::net::UnixStream;
 
     let sock = sock_path();
@@ -117,11 +117,11 @@ async fn mpv_ipc(commands: &[Vec<Value>]) -> Option<Vec<Value>> {
         }
         wr.flush().await.ok()?;
 
-        let mut lines = BufReader::new(rd).lines();
+        let mut rd = BufReader::new(rd);
         let mut got: Vec<Option<Value>> = vec![None; commands.len()];
         let mut have = 0usize;
         while have < commands.len() {
-            let line = match lines.next_line().await {
+            let line = match crate::support::lines::next(&mut rd).await {
                 Ok(Some(line)) => line,
                 _ => break,
             };

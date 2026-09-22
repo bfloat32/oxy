@@ -35,15 +35,21 @@ static PLUGIN_ID: LazyLock<String> = LazyLock::new(|| {
 /// Run `bash -lc env -0` once — the daemon calls this at start, not per
 /// command. Returns how many variables landed, for the `env` log line.
 pub async fn capture_login_env() -> usize {
-    let out = Command::new("bash")
+    // A login profile can block on anything — a keychain prompt, a network
+    // mount — so the probe itself gets a deadline rather than a free pass,
+    // and kill_on_drop reaps the child when the timeout drops the wait.
+    let mut probe = Command::new("bash");
+    probe
         .arg("-lc")
         .arg("env -0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()
-        .await;
-    let Ok(out) = out else { return 0 };
+        .kill_on_drop(true);
+    #[cfg(unix)]
+    probe.process_group(0);
+    let out = tokio::time::timeout(Duration::from_secs(8), probe.output()).await;
+    let Ok(Ok(out)) = out else { return 0 };
     let text = String::from_utf8_lossy(&out.stdout);
     let vars: Vec<(String, String)> = text
         .split('\0')
@@ -64,22 +70,81 @@ pub async fn capture_login_env() -> usize {
         .collect();
     let n = vars.len();
     if n > 0 {
-        *LOGIN_ENV.write().unwrap() = Some(Arc::new(vars));
+        *LOGIN_ENV.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(vars));
     }
     n
+}
+
+/// A variable the way a script child sees it: the daemon's own environment
+/// first, then the captured login environment under it. Native providers ask
+/// here rather than `std::env::var` so a profile-exported `OXY_*` reaches
+/// them the same reach it reaches `bash -c`.
+pub(crate) fn env_or_login(name: &str) -> Option<String> {
+    if let Ok(v) = std::env::var(name)
+        && !v.is_empty()
+    {
+        return Some(v);
+    }
+    LOGIN_ENV
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()?
+        .iter()
+        .find(|(k, _)| k == name)
+        .map(|(_, v)| v.clone())
+        .filter(|v| !v.is_empty())
 }
 
 /// `bash -c body` under the captured login environment plus the daemon's
 /// plugin id. Borrows from the shared map — `envs` copies at call time, so
 /// nothing here allocates past the pairs the OS needs anyway.
+///
+/// Every child leads its own process group: `bash -c` forks for pipelines
+/// and `xargs`, and killing the bash pid alone would leave those running.
 fn shell_command(body: &str) -> Command {
     let mut cmd = Command::new("bash");
     cmd.arg("-c").arg(body);
-    if let Some(env) = &*LOGIN_ENV.read().unwrap() {
+    if let Some(env) = &*LOGIN_ENV.read().unwrap_or_else(|e| e.into_inner()) {
         cmd.envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())));
     }
     cmd.env("OXY_PLUGIN_ID", &*PLUGIN_ID);
+    #[cfg(unix)]
+    cmd.process_group(0);
     cmd
+}
+
+/// Signal the group a `process_group(0)` child leads — shelled out, the way
+/// the agent runner does it, because there is no libc dep here. `kill` on
+/// PATH is POSIX; `child.kill()` remains the fallback everywhere it fails.
+#[cfg(unix)]
+fn signal_group(pid: u32, sig: &str) {
+    let _ = std::process::Command::new("kill")
+        .args([sig, &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+}
+
+/// TERM the group, give it a moment, KILL what ignored it, and still call
+/// `kill()` as the fallback — a child that was never a group leader (or a
+/// platform without one) dies the way it always did.
+async fn kill_tree(child: &mut tokio::process::Child) {
+    #[cfg(unix)]
+    {
+        if child.try_wait().ok().flatten().is_none() {
+            signal_group(child.id().unwrap_or(0), "-TERM");
+            let deadline = std::time::Instant::now() + Duration::from_millis(500);
+            while child.try_wait().ok().flatten().is_none() && std::time::Instant::now() < deadline
+            {
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            if child.try_wait().ok().flatten().is_none() {
+                signal_group(child.id().unwrap_or(0), "-KILL");
+            }
+        }
+    }
+    let _ = child.kill().await;
 }
 
 /// What a run left behind: stdout, the exit code when the wait returned one,
@@ -104,12 +169,25 @@ pub async fn run(body: &str, timeout: Duration) -> Option<Finished> {
 
     let mut stdout = child.stdout.take()?;
     let read = async move {
+        // Bounded memory, unbounded drain: a script that floods stdout past
+        // the cap keeps being read to EOF (so it exits normally and `code`
+        // is real) but only the head is kept. Past the cap a row set is
+        // noise anyway.
+        const CAP: usize = 4 * 1024 * 1024;
         let mut buf = Vec::with_capacity(8192);
-        stdout.read_to_end(&mut buf).await.ok().map(|_| buf)
+        let mut chunk = [0u8; 8192];
+        while let Ok(n) = stdout.read(&mut chunk).await {
+            if n == 0 {
+                break;
+            }
+            let room = CAP.saturating_sub(buf.len());
+            buf.extend_from_slice(&chunk[..n.min(room)]);
+        }
+        buf
     };
 
     match tokio::time::timeout(timeout, read).await {
-        Ok(Some(buf)) => {
+        Ok(buf) => {
             // The read finished at EOF, so the child has already exited or is
             // about to — `wait` returns promptly and the code is real.
             let code = child.wait().await.ok().and_then(|s| s.code());
@@ -120,12 +198,46 @@ pub async fn run(body: &str, timeout: Duration) -> Option<Finished> {
             })
         }
         _ => {
-            let _ = child.kill().await;
+            kill_tree(&mut child).await;
             Some(Finished {
                 stdout: String::new(),
                 code: None,
                 timed_out: true,
             })
+        }
+    }
+}
+
+/// A synchronous bounded probe for callers that cannot await — a
+/// `OnceLock` initializer has no async in it. `try_wait` polls instead of
+/// blocking on `wait`, so a wedged child dies at the deadline rather than
+/// holding the thread. The block still occupies its thread: this is for
+/// once-per-process probes, never anything per-keystroke.
+pub fn probe(argv: &[&str], timeout: Duration) -> Option<String> {
+    let mut child = std::process::Command::new(argv.first()?)
+        .args(&argv[1..])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                use std::io::Read;
+                let mut out = String::new();
+                child.stdout.take()?.read_to_string(&mut out).ok()?;
+                return Some(out);
+            }
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
     }
 }
@@ -166,7 +278,7 @@ pub async fn check(body: &str) -> bool {
     match tokio::time::timeout(Duration::from_secs(8), child.wait()).await {
         Ok(Ok(status)) => status.success(),
         _ => {
-            let _ = child.kill().await;
+            kill_tree(&mut child).await;
             false
         }
     }

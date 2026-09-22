@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio::sync::mpsc;
 
 use crate::provider::worker::WorkerMsg;
@@ -35,12 +35,14 @@ fn name_for(path: &str) -> std::io::Result<interprocess::local_socket::Name<'sta
     }
     #[cfg(windows)]
     {
-        // A configured path is still a path on Windows for now; the daemon's
-        // own name is namespaced. Extension sockets are a Unix feature.
-        let _ = path;
-        "oxy-ext-unsupported"
-            .to_string()
-            .to_ns_name::<GenericNamespaced>()
+        // Extension sockets are a Unix feature, but if one is ever bound
+        // here the name must still be per-extension — one shared pipe name
+        // would cross-talk every socket provider into the same listener.
+        // `DefaultHasher::new` is fixed-seed SipHash: stable across runs.
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        path.hash(&mut h);
+        format!("oxy-ext-{:016x}", h.finish()).to_ns_name::<GenericNamespaced>()
     }
 }
 
@@ -69,7 +71,10 @@ pub struct SocketPush {
 /// ask, where they arrived as answers to a question they did not answer.
 pub struct SocketChan {
     pub req: mpsc::UnboundedSender<SocketReq>,
-    pub push: mpsc::UnboundedReceiver<SocketPush>,
+    /// Bounded: a flooding daemon queues at most 64 answers before the
+    /// newest ones start dropping — a push is a state refresh, and the one
+    /// after it carries the same state.
+    pub push: mpsc::Receiver<SocketPush>,
 }
 
 /// Connect and spawn the actor, bounded by `timeout`. The task exits when
@@ -90,11 +95,27 @@ pub async fn connect(
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::TimedOut, "connect timed out"))??;
 
     let (req_tx, mut req_rx) = mpsc::unbounded_channel::<SocketReq>();
-    let (push_tx, push_rx) = mpsc::unbounded_channel::<SocketPush>();
+    let (push_tx, push_rx) = mpsc::channel::<SocketPush>(64);
+    // Serialized requests for the writer task — bounded, so a peer that has
+    // stopped reading cannot stall the reader behind a full pipe.
+    let (out_tx, mut out_rx) = mpsc::channel::<String>(64);
 
     tokio::spawn(async move {
         let (reader, mut writer) = tokio::io::split(stream);
-        let mut lines = BufReader::new(reader).lines();
+        // The write half is its own task: a peer that stops reading would
+        // otherwise freeze this select behind a write_all that never ends.
+        tokio::spawn(async move {
+            while let Some(line) = out_rx.recv().await {
+                if writer.write_all(line.as_bytes()).await.is_err() || writer.flush().await.is_err()
+                {
+                    return;
+                }
+            }
+        });
+        let mut reader = BufReader::new(reader);
+        // Kept outside the loop: a cancelled select arm leaves the partial
+        // line in `buf` for the next poll rather than dropping it.
+        let mut buf = Vec::with_capacity(4096);
 
         loop {
             tokio::select! {
@@ -107,13 +128,15 @@ pub async fn connect(
                     })
                     .to_string()
                         + "\n";
-                    if writer.write_all(line.as_bytes()).await.is_err()
-                        || writer.flush().await.is_err()
-                    {
+                    // A full out-channel means the writer is wedged; the
+                    // question's deadline answers it rather than the queue.
+                    if out_tx.try_send(line).is_err() {
                         return;
                     }
                 }
-                line = lines.next_line() => {
+                line = crate::support::lines::next(
+                    &mut reader, &mut buf, crate::support::lines::MAX_LINE,
+                ) => {
                     let Ok(Some(line)) = line else { return };
                     let Ok(payload) = serde_json::from_str::<Value>(line.trim()) else {
                         // A daemon that writes garbage should not take the
@@ -136,12 +159,15 @@ pub async fn connect(
                     let Some(rows) = payload.get("rows").and_then(|r| r.as_array()) else {
                         continue;
                     };
-                    if push_tx
-                        .send(SocketPush {
+                    // Full channel: the worker is behind, and the dropped
+                    // push's state arrives with the next one anyway. A
+                    // closed one means the worker is gone — the connection
+                    // dies with it, as before.
+                    if let Err(mpsc::error::TrySendError::Closed(_)) =
+                        push_tx.try_send(SocketPush {
                             epoch,
                             rows: rows.clone(),
                         })
-                        .is_err()
                     {
                         return;
                     }
@@ -161,6 +187,7 @@ mod tests {
     use super::*;
     use interprocess::local_socket::ListenerOptions;
     use std::sync::Arc;
+    use tokio::io::AsyncBufReadExt;
 
     fn test_path() -> String {
         #[cfg(unix)]

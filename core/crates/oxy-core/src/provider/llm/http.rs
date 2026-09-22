@@ -8,7 +8,7 @@
 
 use std::io;
 
-use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::net::tcp::OwnedReadHalf;
 
@@ -23,8 +23,26 @@ pub struct Url {
 }
 
 impl Url {
+    /// An endpoint must be loopback — `localhost`, any `127.x`, or `::1`.
+    /// The module is loopback-only on purpose: a remote `http://` endpoint
+    /// would take the question — and the bearer key — in plaintext.
+    fn loopback(host: &str) -> bool {
+        let host = host.trim_matches(|c| c == '[' || c == ']');
+        if host.eq_ignore_ascii_case("localhost") || host == "::1" {
+            return true;
+        }
+        host.parse::<std::net::Ipv4Addr>()
+            .map(|a| a.octets()[0] == 127)
+            .unwrap_or(false)
+    }
+
     pub fn parse(raw: &str) -> Option<Url> {
         let rest = raw.trim().strip_prefix("http://")?;
+        // Nothing that lands in the request head may carry a control
+        // character — a `\r\n` here is a smuggled header.
+        if rest.bytes().any(|b| b < 0x20 || b == 0x7f) {
+            return None;
+        }
         let (authority, path) = match rest.find('/') {
             Some(i) => (&rest[..i], &rest[i..]),
             None => (rest, "/"),
@@ -32,11 +50,21 @@ impl Url {
         if authority.is_empty() || authority.contains('@') {
             return None;
         }
-        let (host, port) = match authority.rsplit_once(':') {
-            Some((h, p)) => (h, p.parse::<u16>().ok()?),
-            None => (authority, 80),
+        let (host, port) = if let Some(rest) = authority.strip_prefix('[') {
+            // `[::1]` or `[::1]:8080` — the v6 colons are not the port's.
+            let (h, tail) = rest.split_once(']')?;
+            match tail.strip_prefix(':') {
+                Some(p) => (h, p.parse::<u16>().ok()?),
+                None if tail.is_empty() => (h, 80),
+                None => return None,
+            }
+        } else {
+            match authority.rsplit_once(':') {
+                Some((h, p)) => (h, p.parse::<u16>().ok()?),
+                None => (authority, 80),
+            }
         };
-        if host.is_empty() {
+        if host.is_empty() || !Self::loopback(host) {
             return None;
         }
         Some(Url {
@@ -83,6 +111,14 @@ impl Response {
                 }
                 return Ok(Some(line));
             }
+            if self.buf.len() - self.pos > 16 * 1024 * 1024 {
+                // One line past 16 MiB is not an answer, it is a runaway —
+                // a model's whole reply does not come down as a single line.
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "response line exceeded 16 MiB",
+                ));
+            }
             if !self.read_more().await? {
                 // A body whose last line has no newline is still a line: a
                 // JSON reply from a server that does not end it with one
@@ -107,8 +143,14 @@ impl Response {
         }
         if self.chunked {
             if self.chunk_left == 0 {
-                let mut size_line = String::new();
-                if self.reader.read_line(&mut size_line).await? == 0 {
+                // The size line is a few hex digits; anything past 4 KiB of
+                // it is garbage, and a truncated read fails the parse below
+                // into `size == 0` — fails closed, at EOF.
+                let mut size_buf = Vec::with_capacity(64);
+                let size_line = crate::support::lines::next(&mut self.reader, &mut size_buf, 4096)
+                    .await?
+                    .unwrap_or_default();
+                if size_buf.is_empty() && size_line.is_empty() {
                     self.eof = true;
                     return Ok(false);
                 }
@@ -171,7 +213,30 @@ async fn send(
     body: Option<&str>,
     headers: &[(&str, &str)],
 ) -> io::Result<Response> {
-    let stream = TcpStream::connect((url.host.as_str(), url.port)).await?;
+    // Header fields land verbatim in the request head: a name outside the
+    // token set or a value carrying a control character is a smuggled
+    // header, not a config.
+    for (name, value) in headers {
+        let bad_name = name.is_empty()
+            || name
+                .bytes()
+                .any(|b| !(b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)));
+        let bad_value = value.bytes().any(|b| (b < 0x20 && b != b'\t') || b == 0x7f);
+        if bad_name || bad_value {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "control characters in a request header",
+            ));
+        }
+    }
+    // A hung endpoint must not hold the turn forever: connect is the first
+    // read in disguise, and it gets the same deadline the head does.
+    let stream = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        TcpStream::connect((url.host.as_str(), url.port)),
+    )
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "connect timed out"))??;
     stream.set_nodelay(true).ok();
     let (read, mut write) = stream.into_split();
 
@@ -201,39 +266,53 @@ async fn send(
     write.flush().await?;
 
     let mut reader = BufReader::new(read);
-    let mut status_line = String::new();
-    if reader.read_line(&mut status_line).await? == 0 {
-        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "no response"));
-    }
-    let status = status_line
-        .split_whitespace()
-        .nth(1)
-        .and_then(|s| s.parse::<u16>().ok())
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bad status line"))?;
+    // The head is read with the same bounded line reader the sockets use:
+    // `read_line` would have let one header line grow to whatever the peer
+    // sent, and a silent endpoint gets a deadline rather than a stall.
+    let head = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        let mut head_buf = Vec::new();
+        let status_line =
+            match crate::support::lines::next(&mut reader, &mut head_buf, 16 * 1024).await? {
+                None => {
+                    return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "no response"));
+                }
+                Some(l) => l,
+            };
+        let status = status_line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|s| s.parse::<u16>().ok())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "bad status line"))?;
 
-    // Headers: `Transfer-Encoding` decides how the body is framed; a
-    // `Content-Length` body is read to EOF, which is what a streamed answer
-    // with `Connection: close` does anyway. `Retry-After` is kept for the
-    // caller that decides whether to send the question again.
-    let mut chunked = false;
-    let mut retry_after = None;
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).await? == 0 {
-            break;
-        }
-        let trimmed = line.trim_end();
-        if trimmed.is_empty() {
-            break;
-        }
-        if let Some((name, value)) = trimmed.split_once(':') {
-            if name.eq_ignore_ascii_case("transfer-encoding") {
-                chunked = value.to_ascii_lowercase().contains("chunked");
-            } else if name.eq_ignore_ascii_case("retry-after") {
-                retry_after = crate::provider::llm::retry::parse_retry_after(value);
+        // Headers: `Transfer-Encoding` decides how the body is framed; a
+        // `Content-Length` body is read to EOF, which is what a streamed
+        // answer with `Connection: close` does anyway. `Retry-After` is kept
+        // for the caller that decides whether to send the question again.
+        let mut chunked = false;
+        let mut retry_after = None;
+        for _ in 0..128 {
+            let Some(line) =
+                crate::support::lines::next(&mut reader, &mut head_buf, 16 * 1024).await?
+            else {
+                break;
+            };
+            let trimmed = line.trim_end();
+            if trimmed.is_empty() {
+                break;
+            }
+            if let Some((name, value)) = trimmed.split_once(':') {
+                if name.eq_ignore_ascii_case("transfer-encoding") {
+                    chunked = value.to_ascii_lowercase().contains("chunked");
+                } else if name.eq_ignore_ascii_case("retry-after") {
+                    retry_after = crate::provider::llm::retry::parse_retry_after(value);
+                }
             }
         }
-    }
+        Ok((status, chunked, retry_after, reader))
+    })
+    .await
+    .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "response head timed out"))?;
+    let (status, chunked, retry_after, reader) = head?;
 
     Ok(Response {
         status,
@@ -264,16 +343,24 @@ mod tests {
         assert_eq!(u.port, 80);
         assert_eq!(u.path, "/v1/chat");
 
-        let u = Url::parse("  http://box:8080  ").unwrap();
-        assert_eq!(u.path, "/");
+        // `[::1]` and any `127.x` are loopback; a bare `[::1]` gets port 80.
+        let u = Url::parse("http://[::1]:8080/v1").unwrap();
+        assert_eq!(u.host, "::1");
+        assert_eq!(u.port, 8080);
+        assert_eq!(Url::parse("http://127.0.0.2:11434/").unwrap().port, 11434);
 
-        // https, a missing scheme, credentials and a bad port are all refused:
-        // a plaintext connect to somewhere else is the one mistake to avoid.
+        // https, a missing scheme, credentials, a bad port — and anything
+        // that is not loopback, because plaintext to a remote host would
+        // carry the bearer key with it.
         assert!(Url::parse("https://api.example.com/v1").is_none());
         assert!(Url::parse("api.example.com:1234/v1").is_none());
-        assert!(Url::parse("http://user:pw@host/v1").is_none());
-        assert!(Url::parse("http://host:notaport/v1").is_none());
+        assert!(Url::parse("http://user:pw@localhost/v1").is_none());
+        assert!(Url::parse("http://localhost:notaport/v1").is_none());
         assert!(Url::parse("http://").is_none());
+        assert!(Url::parse("http://box:8080/v1").is_none());
+        assert!(Url::parse("http://192.168.1.5:11434/v1").is_none());
+        // A header smuggled through the path is refused at parse.
+        assert!(Url::parse("http://localhost/x\r\nX: 1").is_none());
     }
 
     /// One stub server, both framings: the point of the client is that a

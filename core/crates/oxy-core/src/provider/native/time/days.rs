@@ -93,12 +93,16 @@ pub fn valid_ymd(y: i64, m: i64, d: i64) -> bool {
     (1..=12).contains(&m) && d >= 1 && d <= days_in_month(y, m)
 }
 
+/// `date +%F` — the *local* civil date. Reading the epoch as a UTC day
+/// instead puts `today` a day early for the first hours of every UTC+X
+/// morning (and late in a UTC−X evening), which is most of the planet.
 pub fn today() -> (i64, i64, i64) {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    civil_from_days(secs / 86400)
+    let d = jiff::Zoned::now().date();
+    (
+        i64::from(d.year()),
+        i64::from(d.month()),
+        i64::from(d.day()),
+    )
 }
 
 /// Today as a day number.

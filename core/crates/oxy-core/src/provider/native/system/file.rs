@@ -127,7 +127,18 @@ impl NativeExt for Files {
                 .filters
                 .get("in")
                 .map(|r| {
-                    let r = r.replacen('~', &crate::settings::paths::home().to_string_lossy(), 1);
+                    // `${root/#\~/…}` — an anchored tilde only: a `~`
+                    // mid-path is a character, not a home.
+                    let home = crate::settings::paths::home()
+                        .to_string_lossy()
+                        .into_owned();
+                    let r = if let Some(rest) = r.strip_prefix("~/") {
+                        format!("{home}/{rest}")
+                    } else if r == "~" {
+                        home
+                    } else {
+                        r.clone()
+                    };
                     Path::new(&r).to_path_buf()
                 })
                 .filter(|r| r.is_dir())
@@ -136,10 +147,14 @@ impl NativeExt for Files {
             // The walk is blocking IO; keep it off the reactor thread.
             let query_lower = query.to_lowercase();
             let home = crate::settings::paths::home();
-            let hits =
+            let Ok(hits) =
                 tokio::task::spawn_blocking(move || walk(&root, &query_lower, &format, &home))
                     .await
-                    .unwrap_or_default();
+            else {
+                // A panic inside the walk is not "no files" — the script leg
+                // gets its own bounded try.
+                return NativeOutcome::Fallback;
+            };
 
             if hits.is_empty() {
                 return NativeOutcome::Empty;
@@ -198,6 +213,17 @@ fn walk(root: &Path, query_lower: &str, format: &str, home: &Path) -> Vec<Hit> {
 
     let mut builder = WalkBuilder::new(root);
     builder.hidden(false).follow_links(true).git_ignore(true);
+    // fd's `--exclude` prunes, it does not filter: a `node_modules` tree
+    // never gets descended into at all. Filtering only the files would burn
+    // the whole visited budget walking their contents.
+    let prune_root = root.to_path_buf();
+    builder.filter_entry(move |e| {
+        if e.file_type().is_some_and(|t| t.is_dir()) {
+            !is_excluded(e.path(), &prune_root)
+        } else {
+            true
+        }
+    });
 
     let mut scored: Vec<(i64, String, String)> = Vec::new();
     let now = SystemTime::now()
@@ -279,9 +305,14 @@ fn walk(root: &Path, query_lower: &str, format: &str, home: &Path) -> Vec<Hit> {
                 ) as i64,
             );
 
-            // A dot at the start is a hidden file, not an extension:
-            // ".bashrc" has no type mark.
-            let ext = if base.len() > 1 && !base.starts_with('.') && base.contains('.') {
+            // The script's `?*.*` glob: a dot after the first character is
+            // an extension — ".bashrc" has none, ".config.json" has JSON.
+            let after_first = base
+                .char_indices()
+                .nth(1)
+                .map(|(i, _)| &base[i..])
+                .unwrap_or("");
+            let ext = if after_first.contains('.') {
                 let e = base.rsplit('.').next().unwrap_or("");
                 if e.len() > 5 {
                     String::new()

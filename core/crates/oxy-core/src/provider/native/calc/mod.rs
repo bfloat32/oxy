@@ -21,13 +21,11 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::provider::{Ctx, NativeExt, NativeOutcome};
 
-use self::answer::{for_qalc, load_history, parse, reading, undecidable};
+use self::answer::{for_qalc, parse, reading, undecidable};
 use self::money::{is_money, names_currency, with_currencies};
 use self::numbers::{EXPONENT_FROM, precision_for};
 
-pub struct Calc {
-    history: Vec<(String, String)>,
-}
+pub struct Calc;
 
 impl Default for Calc {
     fn default() -> Self {
@@ -37,9 +35,7 @@ impl Default for Calc {
 
 impl Calc {
     pub fn new() -> Calc {
-        Calc {
-            history: load_history(),
-        }
+        Calc
     }
 }
 
@@ -69,11 +65,12 @@ fn operator_re() -> &'static Regex {
 }
 fn conversion_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b(to|in|into|as|para|pra)\b").unwrap())
+    // `(?i)`, as the JS gate carried: `5 KM IN MILES` is a conversion.
+    RE.get_or_init(|| Regex::new(r"(?i)\b(to|in|into|as|para|pra)\b").unwrap())
 }
 fn money_preposition_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b(em|en)\b").unwrap())
+    RE.get_or_init(|| Regex::new(r"(?i)\b(em|en)\b").unwrap())
 }
 
 /// The whole call: what qalc is asked and how the answer is written are one
@@ -136,13 +133,17 @@ impl NativeExt for Calc {
             })]);
 
             let argv = command(&expression);
-            let output = tokio::process::Command::new(&argv[0])
-                .args(&argv[1..])
+            // `-m 200` already asks qalc to bound itself; the outer timeout is
+            // for the spawn that never comes back at all, and kill_on_drop
+            // makes the aborted run take the child with it.
+            let mut cmd = tokio::process::Command::new(&argv[0]);
+            cmd.args(&argv[1..])
                 .stdin(std::process::Stdio::null())
                 .stderr(std::process::Stdio::null())
-                .output()
-                .await;
-            let Ok(output) = output else {
+                .kill_on_drop(true);
+            let output =
+                tokio::time::timeout(std::time::Duration::from_secs(4), cmd.output()).await;
+            let Ok(Ok(output)) = output else {
                 return NativeOutcome::Empty;
             };
             let stdout = String::from_utf8_lossy(&output.stdout);

@@ -33,8 +33,9 @@ use crate::support::quote::quote;
 
 pub struct Vol;
 
-/// Every reading gets its own bound — a native run has no worker deadline.
-const CALL: Duration = Duration::from_secs(2);
+/// Every reading gets its own bound, sized so the two sequential reads of
+/// the output chain fit the manifest's 3s window when joined with input.
+const CALL: Duration = Duration::from_millis(1500);
 
 /// The script's per-row word lists: a bare `vol:` answers both rows, a word
 /// answers whichever list contains it — `[[ ${words,,} == *"$needle"* ]]`.
@@ -168,37 +169,51 @@ impl NativeExt for Vol {
             if !on_path("pactl") {
                 return NativeOutcome::Fallback;
             }
-            let mut rows = Vec::new();
+            let want_out = matches(&needle, "volume output speaker sound mute");
+            // wpctl rather than pactl for the source, because that is what
+            // omarchy-audio-input-mute drives and both have to agree about
+            // which mic is the default one.
+            let want_in = on_path("wpctl") && matches(&needle, "volume input microphone mic mute");
 
-            if matches(&needle, "volume output speaker sound mute") {
+            // The two chains are independent; joined, their sequential
+            // reads fit the manifest's window rather than summing past it.
+            let out_chain = async {
+                if !want_out {
+                    return None;
+                }
                 let sink = run("omarchy-audio-output-sink", CALL)
                     .await
                     .map(|f| f.stdout.trim().to_string())
                     .unwrap_or_default();
-                if !sink.is_empty() {
-                    let quoted = quote(&sink);
-                    let get_volume = format!("pactl get-sink-volume {quoted}");
-                    let get_mute = format!("pactl get-sink-mute {quoted}");
-                    let (volume, mute) = tokio::join!(run(&get_volume, CALL), run(&get_mute, CALL));
-                    let volume = volume.map(|f| f.stdout).unwrap_or_default();
-                    let mute = mute.map(|f| f.stdout).unwrap_or_default();
-                    if let Some(row) = output_row(&sink, &volume, &mute) {
-                        rows.push(row);
-                    }
+                if sink.is_empty() {
+                    return None;
                 }
-            }
-
-            // wpctl rather than pactl for the source, because that is what
-            // omarchy-audio-input-mute drives and both have to agree about
-            // which mic is the default one.
-            if on_path("wpctl") && matches(&needle, "volume input microphone mic mute") {
-                let out = run("wpctl get-volume @DEFAULT_AUDIO_SOURCE@", CALL)
+                let quoted = quote(&sink);
+                let get_volume = format!("pactl get-sink-volume {quoted}");
+                let get_mute = format!("pactl get-sink-mute {quoted}");
+                let (volume, mute) = tokio::join!(run(&get_volume, CALL), run(&get_mute, CALL));
+                let volume = volume.map(|f| f.stdout).unwrap_or_default();
+                let mute = mute.map(|f| f.stdout).unwrap_or_default();
+                output_row(&sink, &volume, &mute)
+            };
+            let in_chain = async {
+                if !want_in {
+                    return String::new();
+                }
+                run("wpctl get-volume @DEFAULT_AUDIO_SOURCE@", CALL)
                     .await
                     .map(|f| f.stdout)
-                    .unwrap_or_default();
-                rows.push(input_row(&out));
-            }
+                    .unwrap_or_default()
+            };
+            let (out_row, in_out) = tokio::join!(out_chain, in_chain);
 
+            let mut rows = Vec::new();
+            if let Some(row) = out_row {
+                rows.push(row);
+            }
+            if want_in {
+                rows.push(input_row(&in_out));
+            }
             NativeOutcome::Rows(rows)
         })
     }

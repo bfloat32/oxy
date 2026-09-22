@@ -98,15 +98,21 @@ impl NativeExt for Bri {
                 return NativeOutcome::Empty;
             }
 
-            let Some(value) = run(TOOL, CALL).await.and_then(|f| level(&f.stdout)) else {
+            // The reading and the monitor name are independent — joined, so
+            // two bounded calls cannot sum past the manifest's window.
+            let (level_out, mon_out) = tokio::join!(
+                run(TOOL, CALL),
+                run("omarchy-hyprland-monitor-focused", CALL),
+            );
+
+            let Some(value) = level_out.and_then(|f| level(&f.stdout)) else {
                 // A desktop with a monitor that answers no control channel
                 // has no reading at all — not an error, not a row saying so.
                 return NativeOutcome::Empty;
             };
 
             // The monitor name is context, never something that fails.
-            let monitor = run("omarchy-hyprland-monitor-focused", CALL)
-                .await
+            let monitor = mon_out
                 .map(|f| f.stdout.trim_end_matches('\n').to_string())
                 .filter(|m| !m.is_empty())
                 .unwrap_or_else(|| "Display".to_string());

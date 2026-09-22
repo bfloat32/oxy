@@ -302,7 +302,7 @@ impl Engine {
                 if let Some(row) = target {
                     let key = row.key.clone();
                     self.pending_activate = None;
-                    Box::pin(self.on_activate(&key, action, false, false)).await;
+                    Box::pin(self.on_activate(&key, action, false, false, 0)).await;
                 }
             }
         }

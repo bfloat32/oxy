@@ -6,7 +6,7 @@ use crate::cli::connect_daemon;
 /// JSON line each way — the same wire `Shell.qml` speaks, for debugging the
 /// protocol and for integrators poking at it.
 pub(crate) async fn run() -> i32 {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    use tokio::io::{AsyncWriteExt, BufReader};
 
     let stream = match connect_daemon().await {
         Ok(s) => s,
@@ -16,15 +16,25 @@ pub(crate) async fn run() -> i32 {
         }
     };
     let (reader, mut writer) = tokio::io::split(stream);
-    let mut out_lines = BufReader::new(reader).lines();
+    let mut out_reader = BufReader::new(reader);
+    let mut out_buf = Vec::with_capacity(4096);
 
     // Forward stdin lines to the socket; when stdin closes, keep reading for
-    // a moment so the last command's events still print.
+    // a moment so the last command's events still print. The bounded reader
+    // here and below keeps a giant line — piped or received — from growing
+    // the buffer without end.
     let (eof_tx, mut eof_rx) = tokio::sync::watch::channel(());
     tokio::spawn(async move {
         let stdin = tokio::io::stdin();
-        let mut in_lines = BufReader::new(stdin).lines();
-        while let Ok(Some(line)) = in_lines.next_line().await {
+        let mut in_reader = BufReader::new(stdin);
+        let mut in_buf = Vec::with_capacity(4096);
+        while let Ok(Some(line)) = oxy_core::support::lines::next(
+            &mut in_reader,
+            &mut in_buf,
+            oxy_core::support::lines::MAX_LINE,
+        )
+        .await
+        {
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -48,7 +58,9 @@ pub(crate) async fn run() -> i32 {
         let next = tokio::select! {
             biased;
             _ = eof_rx.changed() => None,
-            line = out_lines.next_line() => Some(line),
+            line = oxy_core::support::lines::next(
+                &mut out_reader, &mut out_buf, oxy_core::support::lines::MAX_LINE,
+            ) => Some(line),
         };
         match next {
             Some(Ok(Some(line))) => {
@@ -59,9 +71,17 @@ pub(crate) async fn run() -> i32 {
             Some(Ok(None)) | Some(Err(_)) => break,
             // stdin closed: from here every read is inside the grace window.
             None => {
-                while let Ok(Ok(Some(line))) =
-                    tokio::time::timeout(GRACE, out_lines.next_line()).await
-                {
+                loop {
+                    let line = tokio::time::timeout(
+                        GRACE,
+                        oxy_core::support::lines::next(
+                            &mut out_reader,
+                            &mut out_buf,
+                            oxy_core::support::lines::MAX_LINE,
+                        ),
+                    )
+                    .await;
+                    let Ok(Ok(Some(line))) = line else { break };
                     println!("{line}");
                     let _ = std::io::Write::flush(&mut std::io::stdout());
                 }

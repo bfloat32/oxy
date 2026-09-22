@@ -122,14 +122,44 @@ fn plan(q: &Question) -> Vec<(String, Leg)> {
 /// verbatim: one process, every expression, one line in one line out.
 async fn run_batch(exprs: &[String]) -> Option<Vec<String>> {
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let path = std::env::temp_dir().join(format!(
-        "oxy-unit-{}-{}",
-        std::process::id(),
-        SEQ.fetch_add(1, Ordering::Relaxed)
-    ));
-    if std::fs::write(&path, format!("{}\n", exprs.join("\n"))).is_err() {
+    // `mktemp` parity: the runtime dir is the user's own 0700 space when it
+    // exists, and `create_new` is O_EXCL — a pre-planted symlink at the
+    // guessable name is a failed write, not a followed one.
+    let dir = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|d| !d.as_os_str().is_empty())
+        .unwrap_or_else(std::env::temp_dir);
+    let pid = std::process::id();
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut tries = 0;
+    let (path, mut file) = loop {
+        let path = dir.join(format!(
+            "oxy-unit-{pid}-{}",
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        match opts.open(&path) {
+            Ok(f) => break (path, f),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && tries < 8 => {
+                tries += 1;
+            }
+            Err(_) => return None,
+        }
+    };
+    use std::io::Write;
+    if file
+        .write_all(format!("{}\n", exprs.join("\n")).as_bytes())
+        .is_err()
+    {
+        let _ = std::fs::remove_file(&path);
         return None;
     }
+    drop(file);
     let body = format!(
         "qalc -t -m 200 -set 'conv none' -f {}",
         quote(&path.to_string_lossy())

@@ -79,7 +79,7 @@ impl NativeExt for Theme {
             // business on a runtime worker thread.
             tokio::task::spawn_blocking(move || answer(&names, &current, &arg, cap))
                 .await
-                .unwrap_or(NativeOutcome::Empty)
+                .unwrap_or(NativeOutcome::Fallback)
         })
     }
 }

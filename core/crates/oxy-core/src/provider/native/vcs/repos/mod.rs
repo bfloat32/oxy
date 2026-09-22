@@ -39,6 +39,18 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// The `roots` value from the `repo` extension's settings — what the script
+/// leg receives injected as `OXY_ROOTS`. Every provider that resolves
+/// through the roots list reads it so a settings-UI edit applies here too.
+pub(crate) fn roots_setting(settings: &crate::settings::Settings) -> Option<String> {
+    settings
+        .settings_for("repo")
+        .and_then(|m| m.get("roots"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string)
+}
+
 fn mtime(path: &Path) -> u64 {
     path.metadata()
         .and_then(|m| m.modified())

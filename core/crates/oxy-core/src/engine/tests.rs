@@ -141,7 +141,7 @@ async fn confirmed_action_arms_and_confirms() {
     let row = Row::new("action:clear-all", "actions");
 
     engine.on_query("/clear").await;
-    engine.run_action(&row, &action).await;
+    engine.run_action(&row, &action, 0).await;
     assert_eq!(
         engine.pending_confirm.as_deref(),
         Some("clear-all"),
@@ -150,7 +150,7 @@ async fn confirmed_action_arms_and_confirms() {
     assert_eq!(engine.raw, "/clear-all ");
 
     // The second Enter is the answer: the action runs and disarms.
-    engine.run_action(&row, &action).await;
+    engine.run_action(&row, &action, 0).await;
     assert!(engine.pending_confirm.is_none());
 }
 

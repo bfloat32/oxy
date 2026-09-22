@@ -21,14 +21,14 @@ pub(crate) async fn case_preflight(id: &str) -> bool {
         "timezone" | "tz" => {
             "timedatectl list-timezones >/dev/null 2>&1 || test -d /usr/share/zoneinfo"
         }
-        // The git family's cases describe throwaway repos that `cases.py`
-        // builds under `$HOME/repos`. This runner has no fixture builder yet
-        // (§4.7), so without them the honest answer is a skip rather than
-        // thirty failures that look like broken ports.
+        // The git family's cases describe throwaway repos that the fixture
+        // builds under `$HOME/repos`; without them the honest answer is a
+        // skip rather than thirty failures that look like broken ports.
         "git" | "stash" | "branch" => "test -d \"$HOME/repos/oxy-fixture/.git\"",
         "repo" => "test -d \"$HOME/repos/omarchy/.git\"",
         // The agent cases describe the draft a configured agent produces in a
-        // Hyprland session; `cases.py` stubs the CLI, and nothing here does.
+        // Hyprland session; the fixture stubs `claude`, but the session verbs
+        // are still Hyprland's.
         "agent" => "command -v hyprctl",
         _ => return true,
     };

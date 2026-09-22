@@ -320,7 +320,11 @@ impl Engine {
         // not as it stood at boot — reloads land here.
         let mut sorted: Vec<String> = self.known.iter().cloned().collect();
         sorted.sort();
-        *self.shared.hello_keywords.write().unwrap() = Arc::new(sorted);
+        *self
+            .shared
+            .hello_keywords
+            .write()
+            .unwrap_or_else(|e| e.into_inner()) = Arc::new(sorted);
     }
 
     /// The main loop: one select over the command channel and the worker
@@ -401,7 +405,7 @@ impl Engine {
                 action,
                 shift,
                 ctrl,
-            } => self.on_activate(&key, action, shift, ctrl).await,
+            } => self.on_activate(&key, action, shift, ctrl, 0).await,
             EngineCmd::Pin { key } => self.on_pin(&key).await,
             EngineCmd::Select { key } => self.on_select(&key),
             EngineCmd::CommitPreview => {
@@ -431,7 +435,7 @@ impl Engine {
             EngineCmd::StopAsk => self.stop_ask(),
             EngineCmd::Act { key, action } => {
                 if let Some(row) = self.find_row(&key) {
-                    self.run_action(&row, &action).await;
+                    self.run_action(&row, &action, 0).await;
                 }
             }
             EngineCmd::Log { ev, fields } => self.emit_log(ev, fields).await,

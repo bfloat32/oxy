@@ -55,7 +55,7 @@ fn query_blocking(cache: Arc<Mutex<Option<HistCache>>>, arg: &str) -> NativeOutc
     let hist = history_path();
     let mtime = std::fs::metadata(&hist).and_then(|m| m.modified()).ok();
     let entries = {
-        let mut c = cache.lock().unwrap();
+        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
         match c.as_ref() {
             Some(c) if c.stamp == mtime && mtime.is_some() => c.entries.clone(),
             _ => {
@@ -134,7 +134,7 @@ impl NativeExt for CalcHist {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || query_blocking(cache, &arg))
                 .await
-                .unwrap_or(NativeOutcome::Empty)
+                .unwrap_or(NativeOutcome::Fallback)
         })
     }
 }

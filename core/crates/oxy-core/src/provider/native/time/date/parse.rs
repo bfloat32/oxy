@@ -16,13 +16,11 @@ fn day_first_locale() -> bool {
     *DAY_FIRST.get_or_init(|| {
         // `locale d_fmt` answers the same question the script asked `%x` of a
         // known date, without formatting one. Missing locale → month-first,
-        // the same fallback the script's pattern-match miss produced.
-        std::process::Command::new("locale")
-            .arg("d_fmt")
-            .output()
-            .ok()
+        // the same fallback the script's pattern-match miss produced. `probe`
+        // because a OnceLock init cannot await — and cannot hang either.
+        crate::provider::process::probe(&["locale", "d_fmt"], std::time::Duration::from_secs(2))
             .and_then(|o| {
-                let fmt = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                let fmt = o.trim().to_string();
                 let d = fmt.find("%d").or_else(|| fmt.find("%e"));
                 let m = fmt.find("%m");
                 match (d, m) {
@@ -243,10 +241,15 @@ fn gnu_day(t: &str, today: i64, today_year: i64) -> Option<i64> {
                 let want = (w as i64 + 1) % 7;
                 let dow = days::weekday_of(today);
                 let delta = match dir {
-                    // this: the one in this week, past or coming
-                    0 => want - dow,
-                    // next: GNU reads it as a week past the coming one
-                    1 => (want - dow + 7) % 7 + 7,
+                    // this: the coming one, today counting — `this monday`
+                    // on a Tuesday is six days out, not yesterday.
+                    0 => (want - dow + 7) % 7,
+                    // next: strictly after today — `next friday` on Tuesday
+                    // is this Friday, but `next tuesday` is a week out.
+                    1 => match (want - dow + 7) % 7 {
+                        0 => 7,
+                        d => d,
+                    },
                     // last: the first one strictly before today
                     _ => {
                         let d = (dow - want + 7) % 7;
@@ -276,15 +279,24 @@ fn gnu_day(t: &str, today: i64, today_year: i64) -> Option<i64> {
     }
     // [+-]?N unit(s) [ago]
     if let Some((n, unit, _ago)) = rel_parts(t) {
-        let secs_now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
+        // Sub-day offsets run on the *local* wall clock like `date -d` did —
+        // "2 hours" near midnight is tomorrow. A UTC day boundary lands the
+        // answer a day off inside the morning/evening windows.
+        let sub_day = |secs: i64| -> Option<i64> {
+            let z = jiff::Timestamp::now()
+                .checked_add(jiff::Span::new().seconds(secs))
+                .ok()?
+                .to_zoned(jiff::tz::TimeZone::system());
+            let d = z.date();
+            Some(days::days_from_civil(
+                i64::from(d.year()),
+                i64::from(d.month()),
+                i64::from(d.day()),
+            ))
+        };
         return Some(match unit {
-            // Sub-day offsets run on the wall clock like `date -d` did — "2
-            // hours" near midnight is tomorrow.
-            "min" => (secs_now + n * 60).div_euclid(86400),
-            "hr" => (secs_now + n * 3600).div_euclid(86400),
+            "min" => sub_day(n * 60)?,
+            "hr" => sub_day(n * 3600)?,
             "day" => today + n,
             "week" => today + n * 7,
             "fortnight" => today + n * 14,
@@ -394,5 +406,50 @@ pub(super) fn plural(n: i64, word: &str) -> String {
         format!("{n} {word}")
     } else {
         format!("{n} {word}s")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::native::time::days;
+
+    /// 2026-09-22 is a Tuesday — the anchor every `date -d` check below was
+    /// run against on GNU coreutils.
+    fn tue() -> i64 {
+        days::days_from_civil(2026, 9, 22)
+    }
+
+    #[test]
+    fn weekday_modifiers_match_gnu() {
+        let t = tue();
+        let fri = days::days_from_civil(2026, 9, 25);
+        let mon = days::days_from_civil(2026, 9, 28);
+        let tue_next = days::days_from_civil(2026, 9, 29);
+        let fri_last = days::days_from_civil(2026, 9, 18);
+        // `this`/`next` never look backwards or add a spare week; `next`
+        // differs from `this` only when the named day is today itself.
+        assert_eq!(gnu_day("this friday", t, 2026), Some(fri));
+        assert_eq!(gnu_day("next friday", t, 2026), Some(fri));
+        assert_eq!(gnu_day("this monday", t, 2026), Some(mon));
+        assert_eq!(gnu_day("next monday", t, 2026), Some(mon));
+        assert_eq!(gnu_day("this tuesday", t, 2026), Some(t));
+        assert_eq!(gnu_day("next tuesday", t, 2026), Some(tue_next));
+        assert_eq!(gnu_day("last friday", t, 2026), Some(fri_last));
+        assert_eq!(gnu_day("last tuesday", t, 2026), Some(t - 7));
+    }
+
+    #[test]
+    fn unit_modifiers_match_gnu() {
+        let t = tue();
+        // `date -d "this month"` is today, not next month — `this` is the
+        // zero ordinal on the unit arms.
+        assert_eq!(gnu_day("this week", t, 2026), Some(t));
+        assert_eq!(gnu_day("next week", t, 2026), Some(t + 7));
+        assert_eq!(gnu_day("last fortnight", t, 2026), Some(t - 14));
+        assert_eq!(
+            gnu_day("next month", t, 2026),
+            Some(days::add_months_daynum(t, 1))
+        );
     }
 }

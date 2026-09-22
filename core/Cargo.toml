@@ -5,8 +5,9 @@ members = ["crates/oxy-core", "crates/oxyd", "crates/oxy"]
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-# 1.88 stabilized let-chains on edition 2024, which the engine and natives use.
-rust-version = "1.88"
+# 1.88 stabilized let-chains on edition 2024, which the engine and natives use;
+# 1.89 stabilized `File::try_lock`, which the state layer locks MRU files with.
+rust-version = "1.89"
 license = "MIT"
 description = "The Rust core of Oxy: query routing, extension runtime, ranking and state."
 

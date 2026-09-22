@@ -76,24 +76,39 @@ async fn snapshots() -> Option<Vec<(String, Value)>> {
     if names.is_empty() {
         names.push("default".to_string());
     }
-    let mut out = Vec::new();
-    for name in names {
+    // The snapshots are independent; sequential bounded calls would sum
+    // past the manifest's window with two sessions running, so they join.
+    let mut pending = tokio::task::JoinSet::new();
+    for (idx, name) in names.into_iter().enumerate() {
         // The script's own argv: the default session takes no `--session`.
         let cmd = if name == "default" {
             "herdr api snapshot".to_string()
         } else {
             format!("herdr --session {} api snapshot", quote(&name))
         };
-        let Some(fin) = process::run(&cmd, HERDR_TIMEOUT).await else {
+        pending.spawn(async move { (idx, name, process::run(&cmd, HERDR_TIMEOUT).await) });
+    }
+    let mut got = Vec::new();
+    while let Some(joined) = pending.join_next().await {
+        let Ok((idx, name, fin)) = joined else {
+            continue;
+        };
+        let Some(fin) = fin else {
             continue;
         };
         match rows::classify(&fin.stdout) {
             rows::Snapshot::Skip => {}
             rows::Snapshot::Poison => return None,
-            rows::Snapshot::Shot(snap) => out.push((name, snap)),
+            rows::Snapshot::Shot(snap) => got.push((idx, name, snap)),
         }
     }
-    Some(out)
+    // Joined in completion order; the script emitted in session-list order.
+    got.sort_by_key(|(idx, ..)| *idx);
+    Some(
+        got.into_iter()
+            .map(|(_, name, snap)| (name, snap))
+            .collect(),
+    )
 }
 
 /// `${XDG_RUNTIME_DIR:-/tmp}/oxy-herdr-seen.json` — the path the script

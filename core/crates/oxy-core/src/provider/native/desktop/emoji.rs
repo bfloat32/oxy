@@ -217,7 +217,7 @@ impl NativeExt for Emoji {
         Box::pin(async move {
             tokio::task::spawn_blocking(move || query_blocking(cache, &arg))
                 .await
-                .unwrap_or(NativeOutcome::Empty)
+                .unwrap_or(NativeOutcome::Fallback)
         })
     }
 }
@@ -227,7 +227,7 @@ fn query_blocking(cache: Arc<Mutex<Option<Cached>>>, arg: &str) -> NativeOutcome
     let path = data_path();
     let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
     let all = {
-        let mut c = cache.lock().unwrap();
+        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
         match c.as_ref() {
             // An mtime we could not read is never trusted as a cache key.
             Some(c) if c.mtime == mtime && mtime.is_some() => c.entries.clone(),

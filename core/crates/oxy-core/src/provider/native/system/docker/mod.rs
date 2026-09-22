@@ -192,13 +192,16 @@ impl NativeExt for Docker {
             if !on_path("docker") {
                 return NativeOutcome::Fallback;
             }
-            // `docker info --format '{{.ServerVersion}}'` — the gate
-            // itself, probed per query: installed-but-down prints
-            // nothing in the script, so Empty — not Fallback, which
+            // `docker info` and `docker ps` are independent — sequential
+            // 2s calls could sum past the manifest timeout under load, so
+            // they run together. `info` is the gate: installed-but-down
+            // prints nothing in the script, so Empty — not Fallback, which
             // would only pay for the same dead end in shell.
-            let up = docker("info --format '{{.ServerVersion}}'", CALL)
-                .await
-                .is_some_and(|f| f.code == Some(0));
+            let (info, ps) = tokio::join!(
+                docker("info --format '{{.ServerVersion}}'", CALL),
+                docker("ps --all --quiet", CALL),
+            );
+            let up = info.is_some_and(|f| f.code == Some(0));
             if !up {
                 return NativeOutcome::Empty;
             }
@@ -219,24 +222,33 @@ impl NativeExt for Docker {
 
             // `docker ps --all --quiet` — one id per line, split on
             // whitespace like the script's unquoted `$ids`.
-            let Some(ps) = docker("ps --all --quiet", CALL).await else {
+            let Some(ps) = ps else {
                 return NativeOutcome::Empty;
             };
-            let ids: Vec<&str> = ps.stdout.split_whitespace().collect();
+            // A `docker` that is not dockerd (a PATH wrapper) could put
+            // shell-active text on this line — ids are hex by definition,
+            // and anything else is dropped before it reaches the inspect
+            // command.
+            let ids: Vec<&str> = ps
+                .stdout
+                .split_whitespace()
+                .filter(|id| {
+                    (12..=64).contains(&id.len()) && id.chars().all(|c| c.is_ascii_hexdigit())
+                })
+                .collect();
             if ids.is_empty() {
                 return NativeOutcome::Empty;
             }
 
-            let Some(fin) = docker(
-                &format!(
-                    "inspect --type container --format {} {}",
-                    quote(INSPECT_TEMPLATE),
-                    ids.join(" ")
-                ),
-                INSPECT,
-            )
-            .await
-            else {
+            // `inspect` and `nproc` are independent — joined so the two
+            // bounded legs sum to the manifest's window rather than past it.
+            let inspect_cmd = format!(
+                "inspect --type container --format {} {}",
+                quote(INSPECT_TEMPLATE),
+                ids.join(" ")
+            );
+            let (fin, cores) = tokio::join!(docker(&inspect_cmd, INSPECT), host_cores());
+            let Some(fin) = fin else {
                 return NativeOutcome::Empty;
             };
             // `jq --slurp` — one object per inspect line; a line that is
@@ -253,8 +265,8 @@ impl NativeExt for Docker {
             }
 
             // What the machine has, so an unlimited container can be
-            // drawn against something.
-            let (Some(cores), Some(hostmem)) = (host_cores().await, host_mem()) else {
+            // drawn against something — `cores` already ran beside inspect.
+            let (Some(cores), Some(hostmem)) = (cores, host_mem()) else {
                 return NativeOutcome::Empty;
             };
 

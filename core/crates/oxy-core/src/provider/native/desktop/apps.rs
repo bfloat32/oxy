@@ -70,7 +70,7 @@ impl NativeExt for Apps {
         let fresh = ctx.fresh_open;
         Box::pin(async move {
             tokio::task::spawn_blocking(move || {
-                let mut scan = state.lock().unwrap();
+                let mut scan = state.lock().unwrap_or_else(|e| e.into_inner());
                 // First ask, or the first ask of a fresh open: whatever was
                 // installed while the launcher was away is worth one rescan.
                 if !scan.scanned || fresh {
@@ -143,7 +143,7 @@ impl NativeExt for Apps {
                 NativeOutcome::Built(rows)
             })
             .await
-            .unwrap_or(NativeOutcome::Empty)
+            .unwrap_or(NativeOutcome::Fallback)
         })
     }
 }
@@ -245,6 +245,7 @@ fn parse_desktop(text: &str, locale: &str) -> Option<DesktopEntry> {
     let mut fields: HashMap<String, String> = HashMap::new();
     // A localized Name beats the plain one when the machine's locale matches.
     let localized = format!("Name[{locale}]");
+    let mut localized_seen = false;
 
     for line in text.lines() {
         let line = line.trim();
@@ -262,7 +263,12 @@ fn parse_desktop(text: &str, locale: &str) -> Option<DesktopEntry> {
         let key = key.trim();
         // The localized name only replaces a plain Name read, never the other
         // way: whichever order the file lists them in, the better one wins.
-        if key == localized.as_str() || (key == "Name" && !fields.contains_key(&localized)) {
+        if key == localized.as_str() {
+            fields.insert("Name".to_string(), value.trim().to_string());
+            localized_seen = true;
+            continue;
+        }
+        if key == "Name" && !localized_seen {
             fields.insert("Name".to_string(), value.trim().to_string());
             continue;
         }
@@ -311,60 +317,94 @@ fn locale() -> String {
 fn scan_applications() -> Vec<App> {
     let hidden = hidden_ids();
     let desktops = current_desktops();
-    let lang = locale();
+    let filter = Filter {
+        hidden: &hidden,
+        desktops: &desktops,
+        lang: &locale(),
+    };
     let mut seen: HashSet<String> = HashSet::new();
     let mut apps = Vec::new();
 
     for dir in applications_dirs() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        // Later dirs shadow earlier ones by desktop id, the way XDG_DATA_HOME
-        // overrides XDG_DATA_DIRS.
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
-                continue;
-            }
-            let id = desktop_id(&dir, &path);
-            if seen.contains(&id) {
-                continue;
-            }
-            seen.insert(id.clone());
-
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Some(parsed) = parse_desktop(&text, &lang) else {
-                continue;
-            };
-            if parsed.entry_type != "Application" || parsed.name.is_empty() {
-                continue;
-            }
-            if parsed.no_display || parsed.hidden {
-                continue;
-            }
-            if hidden.contains(id.trim_end_matches(".desktop")) {
-                continue;
-            }
-            if !parsed.only_show_in.is_empty() && !list_contains(&parsed.only_show_in, &desktops) {
-                continue;
-            }
-            if !parsed.not_show_in.is_empty() && list_contains(&parsed.not_show_in, &desktops) {
-                continue;
-            }
-
-            apps.push(App {
-                entry: Entry::new(
-                    id.clone(),
-                    parsed.name,
-                    parsed.generic_name,
-                    parsed.comment,
-                    parsed.keywords,
-                ),
-                icon: parsed.icon,
-            });
-        }
+        collect_dir(&dir, &dir, 0, &filter, &mut seen, &mut apps);
     }
     apps
+}
+
+/// The filter config a scan carries — invariant down the recursion, so one
+/// struct keeps `collect_dir`'s arity sane.
+struct Filter<'a> {
+    hidden: &'a HashSet<String>,
+    desktops: &'a HashSet<String>,
+    lang: &'a str,
+}
+
+/// One directory level of the scan, recursing into subdirectories — the spec
+/// puts them there (`applications/wine/Programs/…`) and `desktop_id` turns
+/// the nesting into the id. Eight levels is far past anything shipped and
+/// still bounds a symlink loop. Later dirs shadow earlier ones by id, the
+/// way XDG_DATA_HOME overrides XDG_DATA_DIRS.
+fn collect_dir(
+    dir: &Path,
+    base: &Path,
+    depth: usize,
+    filter: &Filter,
+    seen: &mut HashSet<String>,
+    apps: &mut Vec<App>,
+) {
+    if depth > 8 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_dir(&path, base, depth + 1, filter, seen, apps);
+            continue;
+        }
+        if path.extension().and_then(|e| e.to_str()) != Some("desktop") {
+            continue;
+        }
+        let id = desktop_id(base, &path);
+        if seen.contains(&id) {
+            continue;
+        }
+        seen.insert(id.clone());
+
+        let Ok(text) = std::fs::read_to_string(&path) else {
+            continue;
+        };
+        let Some(parsed) = parse_desktop(&text, filter.lang) else {
+            continue;
+        };
+        if parsed.entry_type != "Application" || parsed.name.is_empty() {
+            continue;
+        }
+        if parsed.no_display || parsed.hidden {
+            continue;
+        }
+        if filter.hidden.contains(id.trim_end_matches(".desktop")) {
+            continue;
+        }
+        if !parsed.only_show_in.is_empty() && !list_contains(&parsed.only_show_in, filter.desktops)
+        {
+            continue;
+        }
+        if !parsed.not_show_in.is_empty() && list_contains(&parsed.not_show_in, filter.desktops) {
+            continue;
+        }
+
+        apps.push(App {
+            entry: Entry::new(
+                id.clone(),
+                parsed.name,
+                parsed.generic_name,
+                parsed.comment,
+                parsed.keywords,
+            ),
+            icon: parsed.icon,
+        });
+    }
 }

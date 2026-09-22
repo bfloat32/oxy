@@ -58,6 +58,10 @@ pub(super) struct WorkerState {
     pub(super) proc_run: Option<JoinHandle<Option<process::Finished>>>,
     pub(super) native_run: Option<JoinHandle<NativeOutcome>>,
     pub(super) native_partial: Option<mpsc::UnboundedReceiver<Vec<Value>>>,
+    // The native run's fuse — the command leg has process::run's timeout
+    // and the socket leg has `sock_deadline`; without one here a hung
+    // provider would hold the run forever.
+    pub(super) native_deadline: Option<std::pin::Pin<Box<Sleep>>>,
     pub(super) run_epoch: u64,
     pub(super) run_key: String,
     pub(super) run_pending: Option<Pending>,
@@ -119,6 +123,7 @@ impl WorkerState {
             proc_run: None,
             native_run: None,
             native_partial: None,
+            native_deadline: None,
             run_epoch: 0,
             run_key: String::new(),
             run_pending: None,
@@ -140,7 +145,13 @@ impl WorkerState {
     /// keyword is actually typed, at most every fifteen seconds.
     fn probe_when(&mut self) {
         if !self.available {
-            if let Some(ok) = self.shared.availability.lock().unwrap().get(&self.ext.when) {
+            if let Some(ok) = self
+                .shared
+                .availability
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&self.ext.when)
+            {
                 self.available = ok;
             } else {
                 self.avail_start = Instant::now();
@@ -149,7 +160,11 @@ impl WorkerState {
                 let self2 = self.self_tx.clone();
                 tokio::spawn(async move {
                     let ok = process::check(&when).await;
-                    shared2.availability.lock().unwrap().put(&when, ok);
+                    shared2
+                        .availability
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .put(&when, ok);
                     let _ = self2.send(WorkerCmd::Available { ok, replay: None });
                 });
             }
@@ -222,13 +237,17 @@ impl WorkerState {
                     let rows = share_rows(build_rows_owned(&self.ext, raw));
                     if let Some(p) = self.run_pending.take() {
                         if self.ext.cache_ms > 0 {
-                            self.shared.cache.lock().unwrap().put(
-                                &self.id,
-                                &p.key,
-                                rows.clone(),
-                                self.ext.cache_ms,
-                                self.ext_stamp,
-                            );
+                            self.shared
+                                .cache
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .put(
+                                    &self.id,
+                                    &p.key,
+                                    rows.clone(),
+                                    self.ext.cache_ms,
+                                    self.ext_stamp,
+                                );
                         }
                         self.live = Some(Live {
                             epoch: p.epoch,
@@ -298,6 +317,7 @@ impl WorkerState {
             h.abort();
         }
         self.native_partial = None;
+        self.native_deadline = None;
         // A socket ask has no task to abort: the line already went out,
         // and its answer lands on the push channel — epoch-filtered on
         // arrival, so a late one lands nowhere.
@@ -340,7 +360,11 @@ impl WorkerState {
                 let self2 = self.self_tx.clone();
                 tokio::spawn(async move {
                     let ok = process::check(&when).await;
-                    shared2.availability.lock().unwrap().put(&when, ok);
+                    shared2
+                        .availability
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .put(&when, ok);
                     let _ = self2.send(WorkerCmd::Available { ok, replay: None });
                 });
             }
@@ -520,6 +544,7 @@ impl WorkerState {
         out: Result<NativeOutcome, tokio::task::JoinError>,
     ) {
         self.native_run = None;
+        self.native_deadline = None;
         // Flush anything the provider pushed on its way out.
         if let Some(mut prx) = self.native_partial.take() {
             while let Ok(raw) = prx.try_recv() {

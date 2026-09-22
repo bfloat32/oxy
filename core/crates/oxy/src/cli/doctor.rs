@@ -226,8 +226,13 @@ pub(crate) async fn run(args: &[String]) -> i32 {
                 headers.iter().map(|(k, v)| (*k, v.as_str())).collect();
             match http::get_json(&models_url, &headers).await {
                 Ok(mut response) if response.status == 200 => {
+                    // A model list is small by nature — the parse gets a
+                    // bounded body even when the endpoint sends more.
                     let mut text = String::new();
                     while let Ok(Some(line)) = response.next_line().await {
+                        if text.len() > 4 * 1024 * 1024 {
+                            break;
+                        }
                         text.push_str(&line);
                         text.push('\n');
                     }

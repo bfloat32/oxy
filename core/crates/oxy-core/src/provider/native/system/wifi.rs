@@ -388,23 +388,21 @@ impl NativeExt for Wifi {
                 return NativeOutcome::Rows(vec![radio_off_row()]);
             }
 
-            let saved = saved_profiles(&nmcli("-t -f TYPE,NAME connection show").await);
-
-            // The device call only happens when the radio row will be
-            // emitted — the interface is its alone to name.
-            let iface = if radio_row_wanted(&radio, &needle) {
-                Some(wifi_iface(&nmcli("-t -f DEVICE,TYPE device").await))
-            } else {
-                None
-            };
-
-            // The field list is verbatim — one unknown name and nmcli
-            // prints nothing — and `--rescan no` keeps a keystroke from
-            // emptying the list for the seconds a scan takes.
-            let aps = parse_aps(
-                &nmcli("-t -f IN-USE,SIGNAL,SECURITY,FREQ,RATE,SSID device wifi list --rescan no")
-                    .await,
+            // Three independent reads, joined: sequential 2s-bounded calls
+            // could sum past the manifest's timeout under load. The device
+            // read runs even when the radio row will not — its cost is a
+            // local nmcli call, and the join makes it free anyway.
+            let (saved_out, dev_out, aps_out) = tokio::join!(
+                nmcli("-t -f TYPE,NAME connection show"),
+                nmcli("-t -f DEVICE,TYPE device"),
+                // The field list is verbatim — one unknown name and nmcli
+                // prints nothing — and `--rescan no` keeps a keystroke from
+                // emptying the list for the seconds a scan takes.
+                nmcli("-t -f IN-USE,SIGNAL,SECURITY,FREQ,RATE,SSID device wifi list --rescan no"),
             );
+            let saved = saved_profiles(&saved_out);
+            let iface = radio_row_wanted(&radio, &needle).then(|| wifi_iface(&dev_out));
+            let aps = parse_aps(&aps_out);
             NativeOutcome::Rows(enabled_rows(iface.as_deref(), &aps, &saved, &needle))
         })
     }

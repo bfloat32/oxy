@@ -729,7 +729,7 @@ docs/            EXTENSIONS.md, SPOTIFY-LIBRARY.md, LLM-INTEGRATION.md
 
 A `<name>.cases.json` sits beside `<name>.json` in the same directory and holds
 the assertions `oxy test --cases` — and this repo's own `tests/cases.py` — run
-against that keyword. Thirty keywords ship one. The launcher globs the whole
+against that keyword. Every shipped keyword carries one. The launcher globs the whole
 directory and a cases file survives only because it is an array rather than an
 object, so keep the two names in step.
 

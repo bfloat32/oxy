@@ -83,22 +83,32 @@ printf '{"op":"ping"}\n' | oxy send   # talk to the socket directly
 
 Extensions that declare `"native": "<name>"` are answered by a provider
 compiled into the daemon first — the built-ins apps, calc, commands,
-quicklinks and web, plus alarm, branch, bri, bt, cal, calchist, ch, date,
-def, docker, emoji, file, git, herdr, img, kill, note, omarchy, pass,
-recent, repo, shortcuts, snip, ssh, stash, sys, theme, tz, unit, vol,
-wifi and win — with their declared `search` or
-`socket` kept as the fallback when the native provider declines. The four
-git-family providers share `vcs/repos/` — repo discovery, the
-`--resolve` port, and the per-repo state cache — so `git:omarchy` answers
-which repo you meant without a `git status` per candidate. `tz` resolves
-zone names and DST math in-process through `jiff`, so `tz:9am tokyo in
-london` costs no `date` processes at all. `cal`'s
-natural-language leg
-resolves through the same `date` parser in-process, so queries like
-`cal:christmas` need no script at all.
-Every other manifest runs its script or socket exactly as before, so the
-40-odd shipped extensions and any you wrote keep working unchanged. A
-provider that falls back loses only the speed, never the answer.
+quicklinks and web, plus alarm, branch, bri, bt, cal, calchist, ch, ci,
+date, def, docker, emoji, file, gh, git, herdr, img, issue, kill, note,
+omarchy, pass, pr, radio, recent, repo, shortcuts, snip, spotify,
+spotify-library, ssh, stash, sys, theme, tz, unit, vol, wifi and win —
+with their declared `search` or `socket` kept as the fallback when the
+native provider declines. The four git-family providers share
+`vcs/repos/` — repo discovery, the `--resolve` port, and the per-repo
+state cache — so `git:omarchy` answers which repo you meant without a
+`git status` per candidate. The four GitHub keywords share `vcs/gh/`: the
+offline fast path still draws a row from `gh:owner/repo`, a pasted URL or
+`owner/repo#123` before any request, and the GraphQL panels are warmed in
+the background the way the script's `setsid` warming was. The media
+providers share `media/` — radio-browser search and the mpv IPC socket,
+the MPRIS/`busctl` now-playing fields, and the Spotify catalogue with its
+token-refresh lock. `tz` resolves zone names and DST math in-process
+through `jiff`, so `tz:9am tokyo in london` costs no `date` processes at
+all. `cal`'s natural-language leg resolves through the same `date` parser
+in-process, so queries like `cal:christmas` need no script at all.
+The `do:` agent's socket server is a Rust binary too —
+`core/crates/oxy/src/bin/oxy-agent.rs` — speaking the same
+`{epoch, query}` → `{epoch, rows}` protocol to the same
+`oxy-agent.sock`, so `ResultAgent.qml` and the engine see no difference.
+Every shipped extension is Rust-answered; the `bin/` scripts remain as
+the fallback path and the contract the ports were written against, so any
+extension you wrote keeps working unchanged. A provider that falls back
+loses only the speed, never the answer.
 
 ## Developing
 

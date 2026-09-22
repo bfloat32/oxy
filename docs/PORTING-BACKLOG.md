@@ -1,9 +1,20 @@
-# The native-porting backlog: what is left to port, reimplement and create
+# The native-porting backlog: what was left to port, reimplement and create
 
-The restructure is done (see §0), so this is the full remaining surface
+**The wave is done — every batch below has landed, and every shipped
+extension is Rust-answered.** The document stays as the record of what each
+port had to reproduce, and the traps that were found by testing and are easy
+to lose; read §4–§6 as the contract the ports were written against, not a
+to-do list.
+
+The restructure is done (see §0), so this was the full remaining surface
 between the script build and the Rust core: batch by batch, with what each
 port must reproduce, what it implies, and the traps that were found by testing
 and are easy to lose. Nothing here is a code change.
+
+**Revision 6** — the closing revision: batches C (`vcs/gh/`), F (`media/`)
+and G (the Rust `oxy-agent` binary) landed, the last ten case files were
+written, and §0/§1 were re-measured: 180 files, 50 677 lines, 527 tests,
+40 case files, 525 assertions, zero script-first extensions.
 
 **Revision 5.** Revision 4 audited itself against the tree; this one records
 what changed since: the **marketplace removal** (`bo:` and its 2 518 lines are
@@ -43,14 +54,14 @@ starts from a measured state:
 
 | fact | value |
 |---|---|
-| Rust files | 155 (37 before the restructure) |
-| total lines | 41 397 |
-| largest file | 926 lines (`provider/native/time/tz/when.rs` — over the 800 target, under the 1 200 cap; the `date -d` grammar is dense; `system/docker/rows.rs` at 810 is the other overage. `vcs/repos.rs` was split into `repos/{mod,discover,state}`) |
-| tests | 471 passing (`cargo test --workspace`) |
+| Rust files | 180 (37 before the restructure) |
+| total lines | 50 677 |
+| largest file | 926 lines (`provider/native/time/tz/when.rs` — over the 800 target, under the 1 200 cap; `system/docker/rows.rs` and `vcs/gh/tests.rs` at 810 are the other overages. `vcs/repos.rs` was split into `repos/{mod,discover,state}`, `vcs/gh/render.rs` into `render/{jq,rows,panels,lists}`) |
+| tests | 527 passing (`cargo test --workspace`) |
 | lints | `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean |
-| guards | the file budget, the `model/` layering check and the **view-list sync** in `tests/run.sh`; `oxy test --only manifest` against this repo's extensions (it checks that every `native:` name is an arm in `construct`); clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
-| extensions | 40 (37 native — 32 declaring `"native"` plus the five built-ins; 8 script-backed) — the marketplace was removed |
-| case suites | 30 files, 481 assertions; the extensions without one are listed below |
+| guards | the file budget, the `model/` layering check, the **view-list sync** and the **QML syntax check** in `tests/run.sh`; `oxy test --only manifest` against this repo's extensions (it checks that every `native:` name is an arm in `construct`); clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map; CI runs `tests/run.sh` itself, so every local guard gates on push |
+| extensions | 40 — **all 40 Rust-answered**: 39 declare `"native"` (plus the five built-ins) and `agent`'s socket server is the Rust `oxy-agent` binary; the `bin/` scripts remain as fallback and contract — the marketplace was removed |
+| case suites | 40 files, 525 assertions — every extension has one |
 | unchanged by the restructure | the wire, the row shapes, the state files, the script contract |
 
 The restructure was a move, not a behaviour change, so every claim below —
@@ -62,11 +73,12 @@ LLM slice landed (§4.4).
 
 ## 1. Where we stand
 
-**40 extensions ship. 37 answer through a native provider. 8 remain
-script-backed** — `agent` (batch G, a rewrite), `radio`, `spotify-library`
-and `music` (batch F), and `gh` plus `pr`, `issue`, `ci` — the three
-nine-line wrappers that set `OXY_GH_MODE` for `oxy-gh` (batch C). (`bo:` and
-its marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
+**40 extensions ship. All 40 are Rust-answered** — 39 manifests declare
+`"native"` (served in-daemon) and `agent`'s socket server is the Rust
+`oxy-agent` binary (`crates/oxy/src/bin/oxy-agent.rs` over
+`crates/oxy/src/agent/`). The `bin/` scripts stay shipped as the fallback
+path and as the contract the ports were written against. (`bo:` and its
+marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
 
 | already native | area |
 |---|---|
@@ -81,25 +93,28 @@ its marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
 | `herdr`, `img`, `pass`, `snip`, `note` | batch D/E — the cheap jq removals |
 | `docker`, `shortcuts`, `omarchy` | batch D remainder — session/system views |
 | `tz`, `unit`, `def` | batch E remainder — `jiff` tzdb, qalc engine, curl |
+| `gh`, `pr`, `issue`, `ci` | batch C — the GitHub family, over `vcs/gh/` |
+| `radio`, `spotify`, `spotify-library` | batch F — media, over `media/` |
+| `agent` (`do:`) | batch G — Rust `oxy-agent` binary, same socket protocol |
 
 | batch | extensions | script lines | why they belong together |
 |---|---|---|---|
 | ~~**A. local state**~~ ✅ | `vol`, `bri`, `win`, `bt`, `wifi`, `theme`, `alarm` | 1 691 | done — merged `fc76de2`…`a112f2e`, case files landed |
-| ~~**B. git family**~~ ✅ | `repo`, `git`, `branch`, `stash` | 1 713 | done — spawn+parse through `vcs/run.rs` + the shared `vcs/repos/` module (discovery, `--resolve`, the v4 state cache); the case runner's fixture (`cases/fixture.rs`) builds the two throwaway repos so all 34 cases exercise the native legs |
-| **C. GitHub family** | `gh`, `pr`, `issue`, `ci` | 1 074 | one script in four modes (`OXY_GH_MODE`), GraphQL over `gh`, network |
+| ~~**B. git family**~~ ✅ | `repo`, `git`, `branch`, `stash` | 1 713 | done — spawn+parse through `vcs/run.rs` + the shared `vcs/repos/` module (discovery, `--resolve`, the v5 state cache); the case runner's fixture (`cases/fixture.rs`) builds the two throwaway repos so all 34 cases exercise the native legs |
+| ~~**C. GitHub family**~~ ✅ | `gh`, `pr`, `issue`, `ci` | 1 074 | done — `vcs/gh/` keeps the `!offline`/`OXY_GH_OFFLINE` fast path, the six GraphQL documents verbatim, the md5-identical cache (`oxy-gh/*.json`, keep-200, lock files, `tried_recently`) with warming as a spawned task instead of `setsid`; mode rides the `"native"` name (`gh`/`gh-pr`/`gh-issue`/`gh-ci`), 43 unit tests, `gh`/`ci` cases held, `pr`/`issue` gained offline-shape cases |
 | ~~**D. session & system views**~~ ✅ | `docker`, `shortcuts`, `omarchy`, `herdr`, `img` | 1 371 | done — `docker` keeps the `docker info` daemon probe (dead daemon → silence, not a missing gate) + the stats TSV behind an `AtomicBool` instead of `flock`; `shortcuts` reads `omarchy-menu-keybindings --print` then `hyprctl binds -j`; `omarchy` is pure data (JSONC layering, `bash -lc` when-fuse). All three authored their own case files + fixture stubs |
 | ~~**E. text & data**~~ ✅ | `unit`, `tz`, `def`, `snip`, `note`, `pass` | 2 861 | done — `tz` is pure `jiff` (system zoneinfo on Linux, bundled tzdb on Windows; `timedatectl`/`date`/`jq` all gone, and the `when` gate with them); `unit` keeps `qalc -f` as the engine and ports the strict gate + spelling tables; `def` keeps `curl`, adds the 500-entry cap |
-| **F. media** | `radio`, `spotify`, `spotify-library` | 1 019 | a player (mpv/MPRIS) plus a keyless or keyed catalogue lookup |
-| **G. the long-lived one** | `agent` | 2 167 | a process with its own protocol; a rewrite, not a port |
+| ~~**F. media**~~ ✅ | `radio`, `spotify`, `spotify-library` | 1 019 | done — `media/` keeps curl subprocesses (zero new deps), mpv IPC over `tokio::net::UnixStream` (cfg-unix), the one-radio socket contract, MPRIS via `busctl` dict-parsing, Deezer keyless search, Spotify token refresh under a file lock; control-plane execs still invoke the scripts. First case files written: `radio` 5 held, `spotify` 2+1skip on this box |
+| ~~**G. the long-lived one**~~ ✅ | `agent` | 2 167 | done — `oxy-agent` rewritten in Rust (`src/bin/oxy-agent.rs` + `src/agent/`), same newline-JSON socket protocol and state paths; supervision, plan matching, desk verbs, previews store, idle expiry ported; 18 cases held against the Rust binary; `install-rs.sh` links it |
 
 ### 1.1 Two rules for every batch
 
 - **The script stays as the fallback.** A native provider answers first and
   returns `Fallback` where it declines, so a wrong port is a slower answer,
   never a missing one.
-- **A port is not done without a case file.** 10 of the 40 have none
-  (`calchist`, `ch`, `file`, `kill`, `music`, `radio`, `recent`,
-  `spotify-library`, `ssh`, `sys`).
+- **A port is not done without a case file.** All 40 now ship one — the last
+  ten (`calchist`, `ch`, `file`, `kill`, `music`, `radio`, `recent`,
+  `spotify-library`, `ssh`, `sys`) landed with the final wave.
 
 ### 1.2 The budgets the scripts measured (the port's acceptance criteria)
 
@@ -154,7 +169,7 @@ process per keystroke.
 
 ### 1.4 The acceptance suites that already exist
 
-**481 assertions in 30 case files** — the porting wave's free acceptance
+**525 assertions in 40 case files** — the porting wave's free acceptance
 suite, because `oxy test --cases <id>` runs them through the engine (native
 provider first):
 
@@ -162,17 +177,18 @@ provider first):
 |---|---|---|
 | A | `alarm` 45, `bluetooth` 3, `brightness` 7, `theme` 5, `volume` 9, `wifi` 3, `windows` 4 | 76 |
 | B | `repo` 4, `git` 11, `branch` 10, `stash` 9 | 34 |
-| C | `gh` 6, `issue` 4, `pr` 4, `ci` 2 | 16 |
+| C | `gh` 6, `issue` 5, `pr` 5, `ci` 2 | 18 |
 | D | `docker` 19, `shortcuts` 13, `omarchy` 6, `herdr` 5, `images` 3 | 46 |
 | E | `unit` 72, `timezone` 45, `define` 30, `notes` 9, `pass` 5, `snippets` 3 | 164 |
-| F | *none* | 0 |
+| F | `radio` 5, `music` 3, `spotify-library` 5 | 13 |
 | G | `agent` 18 | 18 |
 | already native | `date` 56, `calendar` 30, `emoji` 41 | 127 |
+| the seven last natives | `calc-history` 4, `clipboard` 4, `files` 3, `kill` 3, `recent` 4, `ssh` 5, `system` 6 | 29 |
 
 Two consequences worth stating plainly:
 
-- **Batch F has no coverage at all.** Its ports must write cases *first*, or
-  the only thing proving the port works is the script it replaced.
+- ~~**Batch F has no coverage at all.**~~ Closed — F wrote its cases with
+  the ports, and the seven natives that had none are covered too.
 - The behaviour suite runs nine scripts end to end (`oxy-docker`, the four git
   ones, `oxy-search-files`, `oxy-ssh`, `oxy-timezone-plan`, `oxy-wifi`). A
   native provider answers before the script, so that coverage stops being the
@@ -800,13 +816,20 @@ The daemon has no window-class → icon map; `ResultWindows.qml` resolves it
 through the frontend's app library. Decide whether that stays the contract
 (recommended) before porting `win:`.
 
-### 4.7 Case files for the 12 native providers that have none
+### 4.7 Case files — closed: all 40 extensions ship one
 
-`apps`, `calc`, `calchist`, `ch`, `commands`, `file`, `kill`, `quicklinks`,
-`recent`, `ssh`, `sys`, `web` — plus `music`, `radio` and `spotify-library`
-on the script side (the other five scripts all carry suites now). A
-`quicklinks` case would have caught the routing bug; a `/clear-all` case the
-confirm bug.
+~~`apps`, `calc`, `calchist`, `ch`, `commands`, `file`, `kill`,
+`quicklinks`, `recent`, `ssh`, `sys`, `web` — plus `music`, `radio` and
+`spotify-library` on the script side~~ — closed. `calchist`, `ch`, `file`,
+`kill`, `recent`, `ssh` and `sys` gained suites with the last wave (case
+files are named by the manifest *stem* — `calc-history.cases.json`,
+`clipboard.cases.json`, `files.cases.json`, `system.cases.json` — not the
+`id`); `music`, `radio` and `spotify-library` gained theirs with batch F;
+`pr`/`issue` with batch C. What remains uncovered is only the manifestless
+built-ins (`apps`, `calc`, `commands`, `quicklinks`, `web`), which have no
+case-file door by design — the runner globs `*.cases.json` beside
+manifests. A `quicklinks` case would have caught the routing bug; a
+`/clear-all` case the confirm bug.
 
 Two things about the suite as it stands, both found by running it:
 
@@ -863,12 +886,14 @@ Where the wave has got to, against the plan it started with:
 5. **`docker`/`shortcuts`/`omarchy` (D) and `unit`/`tz`/`def` (E)** — **done**:
    D authored its case files and fixture stubs; E kept `qalc`/`curl` as the
    engines and `tz` dropped the `jq` gate entirely.
-6. **The network family** (C, F) — **next**, once the HTTP decision is made:
-   `gh`, `pr`, `issue`, `ci`, `radio`, `spotify-library`, `music`.
-7. **`agent`** (G) — **last**, as its own project with the 18 cases as the
-   acceptance suite.
+6. **The network family** (C, F) — **done**: `vcs/gh/` (C) and `media/` (F)
+   landed together; the HTTP decision was "keep `curl` as a subprocess"
+   (§3.2's zero-new-deps option) and `gh` keeps spawning the CLI.
+7. **`agent`** (G) — **done**: `oxy-agent` is a Rust binary
+   (`src/bin/oxy-agent.rs` + `src/agent/`) serving the same socket
+   protocol; the 18 cases were its acceptance suite and all held.
 8. **In parallel, not in a batch** — `oxy test`'s `manifest` layer landed
-   (§4.2's cheapest third); the case files (§4.7) are 30 of 40.
+   (§4.2's cheapest third); the case files (§4.7) are **40 of 40**.
 9. **The LLM track runs alongside all of it** (§4.4) and touches nothing the
    batches touch: retry, the key, the doctor, the `oxy ask` verb, the fallback
    chain, the soft interrupt and the usage ledger have landed; autodetect,
@@ -1026,9 +1051,8 @@ batch A: the reading is the whole cost).
 
 ### 6.5 The script-backed inventory, measured
 
-*(This is the baseline table — every row in it has now been ported except
-`agent`, `gh` (+ the `ci`/`issue`/`pr` wrappers), `radio`, `spotify-library`
-and `spotify`; the measurements are still the numbers each port had to beat.)*
+*(This is the baseline table — every row in it is now ported; the
+measurements were the numbers each port had to beat.)*
 | id | keyword | view | script | lines | CLI/tools | refreshMs | cacheMs | cases | size |
 |---|---|---|---|---|---|---|---|---|---|
 | agent | do | agent | oxy-agent | 2167 | hyprctl, systemctl, python3, git, gh | 600 | – | yes | XL |
@@ -1107,7 +1131,7 @@ header, and is the kind of thing a clean rewrite quietly loses.
 
 ```sh
 bash tests/run.sh                     # every check CI runs (static, behaviour, cases, cargo, guards)
-cd core && cargo test --workspace     # the engine suite (471 tests)
+cd core && cargo test --workspace     # the engine suite (527 tests)
 cd core && cargo clippy --workspace --all-targets -- -D warnings
 
 oxy test --only manifest              # every manifest: ids, keywords, views, tiers, `native:` in `construct`

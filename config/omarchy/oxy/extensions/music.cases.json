@@ -1,0 +1,17 @@
+[
+  { "why": "nothing on the bus means nothing playing — the keyword answers nothing rather than a dead player",
+    "query": "", "maxRows": 0,
+    "requires": "! busctl --user list --no-legend 2>/dev/null | grep -q '^org\\.mpris\\.MediaPlayer2\\.\\S'" },
+
+  { "why": "with a player on the bus the answer is the player row — status, controls, and the seek string the view fills in",
+    "query": "", "minRows": 1, "view": "player",
+    "fields": ["title", "status", "controls", "exec", "actions"],
+    "matches": { "id": "^now$", "status": "^(Playing|Paused|Stopped)$", "exec": "^busctl --user call org\\.mpris\\.MediaPlayer2\\." },
+    "requires": "command -v busctl >/dev/null && p=$(busctl --user list --no-legend 2>/dev/null | awk '$1 ~ /^org\\.mpris\\.MediaPlayer2\\./ {print $1; exit}') && test -n \"$p\" && busctl --user get-property \"$p\" /org/mpris/MediaPlayer2 org.mpris.MediaPlayer2.Player Metadata 2>/dev/null | grep -Eq '\"xesam:title\" s \".+\"'" },
+
+  { "why": "a name searches Deezer keyless: card rows, each carrying the ISRC oxy-music-play turns into the exact track",
+    "query": "kind of blue", "minRows": 1, "view": "cards",
+    "fields": ["title", "subtitle", "art", "exec", "actions"],
+    "matches": { "exec": "^oxy-music-play " },
+    "requires": "curl -sf --max-time 6 -o /dev/null 'https://api.deezer.com/search?q=x&limit=1'" }
+]

@@ -1,0 +1,24 @@
+[
+  { "why": "an empty box asks nothing — minChars drops it before a token is even read",
+    "query": "", "maxRows": 0 },
+
+  { "why": "a creds file that cannot parse has nothing to search with — the answer is nothing, not an error",
+    "query": "x", "maxRows": 0,
+    "requires": "command -v jq >/dev/null && test -s \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/oxy-spotify.json\" && ! jq -e '.client_id and .refresh_token' \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/oxy-spotify.json\" >/dev/null 2>&1" },
+
+  { "why": "whatever the session state — fresh, expired, offline — the answer is cards rows or nothing, and any row carries title and exec",
+    "query": "x", "view": "cards",
+    "fields": ["title", "exec"],
+    "matches": { "id": "^(spotify:auth|track:|album:|artist:)" } },
+
+  { "why": "a query answers tracks first, each with the Spotify uri behind Play",
+    "query": "kind of blue", "minRows": 1, "view": "cards",
+    "fields": ["title", "subtitle", "exec", "actions", "group"],
+    "matches": { "group": "^Tracks$", "id": "^track:", "exec": "^oxy-spotify play 'spotify:track:" },
+    "requires": "S=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/oxy-spotify.json\" && test -s \"$S\" && T=$(jq -r '.access_token // \"\"' \"$S\" 2>/dev/null) && test -n \"$T\" && test \"$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -H \"Authorization: Bearer $T\" https://api.spotify.com/v1/me)\" = 200" },
+
+  { "why": "type:artist narrows the search to the Artists group — the same row shape, a different lane",
+    "query": "miles davis type:artist", "minRows": 1, "view": "cards",
+    "matches": { "group": "^Artists$", "id": "^artist:", "exec": "^oxy-spotify play 'spotify:artist:" },
+    "requires": "S=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/oxy-spotify.json\" && test -s \"$S\" && T=$(jq -r '.access_token // \"\"' \"$S\" 2>/dev/null) && test -n \"$T\" && test \"$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 -H \"Authorization: Bearer $T\" https://api.spotify.com/v1/me)\" = 200" }
+]

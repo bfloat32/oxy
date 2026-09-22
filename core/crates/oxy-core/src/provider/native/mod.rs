@@ -8,6 +8,7 @@
 
 pub mod calc;
 pub mod desktop;
+pub mod media;
 pub mod system;
 pub mod text;
 pub mod time;
@@ -48,10 +49,13 @@ pub fn construct(name: &str) -> Option<Box<dyn NativeExt>> {
         "omarchy" => Some(Box::new(desktop::omarchy::Omarchy)),
         "pass" => Some(Box::new(system::pass::Pass)),
         "quicklinks" => Some(Box::new(desktop::quicklinks::Quicklinks)),
+        "radio" => Some(Box::new(media::radio::Radio)),
         "recent" => Some(Box::new(system::recent::Recent::default())),
         "repo" | "repos" => Some(Box::new(vcs::repo::Repo)),
         "shortcuts" => Some(Box::new(desktop::shortcuts::Shortcuts)),
         "snip" | "snippets" => Some(Box::new(text::snip::Snip)),
+        "spotify" => Some(Box::new(media::spotify::Spotify)),
+        "spotify-library" => Some(Box::new(media::spotify_library::SpotifyLibrary)),
         "ssh" => Some(Box::new(system::ssh::Ssh::default())),
         "stash" | "stashes" => Some(Box::new(vcs::stash::Stash)),
         "sys" | "system" => Some(Box::new(system::sys::Sys::new())),

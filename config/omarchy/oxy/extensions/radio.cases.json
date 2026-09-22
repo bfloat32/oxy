@@ -1,0 +1,25 @@
+[
+  { "why": "status is the bar widget's poll: it answers the player row alone, and with nothing playing it answers nothing — and never touches the network",
+    "query": "status", "maxRows": 0,
+    "requires": "test ! -e \"${XDG_RUNTIME_DIR:-/tmp}/oxy/radio.json\"" },
+
+  { "why": "a state file with no live mpv behind it is swept, not drawn — a stale file must not invent a player",
+    "setup": "mkdir -p \"${XDG_RUNTIME_DIR:-/tmp}/oxy\" && printf '%s' '{\"url\":\"http://x/\",\"name\":\"dead\",\"subtitle\":\"\",\"art\":\"\",\"homepage\":\"\",\"volume\":80,\"started\":0}' > \"${XDG_RUNTIME_DIR:-/tmp}/oxy/radio.json\"",
+    "query": "status", "maxRows": 0,
+    "requires": "! pgrep -f -- '--input-ipc-server=.*radio\\.sock' >/dev/null 2>&1" },
+
+  { "why": "a bare ctl is a control call with nothing to control — the script answers nothing, and so does the port",
+    "query": "ctl", "maxRows": 0 },
+
+  { "why": "an empty box opens on the stations everybody votes for — the answer was never meant to be nothing",
+    "query": "", "minRows": 1, "view": "radioplayer",
+    "fields": ["title", "exec", "actions"],
+    "matches": { "kind": "^station$", "score": "^90000$" },
+    "requires": "test ! -e \"${XDG_RUNTIME_DIR:-/tmp}/oxy/radio.json\" && curl -sf --max-time 6 -o /dev/null 'https://all.api.radio-browser.info/json/stations/topvote?limit=1'" },
+
+  { "why": "a name searches radio-browser: the answer is station rows, each with the stream wired behind Play — a BBC row carries country, art and homepage",
+    "query": "bbc", "minRows": 1, "view": "radioplayer",
+    "fields": ["title", "subtitle", "art", "exec", "actions"],
+    "matches": { "kind": "^station$", "exec": "^oxy-search-radio play " },
+    "requires": "test ! -e \"${XDG_RUNTIME_DIR:-/tmp}/oxy/radio.json\" && curl -sf --max-time 6 -o /dev/null 'https://all.api.radio-browser.info/json/stations/topvote?limit=1'" }
+]

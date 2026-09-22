@@ -17,5 +17,6 @@
   "timeoutMs": 6000,
   "maxRows": 9,
   "tier": "substring",
-  "view": "cards"
+  "view": "cards",
+  "native": "spotify-library"
 }

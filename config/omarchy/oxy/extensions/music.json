@@ -17,5 +17,6 @@
   "maxRows": 9,
   "tier": "substring",
   "view": "player",
-  "timeoutMs": 8000
+  "timeoutMs": 8000,
+  "native": "spotify"
 }

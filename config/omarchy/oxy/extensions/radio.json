@@ -15,5 +15,6 @@
   "timeoutMs": 8000,
   "maxRows": 11,
   "tier": "substring",
-  "view": "radioplayer"
+  "view": "radioplayer",
+  "native": "radio"
 }

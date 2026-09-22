@@ -17,5 +17,6 @@
   "tier": "substring",
   "view": "docker",
   "cacheMs": 0,
-  "refreshMs": 2000
+  "refreshMs": 2000,
+  "native": "docker"
 }

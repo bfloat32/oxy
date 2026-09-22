@@ -37,9 +37,16 @@ pub(crate) fn sandboxed(args: &[String]) -> i32 {
 
     let repos = sandbox.join("repos");
     let fakebin = sandbox.join("fakebin");
-    let path = std::env::join_paths(std::iter::once(fakebin).chain(std::env::split_paths(
-        &std::env::var_os("PATH").unwrap_or_default(),
-    )))
+    // The built binaries' own directory comes after the stubs and before the
+    // repo's `bin/`: `oxy-agent` resolves to the Rust sibling of this `oxy`
+    // rather than to the Python script, so the agent cases exercise the port
+    // the suite is for. The script leg keeps `bin/` ahead via cases.py.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let path = std::env::join_paths(std::iter::once(fakebin).chain(exe_dir).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
     .unwrap_or_default();
 
     let mut cmd = Command::new(exe);

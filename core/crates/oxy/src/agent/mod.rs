@@ -88,6 +88,11 @@ pub const PREVIEW_MAX: usize = 16;
 pub const MAX_STEPS: usize = 200;
 #[cfg(unix)]
 pub const MAX_ANSWER: usize = 8000;
+/// One stream line's ceiling. Real events are kilobytes at most; anything
+/// past this is a child writing noise with no newline in it, and the
+/// buffer would otherwise grow for as long as it kept going.
+#[cfg(unix)]
+pub const MAX_LINE: usize = 256 * 1024;
 #[cfg(unix)]
 pub const MAX_TURNS: usize = 12;
 // How many finished steps stay under the live one. Three is what fits beside

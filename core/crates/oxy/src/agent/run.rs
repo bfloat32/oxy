@@ -269,7 +269,19 @@ impl Run {
         let mut proc = cmd.spawn().map_err(|e| e.to_string())?;
 
         if matches!(self.agent.id.as_str(), "claude" | "codex" | "gemini") {
-            if let Some(why) = Self::feed(&mut proc, &self.instruction(), &self.agent.title) {
+            // The write blocks until the child drains it, and this is the
+            // daemon's own loop: an instruction past the pipe buffer fed to a
+            // child that is slow to read would stall every client and the
+            // watchdog with it. The pipe work goes to a blocking thread.
+            let stdin = proc.stdin.take();
+            let data = self.instruction();
+            let title = self.agent.title.clone();
+            let why =
+                match tokio::task::spawn_blocking(move || Self::feed(stdin, &data, &title)).await {
+                    Ok(why) => why,
+                    Err(e) => Some(format!("the instruction could not be written: {e}")),
+                };
+            if let Some(why) = why {
                 self.proc = Some(proc);
                 self.kill(&why).await;
                 self.turn.state = "failed".into();
@@ -313,9 +325,16 @@ impl Run {
 
     /// The instruction down the pipe: all of it, or a reason it did not go.
     /// Half an instruction is not a smaller version of the instruction.
-    fn feed(proc: &mut std::process::Child, instruction: &str, title: &str) -> Option<String> {
+    fn feed(
+        stdin: Option<std::process::ChildStdin>,
+        instruction: &str,
+        title: &str,
+    ) -> Option<String> {
         let data = instruction.as_bytes();
-        let mut stdin = proc.stdin.take()?;
+        let mut stdin = match stdin {
+            Some(s) => s,
+            None => return Some("the child's stdin was not piped".into()),
+        };
         let mut sent = 0usize;
         while sent < data.len() {
             match stdin.write(&data[sent..]) {
@@ -426,12 +445,22 @@ impl Run {
     }
 
     /// A chunk of the merged stream — buffered and split into the lines
-    /// `absorb` reads.
+    /// `absorb` reads. A child that never ends a line cannot grow the
+    /// buffer without bound: past the cap the bytes are a line whether
+    /// they ended with a newline or not.
     pub fn absorb_chunk(&mut self, chunk: &[u8]) {
         self.buf.extend_from_slice(chunk);
-        while let Some(nl) = self.buf.iter().position(|b| *b == b'\n') {
-            let line: Vec<u8> = self.buf.drain(..=nl).collect();
-            let line = String::from_utf8_lossy(&line[..line.len() - 1]).into_owned();
+        loop {
+            let end = match self.buf.iter().position(|b| *b == b'\n') {
+                Some(nl) => nl + 1,
+                None if self.buf.len() > agent::MAX_LINE => agent::MAX_LINE,
+                None => break,
+            };
+            let mut line: Vec<u8> = self.buf.drain(..end).collect();
+            if line.last() == Some(&b'\n') {
+                line.pop();
+            }
+            let line = String::from_utf8_lossy(&line).into_owned();
             self.absorb(&line);
         }
     }

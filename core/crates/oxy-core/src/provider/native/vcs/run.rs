@@ -10,24 +10,18 @@ use std::time::Duration;
 use crate::provider::process::{Finished, run};
 use crate::support::quote::quote;
 
-// `dead_code`: the runner is scaffolded ahead of its callers — the vcs
-// ports land on it together, and until then nothing calls it.
-
 /// `git --no-optional-locks <args>` with the family's deadline.
-#[allow(dead_code)]
 pub(crate) async fn git(args: &str, timeout: Duration) -> Option<Finished> {
     run(&format!("git --no-optional-locks {args}"), timeout).await
 }
 
 /// The same, inside `repo`.
-#[allow(dead_code)]
 pub(crate) async fn git_in(repo: &str, args: &str, timeout: Duration) -> Option<Finished> {
     git(&format!("-C {} {args}", quote(repo)), timeout).await
 }
 
 /// Scoped by gitdir instead of worktree — `git --git-dir=<dir>`, which the
 /// stash picker uses to ask about a repo without a checkout around it.
-#[allow(dead_code)]
 pub(crate) async fn git_at(gitdir: &str, args: &str, timeout: Duration) -> Option<Finished> {
     git(&format!("--git-dir={} {args}", quote(gitdir)), timeout).await
 }

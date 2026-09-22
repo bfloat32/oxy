@@ -13,5 +13,6 @@
   "cacheMs": 600000,
   "maxRows": 16,
   "tier": "substring",
-  "view": "menutree"
+  "view": "menutree",
+  "native": "omarchy"
 }

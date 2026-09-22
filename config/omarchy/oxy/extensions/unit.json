@@ -10,6 +10,7 @@
   "subtitle": "Unit",
   "glyph": "",
   "search": "oxy-unit {query}",
+  "native": "unit",
   "when": "command -v qalc",
   "minChars": 2,
   "debounceMs": 180,

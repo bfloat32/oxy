@@ -12,5 +12,6 @@
   "timeoutMs": 5000,
   "maxRows": 24,
   "tier": "substring",
-  "view": "list"
+  "view": "list",
+  "native": "git"
 }

@@ -12,5 +12,6 @@
   "timeoutMs": 9000,
   "maxRows": 14,
   "tier": "substring",
-  "view": "list"
+  "view": "list",
+  "native": "gh-issue"
 }

@@ -13,6 +13,17 @@
     }
   },
   {
+    "why": "a pasted issue URL is the same fact wearing a hostname: it draws the /issues/N row, still without a request",
+    "query": "!offline https://github.com/basecamp/omarchy/issues/5",
+    "minRows": 1,
+    "maxRows": 1,
+    "row": 0,
+    "matches": {
+      "id": "^issue:basecamp/omarchy#5$",
+      "exec": "/issues/5"
+    }
+  },
+  {
     "why": "with no account, what is assigned to you is unknowable, and saying so beats an empty card",
     "query": "!offline",
     "minRows": 1,
@@ -23,6 +34,7 @@
   },
   {
     "why": "naming a repository asks about that repository: it fell through to your own inbox and answered nothing assigned to you about a repo holding hundreds of open issues",
+    "requires": "gh auth token >/dev/null 2>&1 && curl -sf --max-time 6 -o /dev/null https://api.github.com",
     "query": "basecamp/omarchy",
     "minRows": 5,
     "row": 0,
@@ -33,6 +45,7 @@
   },
   {
     "why": "a word after the repository searches that repository through GitHub, not the thirty most recently updated: the four clipboard issues on basecamp/omarchy are all older than that window and were unreachable",
+    "requires": "gh auth token >/dev/null 2>&1 && curl -sf --max-time 6 -o /dev/null https://api.github.com",
     "query": "basecamp/omarchy clipboard",
     "minRows": 1,
     "row": 0,

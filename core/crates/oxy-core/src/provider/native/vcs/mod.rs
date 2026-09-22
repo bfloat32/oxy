@@ -3,6 +3,7 @@
 //! `run` is the one place a `git` invocation is assembled.
 
 pub mod branch;
+pub mod gh;
 pub mod git;
 pub mod repo;
 pub(crate) mod repos;

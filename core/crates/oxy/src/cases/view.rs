@@ -11,7 +11,11 @@ pub(crate) async fn case_preflight(id: &str) -> bool {
             "curl -sf --max-time 6 -o /dev/null \
              https://api.dictionaryapi.dev/api/v2/entries/en/ping"
         }
-        "issue" | "pr" => "gh auth status",
+        // The GitHub family's script leg goes silent without both tools, so
+        // its offline cases need the pair on PATH; the inboxes above that
+        // also need an account, which `gh auth status` probes.
+        "gh" | "ci" => "command -v gh jq >/dev/null",
+        "issue" | "pr" => "command -v gh jq >/dev/null && gh auth status",
         // Names like saopaulo resolve through the IANA list in tzdata, not
         // the shipped label table.
         "timezone" | "tz" => {

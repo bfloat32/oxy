@@ -13,5 +13,6 @@
   "maxRows": 18,
   "tier": "substring",
   "view": "list",
-  "refreshMs": 900
+  "refreshMs": 900,
+  "native": "gh"
 }

@@ -15,6 +15,17 @@
     }
   },
   {
+    "why": "a pasted pull request URL is the same fact with a hostname in front: it lands on the pull request, not the repository it lives in",
+    "query": "!offline https://github.com/trophos/trophos/pull/111",
+    "minRows": 1,
+    "row": 0,
+    "view": "ghpr",
+    "matches": {
+      "id": "^pr:trophos/trophos#111$",
+      "exec": "/pull/111"
+    }
+  },
+  {
     "why": "your own pull requests cannot be guessed from the text, so with no account this says so rather than drawing an empty list",
     "query": "!offline",
     "minRows": 1,
@@ -37,6 +48,7 @@
   },
   {
     "why": "a word after the repository searches the whole repository rather than filtering the newest thirty, so a match older than that window is still reachable",
+    "requires": "gh auth token >/dev/null 2>&1 && curl -sf --max-time 6 -o /dev/null https://api.github.com",
     "query": "basecamp/omarchy theme",
     "minRows": 1,
     "maxRows": 14,

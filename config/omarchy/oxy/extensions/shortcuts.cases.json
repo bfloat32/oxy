@@ -1,0 +1,73 @@
+[
+  { "why": "a row is a keymap entry: the action, the combination in words, and the chips the view draws — modifiers first, the key last",
+    "query": "", "minRows": 20, "maxRows": 20, "row": 0, "view": "shortcuts",
+    "fields": ["title", "subtitle", "group", "keys", "combo", "config", "scope", "exec", "actions", "score"],
+    "matches": { "id": "^System\\|SUPER \\+ T\\|Terminal$",
+                 "title": "^Terminal$",
+                 "subtitle": "^Super \\+ T$",
+                 "group": "^Super$",
+                 "keys": "^\\['Super', 'T'\\]$",
+                 "combo": "^Super \\+ T$",
+                 "config": "^SUPER \\+ T$",
+                 "scope": "^System$",
+                 "exec": "^printf %s SUPER\\\\ \\+\\\\ T \\| wl-copy$",
+                 "score": "^99999$" } },
+
+  { "why": "a system row wears no chip — 'System' on every row is furniture",
+    "query": "", "row": 0,
+    "absent": ["accessory"] },
+
+  { "why": "Enter copies the combination hyprland.lua wants, and the action list is the three copies in order",
+    "query": "", "row": 0,
+    "matches": { "actions": "^\\[\\{'title': 'Copy Combination', 'shortcut': '↵', 'exec': 'printf %s [^']*wl-copy'\\}, \\{'title': 'Copy Action', 'exec': 'printf %s [^']*wl-copy'\\}, \\{'title': 'Copy Line', 'exec': 'printf %s [^']*wl-copy'\\}\\]$" } },
+
+  { "why": "the view groups by modifier family — Super plus a letter is one keyboard, Super Shift another",
+    "query": "", "row": 1,
+    "matches": { "title": "^Fullscreen$", "group": "^Super Shift$",
+                 "keys": "^\\['Super', 'Shift', 'F'\\]$",
+                 "config": "^SUPER \\+ SHIFT \\+ F$" } },
+
+  { "why": "the launcher's own keys are listed too — and say when the system owns the same combination, because then the key may never arrive",
+    "query": "", "row": 4,
+    "matches": { "title": "^Actions for the selected result$", "scope": "^Oxy$",
+                 "group": "^Ctrl$", "keys": "^\\['Ctrl', 'K'\\]$",
+                 "accessory": "^Oxy · also bound$" } },
+
+  { "why": "nothing is deduped: the system bind that owns Ctrl K follows its Oxy namesake — same family, same key, the action's name breaks the tie",
+    "query": "", "row": 5,
+    "absent": ["accessory"],
+    "matches": { "title": "^Copy line up$", "scope": "^System$", "group": "^Ctrl$",
+                 "keys": "^\\['Ctrl', 'K'\\]$" } },
+
+  { "why": "CTRL SHIFT and SHIFT CTRL are one family, not two — the canonical order is modifier-weight, whatever the source printed",
+    "query": "", "row": 10,
+    "matches": { "title": "^Previous result$", "scope": "^Oxy$",
+                 "group": "^Shift Ctrl$", "keys": "^\\['Shift', 'Ctrl', 'P'\\]$",
+                 "config": "^SHIFT \\+ CTRL \\+ P$" } },
+
+  { "why": "the bare keys close the keymap — the family nobody modified is the last group",
+    "query": "", "row": 18,
+    "matches": { "title": "^Run the selected result$", "group": "^Unmodified$",
+                 "keys": "^\\['Return'\\]$", "accessory": "^Oxy$",
+                 "config": "^RETURN$" } },
+
+  { "why": "a query narrows by key or by action: 'super' is a word in the family rows, 'f' the key's own word",
+    "query": "super f", "minRows": 1, "maxRows": 1,
+    "matches": { "title": "^Fullscreen$", "group": "^Super Shift$" } },
+
+  { "why": "win is the name people type for Super — the alias finds the family no source calls win",
+    "query": "win", "minRows": 2, "maxRows": 2,
+    "matches": { "title": "^Terminal$", "group": "^Super$" } },
+
+  { "why": "enter is a name no source prints — keyaliases are what make it findable",
+    "query": "enter", "minRows": 3, "maxRows": 3,
+    "matches": { "title": "^Second action on the selected result$",
+                 "keys": "^\\['Shift', 'Return'\\]$" } },
+
+  { "why": "the plus is punctuation, not a word — 'ctrl+n' is 'ctrl' and 'n', and 'n' leads 'ninth' as well as the N key",
+    "query": "ctrl+n", "minRows": 2, "maxRows": 2,
+    "matches": { "title": "^Next result$", "keys": "^\\['Ctrl', 'N'\\]$" } },
+
+  { "why": "a key nobody bound is silence, not an error row",
+    "query": "hyper mega ultra", "maxRows": 0, "fields": [] }
+]

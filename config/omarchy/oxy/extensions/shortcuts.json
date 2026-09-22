@@ -16,6 +16,7 @@
   "subtitle": "Shortcut",
   "glyph": "\udb80\udf0c",
   "search": "oxy-shortcuts {query}",
+  "native": "shortcuts",
   "when": "command -v hyprctl",
   "minChars": 0,
   "debounceMs": 120,

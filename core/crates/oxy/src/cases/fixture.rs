@@ -189,6 +189,63 @@ fn stub_bin(sandbox: &Path) -> std::io::Result<()> {
             }
         }
     }
+
+    // --- shortcuts fixture -------------------------------------------------
+    // `hyprctl binds -j` answers a fixed three-bind keymap — the shortcuts
+    // provider's whole live half. Every other subcommand defers to the
+    // machine's real hyprctl when one is on PATH (the win:/agent cases still
+    // see their own session), and answers a one-window one-screen picture
+    // when there is none, so those cases stay deterministic on a bare box
+    // instead of failing on the stub's silence.
+    let hyprctl = r#"#!/usr/bin/env bash
+if [ "$1" = "binds" ]; then
+cat <<'JSON'
+[{"locked":false,"mouse":false,"release":false,"repeat":false,"non_consuming":false,"modmask":64,"submap":"","key":"T","keycode":28,"catch_all":false,"description":"Terminal","dispatcher":"exec","arg":"foot"},{"locked":false,"mouse":false,"release":true,"repeat":false,"non_consuming":false,"modmask":65,"submap":"","key":"F","keycode":33,"catch_all":false,"description":"Fullscreen","dispatcher":"__lua","arg":"7"},{"locked":false,"mouse":false,"release":false,"repeat":false,"non_consuming":false,"modmask":4,"submap":"","key":"K","keycode":37,"catch_all":false,"description":"Copy line up","dispatcher":"exec","arg":"copyq"}]
+JSON
+exit 0
+fi
+self="$(readlink -f "$0" 2>/dev/null || printf '%s' "$0")"
+IFS=':'
+for d in $PATH; do
+  if [ -x "$d/hyprctl" ] && [ "$(readlink -f "$d/hyprctl" 2>/dev/null)" != "$self" ]; then
+    unset IFS
+    exec "$d/hyprctl" "$@"
+  fi
+done
+unset IFS
+case " $* " in
+*" clients "*)
+cat <<'JSON'
+[{"address":"0xaaa","mapped":true,"at":[0,40],"size":[960,1040],"workspace":{"id":1,"name":"1"},"floating":false,"monitor":0,"class":"foot","title":"fixture shell","xwayland":false,"pinned":false,"fullscreen":0,"grouped":[],"focusHistoryID":0}]
+JSON
+;;
+*" monitors "*)
+cat <<'JSON'
+[{"id":0,"name":"DP-1","activeWorkspace":{"id":1,"name":"1"}}]
+JSON
+;;
+esac
+exit 0
+"#;
+    // `omarchy-menu-keybindings` is absent here: the stub answers nothing,
+    // so the provider falls through to the `hyprctl binds -j` leg even on a
+    // box that really has Omarchy's menu — the cases see the fixture binds
+    // everywhere.
+    let omarchy_menu = "#!/usr/bin/env bash\nexit 1\n";
+    for (name, body) in [
+        ("hyprctl", hyprctl),
+        ("omarchy-menu-keybindings", omarchy_menu),
+    ] {
+        for suffix in ["", ".cmd"] {
+            let p = fakebin.join(format!("{name}{suffix}"));
+            std::fs::write(&p, body)?;
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
+            }
+        }
+    }
     Ok(())
 }
 

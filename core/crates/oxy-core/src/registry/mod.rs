@@ -62,6 +62,14 @@ pub fn load_dir(dir: &Path, enabled: &serde_json::Map<String, Value>) -> LoadRep
         };
         match Extension::normalize(&raw, path.clone()) {
             Some(ext) => {
+                // Two files naming one id is a config bug; the first wins and
+                // the second is reported rather than silently shadowed — and
+                // rather than making the worker reconcile respawn it forever
+                // (one id, two stamps).
+                if report.extensions.iter().any(|e| e.id == ext.id) {
+                    report.bad.push((path, format!("duplicate id {}", ext.id)));
+                    continue;
+                }
                 // Absent means on. Name one false to silence it.
                 let off = enabled.get(&ext.id).and_then(|v| v.as_bool()) == Some(false);
                 if !off {

@@ -66,6 +66,11 @@ pub enum WorkerMsg {
         rows: SharedRows,
         last: bool,
     },
+    /// The wait is over and no rows came of it: a stale answer kept on a
+    /// failed revalidation, or a stale set already up for the question.
+    /// Clears the seeded wait without touching the bucket — the rows the
+    /// launcher already has stay exactly what they were.
+    Done { id: Arc<str>, epoch: u64 },
     /// Log lines, relayed to the event stream.
     Log {
         id: Arc<str>,
@@ -210,6 +215,25 @@ fn build_rows_owned(ext: &Extension, raw: Vec<Value>) -> Vec<Row> {
     for (i, v) in raw.into_iter().enumerate().take(ext.max_rows) {
         if let Some(mut row) = to_row_owned(ext, v, i) {
             row.score = crate::support::rank::score(row.tier, row.local, 0);
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+/// The native partial channel, same as `build_rows_owned` except `pending`
+/// survives: `to_row` drops it from script JSON the way `toRow` did — a
+/// reserved field is launcher-internal — but a native provider's partials
+/// are trusted, and the placeholder it draws while it works is exactly what
+/// `pending` is for. Without this the calc placeholder read as an ordinary
+/// row and Enter closed the launcher on it.
+fn build_native_partial(ext: &Extension, raw: Vec<Value>) -> Vec<Row> {
+    let mut rows = Vec::with_capacity(raw.len().min(ext.max_rows));
+    for (i, v) in raw.into_iter().enumerate().take(ext.max_rows) {
+        let pending = v.get("pending").and_then(Value::as_bool).unwrap_or(false);
+        if let Some(mut row) = to_row_owned(ext, v, i) {
+            row.score = crate::support::rank::score(row.tier, row.local, 0);
+            row.pending = pending;
             rows.push(row);
         }
     }

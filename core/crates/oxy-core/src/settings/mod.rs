@@ -57,9 +57,16 @@ pub struct Quicklink {
 }
 
 impl Quicklink {
-    /// `{}` is the argument. A link without one ignores whatever was typed.
+    /// `{}` is the argument. A link without one ignores whatever was typed —
+    /// and the check is on the target `expand` would pick, `url` before
+    /// `open`, so a placeholder hiding in an unused `open` does not pretend
+    /// to take one.
     pub fn takes_argument(&self) -> bool {
-        self.url.contains("{}") || self.open.contains("{}")
+        if self.url.is_empty() {
+            self.open.contains("{}")
+        } else {
+            self.url.contains("{}")
+        }
     }
 
     /// An empty argument would leave a bare `.../search?q=`, which is a worse
@@ -208,10 +215,10 @@ impl Settings {
             }
         }
         if let Some(list) = obj.get("engineActions") {
-            let parsed = str_array(Some(list));
-            if !parsed.is_empty() {
-                out.engine_actions = parsed;
-            }
+            // The key's presence replaces — an empty list is "no engine
+            // actions", not "keep the defaults" (the script copied it
+            // verbatim, `root.config.engineActions || []`).
+            out.engine_actions = str_array(Some(list));
         }
         if let Some(links) = obj.get("quicklinks").and_then(|v| v.as_array()) {
             out.quicklinks = links

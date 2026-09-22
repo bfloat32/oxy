@@ -31,6 +31,7 @@ async fn run_step(step: &plan::Step) -> (i32, String, String) {
                 tokio::process::Command::new(&run[0])
                     .args(&run[1..])
                     .stdin(std::process::Stdio::null())
+                    .kill_on_drop(true)
                     .output(),
             )
             .await;
@@ -59,6 +60,7 @@ async fn run_step(step: &plan::Step) -> (i32, String, String) {
                 tokio::process::Command::new("omarchy-audio-output-volume")
                     .arg("mute-toggle")
                     .stdin(std::process::Stdio::null())
+                    .kill_on_drop(true)
                     .output(),
             )
             .await;

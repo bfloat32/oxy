@@ -52,6 +52,24 @@ impl Engine {
         if !entry.is_object() {
             *entry = json!({});
         }
+        // The script stored `String(values[key])` — a number sent by a
+        // non-QML client is text by the time the form reads it back, so the
+        // coercion happens here, once, instead of at every reader.
+        let values: Map<String, Value> = values
+            .into_iter()
+            .map(|(k, v)| {
+                let v = match v {
+                    Value::String(_) => v,
+                    other => Value::String(match other {
+                        Value::Bool(b) => b.to_string(),
+                        Value::Number(n) => n.to_string(),
+                        Value::Null => String::new(),
+                        other => other.to_string(),
+                    }),
+                };
+                (k, v)
+            })
+            .collect();
         entry
             .as_object_mut()
             .unwrap()

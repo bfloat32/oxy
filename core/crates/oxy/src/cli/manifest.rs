@@ -48,6 +48,7 @@ pub(crate) async fn run(only: Option<&str>, json: bool) -> i32 {
     files.sort();
 
     let mut checked = 0usize;
+    let mut matched = 0usize;
     let mut failed = 0usize;
     let mut ids: HashMap<String, String> = HashMap::new();
     let mut keywords: HashMap<String, String> = HashMap::new();
@@ -99,6 +100,7 @@ pub(crate) async fn run(only: Option<&str>, json: bool) -> i32 {
         {
             continue;
         }
+        matched += 1;
 
         let mut problems = Vec::new();
         if id.is_empty() {
@@ -191,7 +193,7 @@ pub(crate) async fn run(only: Option<&str>, json: bool) -> i32 {
     }
 
     if let Some(only) = only
-        && checked == 0
+        && matched == 0
     {
         eprintln!("oxy test: no extension '{only}'");
         return 1;

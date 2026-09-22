@@ -186,7 +186,7 @@ impl WorkerState {
             .shared
             .cache
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get(&self.id, &p.key, self.ext_stamp);
         if let Some(hit) = fresh {
             self.live = Some(Live {
@@ -204,12 +204,12 @@ impl WorkerState {
             answered = true;
         }
         if !answered {
-            let stale =
-                self.shared
-                    .cache
-                    .lock()
-                    .unwrap()
-                    .get_stale(&self.id, &p.key, self.ext_stamp);
+            let stale = self
+                .shared
+                .cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get_stale(&self.id, &p.key, self.ext_stamp);
             if let Some(stale) = stale {
                 self.stale_shown_key = p.key.clone();
                 self.plog(
@@ -219,6 +219,10 @@ impl WorkerState {
                 )
                 .await;
                 self.emit(p.epoch, stale, false).await;
+                // The engine seeded this provider waiting, but the stale
+                // answer is already up: there is nothing to wait on. The
+                // revalidation still runs — it just is not the spinner's.
+                self.done(p.epoch).await;
             }
         }
         answered

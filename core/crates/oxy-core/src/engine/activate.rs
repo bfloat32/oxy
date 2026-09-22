@@ -98,9 +98,23 @@ impl Engine {
             return;
         }
 
-        let action = action_index
-            .and_then(|i| row.actions.as_ref().and_then(|a| a.get(i)).cloned())
-            .or_else(|| row.actions.as_ref().and_then(|a| a.first()).cloned());
+        let action = match action_index {
+            // The panel and Shift+Enter name an action by index. A missing
+            // one falls back to the row's own activation — never to a
+            // different action than the one the keystroke meant.
+            Some(i) => row.actions.as_ref().and_then(|a| a.get(i)).cloned(),
+            // Enter runs the first action only when it carries the follow-up
+            // the extension asked for — `query` is the whole reason
+            // actions[0] precedes the row's own `run`. Any other first
+            // action leaves Enter to the row, the way the old launcher's
+            // `actions[0].query !== undefined` gate did.
+            None => row
+                .actions
+                .as_ref()
+                .and_then(|a| a.first())
+                .filter(|a| a.extra.contains_key("query"))
+                .cloned(),
+        };
 
         if let Some(action) = action {
             return self.run_action(&row, &action, depth).await;

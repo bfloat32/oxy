@@ -22,11 +22,16 @@ pub fn mru_record(state_dir: &Path, name: &str, value: &str, keep: usize) {
         return;
     }
     let path = state_dir.join(format!("oxy-{clean}"));
+    let state_dir = state_dir.to_path_buf();
     let value = value.to_string();
     // The engine's caller does not wait on the write, so the lock's spin
     // belongs off its thread — a raw spawn, since this can run where no
     // runtime is.
     std::thread::spawn(move || {
+        // The script's `mkdir -p "$(dirname "$RECENT")"`: a daemon whose
+        // state dir has not been born yet (fresh install, or every other
+        // state file disabled) still gets its MRU list.
+        let _ = std::fs::create_dir_all(&state_dir);
         // `flock -w 2` parity: `File::try_lock` is flock(2) on unix, so the
         // script's `flock "$RECENT.lock"` and this lock the same file — and
         // like the script, the record is dropped rather than written

@@ -469,10 +469,12 @@ async fn cmd_desk_io(args: &[String], io: &mut Io) -> i32 {
                     hypr_json(what).await.unwrap_or(Value::Null),
                 );
             }
-            // `indent=1` and a 20000-char cap, the way the script prints it.
+            // `indent=1` and a 20000-char cap, the way the script prints it
+            // — `text[:20000]` counts chars, so window titles with unicode
+            // end at a char edge rather than a byte one that panics.
             let mut text = json_indent1(&Value::Object(out));
-            if text.len() > 20000 {
-                text.truncate(20000);
+            if text.chars().count() > 20000 {
+                text = text.chars().take(20000).collect();
             }
             io.say(&text);
             0

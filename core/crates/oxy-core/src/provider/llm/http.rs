@@ -137,7 +137,20 @@ impl Response {
 
     /// Append one piece of the body to the buffer; `false` means the body
     /// ended. Chunked bodies are de-chunked here so callers see plain lines.
+    ///
+    /// Every socket read carries the stall deadline: a server that answers
+    /// the head and then goes silent would otherwise park the turn task —
+    /// and its connection — forever, unreachable even by `stopask`. The
+    /// bound is per read, not per body: a slow model pausing between tokens
+    /// is fine; two minutes without a single byte is not a pause, it is a
+    /// dead socket.
     async fn read_more(&mut self) -> io::Result<bool> {
+        /// One read's worth of patience. Generous for a model thinking on
+        /// CPU, fatal for a peer that is gone.
+        const STALL: std::time::Duration = std::time::Duration::from_secs(120);
+        fn stalled() -> io::Error {
+            io::Error::new(io::ErrorKind::TimedOut, "response body stalled")
+        }
         if self.eof {
             return Ok(false);
         }
@@ -147,9 +160,13 @@ impl Response {
                 // it is garbage, and a truncated read fails the parse below
                 // into `size == 0` — fails closed, at EOF.
                 let mut size_buf = Vec::with_capacity(64);
-                let size_line = crate::support::lines::next(&mut self.reader, &mut size_buf, 4096)
-                    .await?
-                    .unwrap_or_default();
+                let size_line = tokio::time::timeout(
+                    STALL,
+                    crate::support::lines::next(&mut self.reader, &mut size_buf, 4096),
+                )
+                .await
+                .map_err(|_| stalled())??
+                .unwrap_or_default();
                 if size_buf.is_empty() && size_line.is_empty() {
                     self.eof = true;
                     return Ok(false);
@@ -164,18 +181,22 @@ impl Response {
             }
             let want = self.chunk_left.min(8192);
             let mut tmp = vec![0u8; want];
-            self.reader.read_exact(&mut tmp).await?;
+            tokio::time::timeout(STALL, self.reader.read_exact(&mut tmp))
+                .await
+                .map_err(|_| stalled())??;
             self.buf.extend_from_slice(&tmp);
             self.chunk_left -= want;
             if self.chunk_left == 0 {
                 // The CRLF that closes the chunk, read and discarded.
                 let mut crlf = [0u8; 2];
-                let _ = self.reader.read_exact(&mut crlf).await;
+                let _ = tokio::time::timeout(STALL, self.reader.read_exact(&mut crlf)).await;
             }
             return Ok(true);
         }
         let mut tmp = [0u8; 8192];
-        let n = self.reader.read(&mut tmp).await?;
+        let n = tokio::time::timeout(STALL, self.reader.read(&mut tmp))
+            .await
+            .map_err(|_| stalled())??;
         if n == 0 {
             self.eof = true;
             return Ok(false);

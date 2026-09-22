@@ -181,10 +181,10 @@
     "fields": ["title", "subtitle"],
     "matches": { "title": "^standup$", "subtitle": "^Reminder at 09:00 (on Monday|today|tomorrow)" } },
 
-  { "why": "a time that has gone today rolls to tomorrow and says which decision it made",
-    "query": "today at 1am gym", "minRows": 1,
+  { "why": "a time that has gone today rolls to tomorrow and says which decision it made — 00:00 is the only clock that is always already gone",
+    "query": "today at 00:00 gym", "minRows": 1,
     "fields": ["subtitle", "detail"],
-    "matches": { "subtitle": "^Reminder at 01:00 tomorrow", "detail": "already gone today" } },
+    "matches": { "subtitle": "^Reminder at 00:00 tomorrow", "detail": "already gone today" } },
 
   { "why": "a duration with nothing to say at it shows what it read, and offers nothing to run",
     "query": "5m", "minRows": 1,

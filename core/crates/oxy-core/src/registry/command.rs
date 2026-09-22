@@ -54,7 +54,9 @@ fn msys_path(arg: &str) -> std::borrow::Cow<'_, str> {
 fn placeholder_re() -> &'static fancy_regex::Regex {
     static RE: std::sync::OnceLock<fancy_regex::Regex> = std::sync::OnceLock::new();
     RE.get_or_init(|| {
-        fancy_regex::Regex::new(r"\{([a-z0-9_-]+)\}").expect("placeholder regex compiles")
+        // `i`, as the script's `gi` carried: `{Query}` substitutes the same
+        // as `{query}` — the capture is lowercased before lookup.
+        fancy_regex::Regex::new(r"(?i)\{([a-z0-9_-]+)\}").expect("placeholder regex compiles")
     })
 }
 

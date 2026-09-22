@@ -215,10 +215,13 @@ impl Engine {
         if query.scope != "settings" {
             return Vec::new();
         }
-        let arg = query.arg_for("settings", &[]).trim().to_lowercase();
+        let arg_raw = query.arg_for("settings", &[]).trim().to_string();
+        let arg = arg_raw.to_lowercase();
 
-        // A picked extension with fields is a form, not a list.
-        if let Some(ext) = self.extensions.iter().find(|e| e.id == arg)
+        // A picked extension with fields is a form, not a list. The id
+        // match is exact — the script's `extensionById` was `===`, so a
+        // `settings:MyExt` names `MyExt` or nobody.
+        if let Some(ext) = self.extensions.iter().find(|e| e.id == arg_raw)
             && !ext.settings.is_empty()
         {
             return vec![self.settings_form(ext)];

@@ -71,13 +71,14 @@ impl State {
     }
 
     /// Atomic write: the file is renamed over, so a crash mid-save cannot lose
-    /// the ranking.
+    /// the ranking. Both writes are attempted even when the first fails — a
+    /// frecency I/O error must not silently skip the recents and pins save.
     pub fn save(&self, frecency_path: &Path, state_path: &Path) -> std::io::Result<()> {
-        write_atomic(
+        let frecency = write_atomic(
             frecency_path,
             &serde_json::to_string(&self.frecency).unwrap_or_default(),
-        )?;
-        write_atomic(
+        );
+        let state = write_atomic(
             state_path,
             &serde_json::to_string(&StateFile {
                 version: 1,
@@ -85,7 +86,8 @@ impl State {
                 pins: self.pins.clone(),
             })
             .unwrap_or_default(),
-        )
+        );
+        frecency.and(state)
     }
 }
 
@@ -153,6 +155,30 @@ mod tests {
         assert!(
             !state.pins.contains_key("app:y"),
             "a false pin is not a pin"
+        );
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_failed_frecency_write_does_not_skip_the_state_save() {
+        let d = dir("partial-save");
+        // A frecency path under a *file*: create_dir_all fails, so the
+        // frecency write errors — the state write must still land.
+        let blocker = d.join("blocker");
+        std::fs::write(&blocker, "x").unwrap();
+        let frecency = blocker.join("oxy-frecency.json");
+        let state_path = d.join("oxy-state.json");
+
+        let state = State {
+            frecency: Default::default(),
+            recents: vec!["git:".to_string()],
+            pins: Default::default(),
+        };
+        let res = state.save(&frecency, &state_path);
+        assert!(res.is_err(), "the frecency write genuinely failed");
+        assert!(
+            state_path.exists(),
+            "the state file was still written after the frecency failure"
         );
         std::fs::remove_dir_all(&d).ok();
     }

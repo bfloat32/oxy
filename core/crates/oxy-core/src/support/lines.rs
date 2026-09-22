@@ -25,6 +25,14 @@ pub async fn next<R>(
 where
     R: tokio::io::AsyncRead + Unpin,
 {
+    // Degenerate caps: 0 would hand back `""` forever, and `usize::MAX`
+    // wraps the `max + 1` below into a spin. Anything unusable reads as
+    // the shared bound rather than its own surprise.
+    let max = if max == 0 || max == usize::MAX {
+        MAX_LINE
+    } else {
+        max
+    };
     loop {
         if let Some(i) = buf.iter().position(|b| *b == b'\n') {
             let mut line: Vec<u8> = buf.drain(..=i).collect();

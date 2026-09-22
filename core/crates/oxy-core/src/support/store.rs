@@ -22,17 +22,48 @@ use serde::de::DeserializeOwned;
 ///
 /// An empty file counts as corrupt: every writer here writes an object, so a
 /// zero-byte file is a write that did not finish. A file past the size a
-/// state file can honestly be is refused rather than read into memory — the
-/// daemon would otherwise be one giant dropped file away from a bad day.
+/// state file can honestly be is bounded on the read itself and moved aside
+/// like any other unparseable — left in place it would silently reset state
+/// and be re-read, and re-refused, on every load.
 pub fn read_json<T: DeserializeOwned>(path: &Path, moved: &mut Vec<PathBuf>) -> Option<T> {
     // 64 MiB is far past any state, settings or cache file this owns.
-    if std::fs::metadata(path)
-        .map(|m| m.len() > 64 * 1024 * 1024)
-        .unwrap_or(false)
-    {
+    read_json_bounded(path, moved, 64 * 1024 * 1024)
+}
+
+fn read_json_bounded<T: DeserializeOwned>(
+    path: &Path,
+    moved: &mut Vec<PathBuf>,
+    limit: u64,
+) -> Option<T> {
+    // The bound is on the read itself, not a stat beforehand: a file that
+    // grew between the two cannot overrun memory.
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    use std::io::Read;
+    if file.take(limit + 1).read_to_end(&mut bytes).is_err() {
         return None;
     }
-    let text = std::fs::read_to_string(path).ok()?;
+    if bytes.len() as u64 > limit {
+        // Past the bound is corrupt the same way bad UTF-8 is: moved aside
+        // and reported rather than re-read — and re-failed — on every load.
+        let backup = backup_path(path);
+        if std::fs::rename(path, &backup).is_ok() {
+            moved.push(backup);
+        }
+        return None;
+    }
+    // Invalid UTF-8 is the same failure a truncated write is: not this
+    // file's contents, so it is moved aside with the other unparseables.
+    let text = match String::from_utf8(bytes) {
+        Ok(t) => t,
+        Err(_) => {
+            let backup = backup_path(path);
+            if std::fs::rename(path, &backup).is_ok() {
+                moved.push(backup);
+            }
+            return None;
+        }
+    };
     match serde_json::from_str(&text) {
         Ok(value) => Some(value),
         Err(_) => {
@@ -131,6 +162,25 @@ mod tests {
         std::fs::write(&path, "").unwrap();
         assert!(read_json::<Doc>(&path, &mut moved).is_none());
         assert_eq!(moved, vec![d.join("oxy-frecency.corrupt")]);
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    #[test]
+    fn a_file_past_the_bound_is_moved_aside_like_corrupt() {
+        let mut moved = Vec::new();
+        let d = dir("huge");
+        let path = d.join("oxy-state.json");
+        std::fs::write(
+            &path,
+            "{ \"n\": 7, \"padding\": \"this is far past ten bytes\" }",
+        )
+        .unwrap();
+        assert!(read_json_bounded::<Doc>(&path, &mut moved, 10).is_none());
+        assert_eq!(moved, vec![d.join("oxy-state.corrupt")]);
+        assert!(
+            !path.exists(),
+            "the oversized file is out of the way, not re-read every load"
+        );
         std::fs::remove_dir_all(&d).ok();
     }
 }

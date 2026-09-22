@@ -159,7 +159,7 @@ fn app_known(name: &str) -> bool {
     let key = name.split_whitespace().collect::<Vec<_>>().join(" ");
     *APPS
         .lock()
-        .unwrap()
+        .unwrap_or_else(|e| e.into_inner())
         .entry(key.clone())
         .or_insert_with(|| desk::app_command(&key).is_some())
 }

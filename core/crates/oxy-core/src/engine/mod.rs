@@ -382,6 +382,10 @@ impl Engine {
                 }
                 self.opened = true;
                 self.opened_at = Some(std::time::Instant::now());
+                // The daemon re-probes the clipboard on every open — an
+                // already-open resend (a reconnect) keeps the old URL
+                // otherwise, and the paste row would offer it again.
+                self.clipboard_url = None;
                 self.emit_log(
                     "open",
                     json!({ "q": crate::clip(&text, 120), "ep": self.epoch + 1 }),

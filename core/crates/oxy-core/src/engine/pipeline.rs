@@ -143,6 +143,14 @@ impl Engine {
                 }
                 false
             }
+            WorkerMsg::Done { id, epoch } => {
+                if epoch == self.epoch {
+                    self.waiting.remove(&*id);
+                }
+                // A publish is owed: the spinner clears now, not whenever
+                // the next event happens to arrive.
+                true
+            }
             WorkerMsg::Log { id, ev, fields } => {
                 // The log already carries the timing, so `/stats` counts what
                 // is being written rather than measuring anything new.

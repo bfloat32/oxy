@@ -262,11 +262,22 @@ fn to_row_inner(
         None => title.clone(),
     };
 
-    let local = obj
-        .remove("score")
-        .and_then(|s| s.as_f64())
-        .map(|s| s.clamp(0.0, 99999.0) as i64)
-        .unwrap_or_else(|| (90000 - index as i64 * 1000).max(0));
+    // `Number(raw.score)` from the script's toRow: `null` reads 0 (bottom of
+    // the tier, not the positional top), `true` reads 1, a numeric string is
+    // the number. A field that is absent at all keeps the positional bias.
+    let local = match obj.remove("score") {
+        Some(s) => {
+            let n = match s {
+                Value::Number(n) => n.as_f64().unwrap_or(0.0),
+                Value::Bool(b) => b as u8 as f64,
+                Value::Null => 0.0,
+                Value::String(t) => t.trim().parse::<f64>().unwrap_or(0.0),
+                _ => 0.0,
+            };
+            n.clamp(0.0, 99999.0) as i64
+        }
+        None => (90000 - index as i64 * 1000).max(0),
+    };
 
     let num = |obj: &mut Map<String, Value>, key: &str| obj.remove(key).and_then(|v| v.as_f64());
     let int = |obj: &mut Map<String, Value>, key: &str| obj.remove(key).and_then(|v| v.as_i64());

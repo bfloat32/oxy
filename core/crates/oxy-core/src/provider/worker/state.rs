@@ -183,6 +183,18 @@ impl WorkerState {
             .await;
     }
 
+    /// The wait the engine seeded is over and there are no rows to send —
+    /// a stale answer kept, or stale already up for the question.
+    pub(super) async fn done(&self, epoch: u64) {
+        let _ = self
+            .tx
+            .send(WorkerMsg::Done {
+                id: self.id.clone(),
+                epoch,
+            })
+            .await;
+    }
+
     pub(super) async fn plog(&self, ev: &str, fields: Value) {
         let _ = self
             .tx
@@ -215,6 +227,10 @@ impl WorkerState {
                     "ms": self.run_start.elapsed().as_millis() as u64}),
             )
             .await;
+            // The stale set is this run's answer: the wait seeded for it
+            // is over even though nothing new landed — leaving it was a
+            // spinner that never went out.
+            self.done(self.run_epoch).await;
             self.arm_refresh();
         } else {
             match out {
@@ -265,24 +281,36 @@ impl WorkerState {
                             "ms": self.run_start.elapsed().as_millis() as u64}),
                     )
                     .await;
+                    let rows: SharedRows = Arc::new(
+                        rows.into_iter()
+                            .take(self.ext.max_rows)
+                            .map(Arc::new)
+                            .collect::<Vec<_>>(),
+                    );
                     if let Some(p) = self.run_pending.take() {
+                        // Same cache as the raw path: a `cacheMs` extension
+                        // whose rows are built natively still pays for one
+                        // answer, not one per keystroke.
+                        if self.ext.cache_ms > 0 {
+                            self.shared
+                                .cache
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .put(
+                                    &self.id,
+                                    &p.key,
+                                    rows.clone(),
+                                    self.ext.cache_ms,
+                                    self.ext_stamp,
+                                );
+                        }
                         self.live = Some(Live {
                             epoch: p.epoch,
                             pending: p,
                         });
                     }
                     self.stale_shown_key = String::new();
-                    self.emit(
-                        self.run_epoch,
-                        Arc::new(
-                            rows.into_iter()
-                                .take(self.ext.max_rows)
-                                .map(Arc::new)
-                                .collect::<Vec<_>>(),
-                        ),
-                        true,
-                    )
-                    .await;
+                    self.emit(self.run_epoch, rows, true).await;
                 }
             }
             self.arm_refresh();
@@ -348,7 +376,7 @@ impl WorkerState {
                 .shared
                 .availability
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .get(&self.ext.when)
                 .is_none();
             if !self.ext.when.is_empty() && q.routes_to(&self.ext.keyword, &self.ext.aliases) && due
@@ -376,7 +404,9 @@ impl WorkerState {
             self.emit(q.epoch, EMPTY_ROWS.clone(), true).await;
         } else {
             let arg = q.arg_for(&self.ext.keyword, &self.ext.aliases);
-            if arg.chars().count() < self.ext.min_chars {
+            // `arg.length` counts UTF-16 units — an astral character is two,
+            // so a two-emoji argument meets `minChars: 3` the way it did.
+            if arg.encode_utf16().count() < self.ext.min_chars {
                 self.emit(q.epoch, EMPTY_ROWS.clone(), true).await;
             } else {
                 let filters = Arc::new(q.extras(&self.ext.keyword, &self.ext.aliases));
@@ -409,13 +439,19 @@ impl WorkerState {
                 if !answered {
                     // Connecting is driven by queries, not a retry timer.
                     self.try_connect().await;
-                    let _ = self
-                        .tx
-                        .send(WorkerMsg::Waiting {
-                            id: self.id.clone(),
-                            epoch: q.epoch,
-                        })
-                        .await;
+                    // Stale rows already up for this question mean there is
+                    // no wait to mark — the run still happens, it just is
+                    // not the spinner's business (the old `markWaiting` was
+                    // deliberately skipped on this path too).
+                    if self.stale_shown_key != p.key {
+                        let _ = self
+                            .tx
+                            .send(WorkerMsg::Waiting {
+                                id: self.id.clone(),
+                                epoch: q.epoch,
+                            })
+                            .await;
+                    }
                     self.pending = Some(p);
                     self.debounce = Some(Box::pin(tokio::time::sleep_until(
                         Instant::now() + Duration::from_millis(self.ext.debounce_ms),
@@ -551,7 +587,7 @@ impl WorkerState {
                 if self.run_epoch == self.current_epoch {
                     self.emit(
                         self.run_epoch,
-                        share_rows(build_rows_owned(&self.ext, raw)),
+                        share_rows(super::build_native_partial(&self.ext, raw)),
                         false,
                     )
                     .await;
@@ -590,7 +626,7 @@ impl WorkerState {
             Some(raw) if self.run_epoch == self.current_epoch => {
                 self.emit(
                     self.run_epoch,
-                    share_rows(build_rows_owned(&self.ext, raw)),
+                    share_rows(super::build_native_partial(&self.ext, raw)),
                     false,
                 )
                 .await;

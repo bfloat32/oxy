@@ -38,6 +38,16 @@ pub(crate) async fn run(only: Option<String>, json: bool) -> i32 {
     let mut lines: Vec<String> = Vec::new();
     let mut failures: Vec<Value> = Vec::new();
 
+    // `only` naming nothing is a usage error, not a zero-case pass.
+    if let Some(only) = &only
+        && report.extensions.iter().all(|e| {
+            e.id != *only && e.source.file_stem().and_then(|s| s.to_str()) != Some(only.as_str())
+        })
+    {
+        eprintln!("oxy test: no extension '{only}'");
+        return 1;
+    }
+
     // One engine for the whole run — each case is just the next query.
     let (tx, mut rx, _task) = local_engine().await;
     // Every EngineCmd::Query bumps the engine's epoch by one. Counting our

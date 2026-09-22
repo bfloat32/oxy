@@ -124,11 +124,15 @@ impl Engine {
         }));
     }
 
-    /// Kill the stream, if one is running. Idempotent.
+    /// Kill the stream, if one is running — and the question queued behind
+    /// it. Escape means stop asking, not "stop this one and start the next
+    /// one anyway": a queued question the user dismissed must not fire when
+    /// a later turn ends. Idempotent.
     pub(super) fn stop_ask(&mut self) {
         if let Some(task) = self.ask_task.take() {
             task.abort();
         }
+        self.ask_pending = None;
     }
 
     /// The native path: one POST to the configured endpoint, deltas streamed
@@ -209,18 +213,42 @@ impl Engine {
         if self.ask_provider.is_some() {
             return true;
         }
-        for provider in self.settings.ask_ordered() {
-            if provider.when.is_empty() || crate::provider::process::check(&provider.when).await {
-                self.ask_provider = Some(provider.clone());
-                return true;
+        self.ask_provider = self.first_available_provider().await;
+        self.ask_provider.is_some()
+    }
+
+    /// The first `askProviders` entry whose `when` answers, in list order.
+    /// The probes run together — each `when` is a bounded subprocess and a
+    /// row of absent CLIs costs the slowest one instead of the sum, which
+    /// the engine loop would otherwise sit through on first open.
+    async fn first_available_provider(&self) -> Option<crate::settings::AskProvider> {
+        let providers: Vec<crate::settings::AskProvider> =
+            self.settings.ask_ordered().into_iter().cloned().collect();
+        let mut probes = tokio::task::JoinSet::new();
+        for (i, p) in providers.iter().enumerate() {
+            let when = p.when.clone();
+            probes.spawn(async move {
+                (
+                    i,
+                    when.is_empty() || crate::provider::process::check(&when).await,
+                )
+            });
+        }
+        let mut ok = vec![false; providers.len()];
+        while let Some(res) = probes.join_next().await {
+            if let Ok((i, pass)) = res {
+                ok[i] = pass;
             }
         }
-        false
+        providers
+            .into_iter()
+            .zip(ok)
+            .find(|(_, pass)| *pass)
+            .map(|(p, _)| p)
     }
 
     /// The first `askProviders` entry whose `when` answers, in list order —
-    /// `probeNextProvider`'s port. Runs once per settings load; the probes are
-    /// serial because a wrong guess costs more than the wait does.
+    /// `probeNextProvider`'s port. Runs once per settings load.
     ///
     /// A configured local model is resolved here too, and it short-circuits
     /// the list: the user named an endpoint, so probing four CLIs to ignore
@@ -232,12 +260,7 @@ impl Engine {
         if self.llm.is_some() {
             return;
         }
-        for provider in self.settings.ask_ordered() {
-            if provider.when.is_empty() || crate::provider::process::check(&provider.when).await {
-                self.ask_provider = Some(provider.clone());
-                break;
-            }
-        }
+        self.ask_provider = self.first_available_provider().await;
     }
 
     /// The registry event, sent on every open transition and every reload:

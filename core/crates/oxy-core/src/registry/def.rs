@@ -116,8 +116,8 @@ struct Raw {
     id: Option<Value>,
     title: Option<Value>,
     keyword: Option<Value>,
-    aliases: Option<Vec<String>>,
-    filters: Option<Vec<String>>,
+    aliases: Option<Value>,
+    filters: Option<Value>,
     search: Option<Value>,
     when: Option<Value>,
     glyph: Option<Value>,
@@ -139,9 +139,9 @@ struct Raw {
     refresh_ms: Option<Value>,
     socket: Option<Value>,
     native: Option<Value>,
-    actions: Option<Vec<Action>>,
+    actions: Option<Value>,
     accent: Option<Value>,
-    settings: Option<Vec<Setting2>>,
+    settings: Option<Value>,
     #[serde(rename = "testQuery")]
     test_query: Option<Value>,
 }
@@ -158,8 +158,54 @@ struct Setting2 {
 fn s(v: Option<&Value>) -> String {
     match v {
         Some(Value::String(x)) => x.trim().to_string(),
+        // `String(x || "")`: the script's falsy values — null, false, 0 —
+        // read as empty, so `"when": false` hides nothing and `"search": 0`
+        // is an unanswerable extension, not a command named `0`.
+        Some(other)
+            if other.is_null() || *other == Value::Bool(false) || other.as_f64() == Some(0.0) =>
+        {
+            String::new()
+        }
         Some(other) => other.to_string(),
         None => String::new(),
+    }
+}
+
+/// `Array.isArray ? … : []`, element by element: the script `String()`ed
+/// every member, so `[1, "x"]` reads as `["1", "x"]` and a non-array is
+/// empty — never a reason to drop the whole file.
+fn str_vec(v: Option<Value>) -> Vec<String> {
+    match v {
+        Some(Value::Array(a)) => a
+            .into_iter()
+            .map(|x| match x {
+                Value::String(s) => s,
+                other => other.to_string(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// Same leniency for the typed arrays: `actions: {}` or a member that is not
+/// action-shaped costs that member, not the extension.
+fn actions_vec(v: Option<Value>) -> Vec<Action> {
+    match v {
+        Some(Value::Array(a)) => a
+            .into_iter()
+            .filter_map(|x| serde_json::from_value::<Action>(x).ok())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
+fn settings_vec(v: Option<Value>) -> Vec<Setting2> {
+    match v {
+        Some(Value::Array(a)) => a
+            .into_iter()
+            .filter_map(|x| serde_json::from_value::<Setting2>(x).ok())
+            .collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -216,15 +262,11 @@ impl Extension {
             id,
             title,
             keyword,
-            aliases: raw
-                .aliases
-                .unwrap_or_default()
+            aliases: str_vec(raw.aliases)
                 .iter()
                 .map(|a| a.to_lowercase())
                 .collect(),
-            filters: raw
-                .filters
-                .unwrap_or_default()
+            filters: str_vec(raw.filters)
                 .iter()
                 .map(|f| f.to_lowercase())
                 .collect(),
@@ -255,11 +297,9 @@ impl Extension {
             refresh_ms: num(raw.refresh_ms.as_ref(), 0.0).clamp(0.0, 86_400_000.0) as u64,
             socket,
             native,
-            actions: raw.actions.unwrap_or_default(),
+            actions: actions_vec(raw.actions),
             accent: s(raw.accent.as_ref()),
-            settings: raw
-                .settings
-                .unwrap_or_default()
+            settings: settings_vec(raw.settings)
                 .into_iter()
                 .map(|x| Setting {
                     key: x.key.unwrap_or_default(),

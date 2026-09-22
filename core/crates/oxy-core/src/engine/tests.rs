@@ -250,3 +250,178 @@ fn the_slowest_providers_are_ranked_by_their_worst_answer() {
     // The cap is a cap.
     assert_eq!(crate::engine::slowest(&latency, 1).len(), 1);
 }
+
+/// Enter runs `actions[0]` only when it carries the follow-up a script
+/// asked for — the old launcher's `actions[0].query !== undefined` gate.
+/// A queryless first action leaves Enter to the row's own `exec`; a missing
+/// index (Shift+Enter past the end) does too, rather than running a
+/// different action than the keystroke meant.
+#[tokio::test]
+async fn enter_dispatch_follows_the_query_gate() {
+    // The "act" log line is the row path; "action" is run_action's.
+    let events = |engine: &mut Engine| {
+        let (tx, rx) = mpsc::channel(64);
+        engine.evt_tx = tx;
+        engine.settings.log = true;
+        rx
+    };
+    let names = |rx: &mut mpsc::Receiver<EngineEvent>| {
+        let mut out = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            out.push(match ev {
+                EngineEvent::Log { ev, .. } => ev,
+                EngineEvent::Close => "close".to_string(),
+                EngineEvent::Type { text, .. } => format!("type:{text}"),
+                _ => "other".to_string(),
+            });
+        }
+        out
+    };
+
+    // Queryless actions[0]: the row's own activation runs.
+    let mut engine = bare_engine();
+    let mut rx = events(&mut engine);
+    let mut row = Row::new("k", "probe");
+    row.exec = "test-nop row".into();
+    row.actions = Some(vec![crate::model::action::Action {
+        exec: "test-nop action".into(),
+        ..Default::default()
+    }]);
+    engine.rows = vec![Arc::new(row)];
+    engine.on_activate("k", None, false, false, 0).await;
+    let ev = names(&mut rx);
+    assert!(ev.iter().any(|e| e == "act"), "the row ran: {ev:?}");
+    assert!(
+        !ev.iter().any(|e| e == "action"),
+        "a queryless actions[0] must not shadow the row: {ev:?}"
+    );
+
+    // actions[0] carrying `query`: Enter runs the action, and the
+    // follow-up is typed.
+    let mut engine = bare_engine();
+    let mut rx = events(&mut engine);
+    let mut row = Row::new("k", "probe");
+    row.exec = "test-nop row".into();
+    let mut action = crate::model::action::Action::default();
+    action.extra.insert("query".into(), json!("next:"));
+    row.actions = Some(vec![action]);
+    engine.rows = vec![Arc::new(row)];
+    engine.on_activate("k", None, false, false, 0).await;
+    let ev = names(&mut rx);
+    assert!(ev.iter().any(|e| e == "action"), "the action ran: {ev:?}");
+    assert!(
+        ev.iter().any(|e| e == "type:next:"),
+        "the follow-up was typed: {ev:?}"
+    );
+
+    // Shift+Enter past the end of the list: the row, not actions[0].
+    let mut engine = bare_engine();
+    let mut rx = events(&mut engine);
+    let mut row = Row::new("k", "probe");
+    row.exec = "test-nop row".into();
+    let mut action = crate::model::action::Action::default();
+    action.extra.insert("query".into(), json!("next:"));
+    row.actions = Some(vec![action]);
+    engine.rows = vec![Arc::new(row)];
+    engine.on_activate("k", None, true, false, 0).await;
+    let ev = names(&mut rx);
+    assert!(
+        ev.iter().any(|e| e == "act") && !ev.iter().any(|e| e == "action"),
+        "a missing second action falls back to the row: {ev:?}"
+    );
+}
+
+/// `pending` is how a placeholder holds Enter until the real row lands:
+/// the hold resolves against a non-pending row with the same key, the way
+/// qalc's "calculating" row is replaced by the answer under it.
+#[tokio::test]
+async fn enter_on_a_pending_row_holds_then_resolves() {
+    let mut engine = bare_engine();
+    let (tx, mut rx) = mpsc::channel(64);
+    engine.evt_tx = tx;
+
+    let mut placeholder = Row::new("calc:x", "calc");
+    placeholder.pending = true;
+    engine.rows = vec![Arc::new(placeholder)];
+    engine.on_activate("calc:x", None, false, false, 0).await;
+    assert!(
+        engine.pending_activate.is_some(),
+        "Enter on a pending row is held, not run"
+    );
+    assert!(
+        !matches!(rx.try_recv(), Ok(EngineEvent::Close)),
+        "nothing closed on a placeholder"
+    );
+
+    // The answer arrives under the same key — publish rebuilds the rows
+    // from the provider's bucket, the way a real answer lands.
+    let mut real = Row::new("calc:x", "calc");
+    real.exec = "test-nop answer".into();
+    let ep = engine.epoch;
+    engine
+        .buckets
+        .insert(Arc::from("calc"), (ep, Arc::new(vec![Arc::new(real)])));
+    let q = engine.query.clone();
+    engine.publish(ep, &q).await;
+    assert!(
+        engine.pending_activate.is_none(),
+        "the real row released the hold"
+    );
+    let mut closed = false;
+    while let Ok(ev) = rx.try_recv() {
+        closed |= matches!(ev, EngineEvent::Close);
+    }
+    assert!(closed, "the resolved Enter activated the answer");
+}
+
+/// `Done` retires the seeded wait without touching the bucket — a stale
+/// answer kept on a failed revalidation leaves no spinner behind. A
+/// foreign-epoch Done must not clear the current epoch's wait.
+#[tokio::test]
+async fn done_clears_the_wait_for_its_epoch_only() {
+    let mut engine = bare_engine();
+    engine.epoch = 7;
+    engine.waiting.insert(Arc::from("probe"));
+
+    engine
+        .handle_worker(WorkerMsg::Done {
+            id: Arc::from("probe"),
+            epoch: 3,
+        })
+        .await;
+    assert!(
+        engine.waiting.contains("probe"),
+        "a stale Done cleared the live epoch's wait"
+    );
+
+    let dirty = engine
+        .handle_worker(WorkerMsg::Done {
+            id: Arc::from("probe"),
+            epoch: 7,
+        })
+        .await;
+    assert!(engine.waiting.is_empty(), "the wait is over");
+    assert!(dirty, "the cleared wait owes a publish");
+}
+
+/// Escape is "stop asking", not "start the queued one anyway": a question
+/// pending behind a stream dies with the stream it waited behind — and with
+/// the launcher closing. Without the clear, a dismissed question fired when
+/// the next turn ended.
+#[tokio::test]
+async fn a_cancelled_ask_drops_its_queue() {
+    let mut engine = bare_engine();
+    engine.ask_pending = Some("the queued question".into());
+    engine.stop_ask();
+    assert!(
+        engine.ask_pending.is_none(),
+        "stopask takes the queue with it"
+    );
+
+    engine.ask_pending = Some("queued behind the close".into());
+    engine.on_close().await;
+    assert!(
+        engine.ask_pending.is_none(),
+        "closing takes the queue with it"
+    );
+}

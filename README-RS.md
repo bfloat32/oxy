@@ -83,10 +83,14 @@ printf '{"op":"ping"}\n' | oxy send   # talk to the socket directly
 
 Extensions that declare `"native": "<name>"` are answered by a provider
 compiled into the daemon first — the built-ins apps, calc, commands,
-quicklinks and web, plus alarm, bri, bt, cal, calchist, ch, date, emoji,
-file, herdr, img, kill, note, pass, recent, snip, ssh, sys, theme, vol,
-wifi and win — with their declared `search` or `socket` kept as the
-fallback when the native provider declines. `cal`'s natural-language leg
+quicklinks and web, plus alarm, branch, bri, bt, cal, calchist, ch, date,
+emoji, file, git, herdr, img, kill, note, pass, recent, repo, snip, ssh,
+stash, sys, theme, vol, wifi and win — with their declared `search` or
+`socket` kept as the fallback when the native provider declines. The four
+git-family providers share `vcs/repos.rs` — repo discovery, the
+`--resolve` port, and the per-repo state cache — so `git:omarchy` answers
+which repo you meant without a `git status` per candidate. `cal`'s
+natural-language leg
 resolves through the same `date` parser in-process, so queries like
 `cal:christmas` need no script at all.
 Every other manifest runs its script or socket exactly as before, so the

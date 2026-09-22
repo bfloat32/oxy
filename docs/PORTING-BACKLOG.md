@@ -42,13 +42,13 @@ starts from a measured state:
 
 | fact | value |
 |---|---|
-| Rust files | 132 (37 before the restructure) |
-| total lines | 28 774 |
-| largest file | 719 lines (`provider/native/time/alarm/clock.rs`); nothing above the 800 target |
-| tests | 325 passing (`cargo test --workspace`) |
+| Rust files | 134 (37 before the restructure) |
+| total lines | 32 558 |
+| largest file | 1 066 lines (`provider/native/vcs/repos.rs` — over the 800 target, under the 1 200 cap; a `repos/` split is the known follow-up) |
+| tests | 375 passing (`cargo test --workspace`) |
 | lints | `cargo clippy --workspace --all-targets -- -D warnings` clean; `cargo fmt --check` clean |
 | guards | the file budget, the `model/` layering check and the **view-list sync** in `tests/run.sh`; `oxy test --only manifest` against this repo's extensions (it checks that every `native:` name is an arm in `construct`); clippy in CI; `core/.loc-allow` names the three exempt data tables; `core/README.md` is the crate map |
-| extensions | 40 (27 native — 22 declaring `"native"` plus the five built-ins; 18 script-backed) — the marketplace was removed |
+| extensions | 40 (31 native — 26 declaring `"native"` plus the five built-ins; 14 script-backed) — the marketplace was removed |
 | case suites | 27 files, 443 assertions; the extensions without one are listed below |
 | unchanged by the restructure | the wire, the row shapes, the state files, the script contract |
 
@@ -61,8 +61,8 @@ LLM slice landed (§4.4).
 
 ## 1. Where we stand
 
-**40 extensions ship. 27 answer through a native provider. 18 remain
-script-backed** — 15 distinct scripts plus `pr`, `issue` and `ci`, which are
+**40 extensions ship. 31 answer through a native provider. 14 remain
+script-backed** — 11 distinct scripts plus `pr`, `issue` and `ci`, which are
 nine-line wrappers that set `OXY_GH_MODE` for `oxy-gh`. (`bo:` and its
 marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
 
@@ -80,7 +80,7 @@ marketplace were removed — see `docs/MARKETPLACE-REMOVAL.md`.)
 | batch | extensions | script lines | why they belong together |
 |---|---|---|---|
 | ~~**A. local state**~~ ✅ | `vol`, `bri`, `win`, `bt`, `wifi`, `theme`, `alarm` | 1 691 | done — merged `fc76de2`…`a112f2e`, case files landed |
-| **B. git family** | `repo`, `git`, `branch`, `stash` | 1 713 | one shared resolver (`oxy-repo --resolve`) plus the same `git` plumbing — **decided: spawn+parse via `vcs/run.rs` (scaffolded), zero new deps** |
+| ~~**B. git family**~~ ✅ | `repo`, `git`, `branch`, `stash` | 1 713 | done — spawn+parse through `vcs/run.rs` + the shared `vcs/repos.rs` (discovery, `--resolve`, the v4 state cache); the case runner's fixture (`cases/fixture.rs`) builds the two throwaway repos so all 34 cases exercise the native legs |
 | **C. GitHub family** | `gh`, `pr`, `issue`, `ci` | 1 074 | one script in four modes (`OXY_GH_MODE`), GraphQL over `gh`, network |
 | **D. session & system views** | `docker`, `shortcuts`, `omarchy`, ~~`herdr`~~, ~~`img`~~ | 1 371 | `herdr`+`img` done; `docker`, `shortcuts`, `omarchy` remain |
 | **E. text & data** | `unit`, `tz`, `def`, ~~`snip`~~, ~~`note`~~, ~~`pass`~~ | 2 861 | `snip`/`note`/`pass` done; `unit`, `tz`, `def` remain — **`tz` decided: `jiff`** (chrono-tz is winding down; a table fails the 45-case contract) |

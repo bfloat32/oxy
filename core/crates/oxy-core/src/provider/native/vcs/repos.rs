@@ -67,10 +67,6 @@ pub(crate) fn oxy_state_dir() -> PathBuf {
     paths::state_home().join("omarchy")
 }
 
-fn repo_list_cache() -> PathBuf {
-    oxy_state_dir().join("oxy-repos.list")
-}
-
 fn repo_pin() -> PathBuf {
     oxy_state_dir().join("oxy-repo")
 }
@@ -405,11 +401,6 @@ fn current_repo_from(
         .map(|(_, r)| r.clone())
 }
 
-pub(crate) async fn current_repo() -> Option<PathBuf> {
-    let repos = load_repos();
-    current_repo_async(repos).await
-}
-
 async fn current_repo_async(repos: Vec<PathBuf>) -> Option<PathBuf> {
     // The focused terminal's cwd — Omarchy's own terminal-in-cwd trick. Only
     // under Hyprland and only while the helper exists.
@@ -456,6 +447,7 @@ fn split_resolve(raw: &str, repos: &[PathBuf]) -> (Option<PathBuf>, String) {
 
 /// The pure `resolve` — tests hand it the list and the current repo so it
 /// never touches the environment.
+#[cfg(test)]
 pub(crate) fn resolve_with(
     raw: &str,
     repos: &[PathBuf],

@@ -53,9 +53,14 @@ pub(crate) fn sandboxed(args: &[String]) -> i32 {
         .env("OXY_REPO_ROOTS", &repos)
         .env("OXY_REPO", repos.join("oxy-fixture"))
         .env("PATH", path);
-    if cfg!(unix) {
-        cmd.env("XDG_RUNTIME_DIR", sandbox.join("run"));
-    }
+    // Set on every platform, not just unix: a provider that resolves
+    // `$XDG_RUNTIME_DIR` (the docker stats cache) or `XDG_DATA_*` (the apps
+    // scanner) falls back to a real-machine dir like `/tmp` when the var is
+    // absent, and the sandbox then writes — or worse, reads — outside
+    // itself.
+    cmd.env("XDG_RUNTIME_DIR", sandbox.join("run"))
+        .env("XDG_DATA_HOME", sandbox.join("data"))
+        .env("XDG_DATA_DIRS", sandbox.join("data-dirs"));
 
     let code = cmd
         .status()

@@ -8,6 +8,7 @@
   "subtitle": "Git",
   "glyph": "",
   "search": "oxy-git-branch {query}",
+  "native": "branch",
   "when": "command -v git >/dev/null",
   "minChars": 0,
   "debounceMs": 60,

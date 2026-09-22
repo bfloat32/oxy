@@ -143,19 +143,19 @@ if command -v cargo >/dev/null 2>&1; then
   # The same cases through the *engine*, which is the only check that the
   # native ports return what the cases describe — cases.py always runs the
   # script. The repo's bin/ goes on PATH so a native that declines can still
-  # reach its script, and extensions whose `when` fails here skip.
-  #
-  # The ids are the ones whose cases need no fixture and no network: the git
-  # family and `agent` depend on the throwaway repos `cases.py` builds and on
-  # a stubbed `claude`, and `def` needs the dictionary API. Giving the Rust
-  # runner that fixture builder is a real piece of work, not a line in this
-  # script — until then it is not a failure that they cannot run here.
-  for id in date img note win; do
-    (cd core && PATH="$(cd .. && pwd)/bin:$PATH" XDG_CONFIG_HOME="$cfg" \
-       XDG_STATE_HOME="$sandbox/state" XDG_RUNTIME_DIR="$sandbox/run" \
-       HOME="$sandbox/home" cargo run -q -p oxy -- test --cases "$id") \
-      || bad "oxy test --cases $id (the native leg)"
+  # reach its script, and the same three stubs cases.py plants (`claude`
+  # makes the agent's draft build, `alacritty` lets `terminal` resolve,
+  # `oxy-volume` is what the volume sentence routes to). Everything whose
+  # data, fixture or compositor is missing here skips rather than fails.
+  mkdir -p "$sandbox/fakebin"
+  for name in claude alacritty oxy-volume; do
+    printf '#!/usr/bin/env bash\necho stub-agent\n' > "$sandbox/fakebin/$name"
+    chmod +x "$sandbox/fakebin/$name"
   done
+  (cd core && PATH="$(cd .. && pwd)/bin:$sandbox/fakebin:$PATH" XDG_CONFIG_HOME="$cfg" \
+     XDG_STATE_HOME="$sandbox/state" XDG_RUNTIME_DIR="$sandbox/run" \
+     HOME="$sandbox/home" cargo run -q -p oxy -- test --cases) \
+    || bad "oxy test --cases (the native legs)"
   rm -rf "$sandbox"
 else
   echo "   cargo not installed — CI runs it; skipping"

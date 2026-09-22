@@ -121,6 +121,84 @@ if core_views != front:
     sys.exit(1)
 PY
 
+say "qml syntax"
+# No qmllint on the box (and none in CI either), so the frontend gets the
+# next-best static pass: every .qml must hold balanced ()[]{} once comments,
+# strings, `...${}`...` templates and /regex/ literals are stepped over. A
+# mismatched brace is a load error Quickshell reports at startup, which is
+# the worst place to meet it. `/` is a regex after an operator and division
+# after a value — the rule JS itself uses.
+python3 - <<'PY' || bad "a .qml file is unbalanced or unterminated"
+import glob, sys
+PAIRS = {')': '(', ']': '[', '}': '{'}
+# After these a `/` opens a regex; after anything else it divides. The words
+# cover `return /re/` and `typeof /re/` — positions an operator char misses.
+OPS = set("(,=:[!&|?{};+-*%^~<>")
+KEYWORDS = {"return", "case", "typeof", "in", "of", "new", "delete",
+            "void", "do", "else", "instanceof", "yield", "await"}
+bad = []
+for path in sorted(glob.glob("plugin/**/*.qml", recursive=True)):
+    src = open(path, encoding="utf-8").read()
+    stack, i, n = [], 0, len(src)
+    # prev: last significant char; word: identifier chars since then — the
+    # two things the regex/division decision needs.
+    state, tmpl, prev, word = "code", 0, None, ""
+    while i < n:
+        c = src[i]
+        if state == "code":
+            if src.startswith("//", i):
+                j = src.find("\n", i); i = n if j < 0 else j
+            elif src.startswith("/*", i):
+                j = src.find("*/", i + 2)
+                if j < 0: bad.append((path, "unterminated /* comment")); break
+                i = j + 2
+            elif c in "\"'": state = c; i += 1
+            elif c == '`': state, tmpl = "tmpl", 0; i += 1
+            elif c == '/' and (prev is None or prev in OPS or word in KEYWORDS):
+                state = "regex"; i += 1
+            elif c in "([{": stack.append((c, i)); prev, word = c, ""; i += 1
+            elif c in ")]}":
+                if not stack or stack[-1][0] != PAIRS[c]:
+                    bad.append((path, f"stray {c!r} at offset {i}")); break
+                stack.pop(); prev, word = c, ""; i += 1
+            elif c.isalnum() or c in "_$":
+                word += c; prev = c; i += 1
+            elif not c.isspace():
+                prev, word = c, ""; i += 1
+            else: i += 1
+        elif state == "regex":
+            if c == '\\': i += 2
+            elif c == '[': state = "class"; i += 1
+            elif c == '/': state = "code"; prev, word = '/', ""; i += 1
+            elif c == '\n': bad.append((path, f"unterminated regex at offset {i}")); break
+            else: i += 1
+        elif state == "class":
+            if c == '\\': i += 2
+            elif c == ']': state = "regex"; i += 1
+            else: i += 1
+        elif state == "tmpl":
+            if c == '\\': i += 2
+            elif c == '`' and tmpl == 0:
+                state = "code"; prev, word = '`', ""; i += 1
+            elif src.startswith("${", i): tmpl += 1; i += 2
+            elif c == '}' and tmpl > 0: tmpl -= 1; i += 1
+            else: i += 1
+        else:  # inside ' or "
+            if c == '\\': i += 2
+            elif c == state:
+                state = "code"; prev, word = c, ""; i += 1
+            else: i += 1
+    else:
+        if state in ("regex", "class"):
+            bad.append((path, "unterminated regex literal"))
+        elif state != "code":
+            bad.append((path, f"unterminated {state} string"))
+        elif stack:
+            bad.append((path, f"unclosed {stack[-1][0]!r} at offset {stack[-1][1]}"))
+for path, why in bad: print(path, why)
+sys.exit(1 if bad else 0)
+PY
+
 say "rust core"
 # The same steps the workflow's rust job runs — skipped where cargo is not
 # installed rather than failed, the way shellcheck degrades.
@@ -128,6 +206,12 @@ if command -v cargo >/dev/null 2>&1; then
   (cd core && cargo check --workspace) || bad "cargo check"
   (cd core && cargo test --workspace) || bad "cargo test"
   (cd core && cargo clippy --workspace --all-targets -- -D warnings) || bad "cargo clippy"
+  # rustfmt rides its own component — a toolchain can carry cargo without it.
+  if cargo fmt --version >/dev/null 2>&1; then
+    (cd core && cargo fmt --check) || bad "cargo fmt"
+  else
+    echo "   rustfmt not installed — skipping"
+  fi
   # The launcher reads a manifest leniently — an unknown view falls back to
   # `list`, a typo'd `native` name to the script — so the strict checks live
   # in the CLI. It reads XDG paths, so it gets a sandbox holding this repo's

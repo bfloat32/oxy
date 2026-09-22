@@ -9,8 +9,9 @@ and are easy to lose. Nothing here is a code change.
 what changed since: the **marketplace removal** (`bo:` and its 2 518 lines are
 gone — `docs/MARKETPLACE-REMOVAL.md`), the **first native LLM slice** (§4.4:
 a local model endpoint answered in-process, 620 lines and 13 tests), and a
-**re-measured baseline** (§0: 92 files, 16 316 lines, 60 tests). Every count
-in this document was re-derived from the tree after both changes.
+**re-measured baseline** (§0 read 92 files, 16 316 lines, 60 tests at that
+revision — the figures in §0 below are newer). Every count in this document
+was re-derived from the tree after both changes.
 
 The corrections from the earlier passes, worth knowing up front:
 
@@ -818,15 +819,19 @@ Two things about the suite as it stands, both found by running it:
   than id (`def` in `define.json`, `tz` in `timezone.json`) so neither ever
   fired, and the notes suite was order-dependent (see `setup` in
   `docs/EXTENSIONS.md`).
-- **The Rust runner still has no fixture builder.** `cases.py` builds
-  throwaway git repos and stubs `claude` for the git family and `agent` — so
-  those families *skip* through `oxy test --cases` (a preflight for each),
-  where they *run* through `cases.py`. Giving the runner the same fixtures is
-  what would let the native legs of those ports be gated too.
+- ~~The Rust runner has no fixture builder~~ — landed (`cases/fixture.rs`,
+  ~410 lines): it rebuilds the `cases.py` sandbox — the throwaway repos and
+  `gum`, the `fakebin` stubs (`claude`, `alacritty`, `oxy-volume`, `hyprctl`,
+  `omarchy`, `docker`, `omarchy-menu-keybindings`), the seeded themes and the
+  XDG layout — and re-execs the binary inside it, so the git family, `agent`,
+  `docker`, `shortcuts`, `omarchy`, `theme` and `win` exercise their native
+  legs through `oxy test --cases` (16 case files hold there today).
 
 ### 4.8 Dead wire fields (drop them in a port, they have no reader)
 
-- `dayline` on every `tz` row (no QML reads it; the tz cases do not assert it).
+- `dayline` on every `tz` row — the port kept emitting it verbatim and still
+  nothing reads it (the tz cases do not assert it either); harmless, listed
+  here so the next reader does not re-derive it.
 - On `win` rows the intermediates (`wsRaw`, `focusOrder`, `address`, `w`/`h`/
   `x`/`y`) never reach the wire at all — they are jq-local, and the row carries
   `id`, `wsName`, `focused`, `width`/`height` instead. Of those, `width` and
@@ -1100,7 +1105,7 @@ header, and is the kind of thing a clean rewrite quietly loses.
 
 ```sh
 bash tests/run.sh                     # every check CI runs (static, behaviour, cases, cargo, guards)
-cd core && cargo test --workspace     # the engine suite (325 tests)
+cd core && cargo test --workspace     # the engine suite (471 tests)
 cd core && cargo clippy --workspace --all-targets -- -D warnings
 
 oxy test --only manifest              # every manifest: ids, keywords, views, tiers, `native:` in `construct`

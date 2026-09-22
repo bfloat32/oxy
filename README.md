@@ -456,15 +456,20 @@ That is ollama's OpenAI-compatible route; LM Studio (`:1234`) and llama.cpp
 `ask.temperature` (0.4) have defaults written for a launcher card. Only
 `http://` is accepted, on purpose: the endpoint is your configuration, and a
 launcher should not be the thing that quietly sends a question to a remote
-host in plaintext. A configured endpoint replaces the CLI list; a server that
-is down says so in the card rather than falling back silently.
+host in plaintext. A configured endpoint replaces the CLI list while it
+answers; a server that is not listening falls back to the list and says so in
+the card — one that answers badly reports its error there instead of hiding
+behind a second provider.
 
 Escape leaves the answer. So does typing.
 
 A multi-turn `ask:` chat surface — subscription CLIs, API-keyed endpoints and
 local models behind one provider registry — is designed in
-[docs/LLM-INTEGRATION.md](docs/LLM-INTEGRATION.md). Its first slice is
-implemented: the local endpoint above, spoken to in-process.
+[docs/LLM-INTEGRATION.md](docs/LLM-INTEGRATION.md). The local slice is
+implemented and then some: the endpoint above answers in-process, retries on
+429/`Retry-After`, takes a key through `ask.key`, answers `oxy ask` and
+`oxy ask doctor`, falls back to the CLI list when nothing is listening, and
+counts itself in the usage ledger.
 
 ---
 

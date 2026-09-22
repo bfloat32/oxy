@@ -125,3 +125,6 @@ verified on a running shell, not in CI.
   question to ask is whether `oxyd` is up: `printf '{"op":"ping"}\n' | oxy send`.
 - Crashes are isolated by design: the engine cannot take the shell down with
   it — the launcher fails, the bar stays.
+- On Windows two natives answer where the scripts cannot: `kill:` and `sys:`
+  read through `sysinfo` instead of `ps`/`free`, so a side-by-side against the
+  script leg there is a deliberate extension, not a parity break.

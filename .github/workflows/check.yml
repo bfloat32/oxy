@@ -6,155 +6,25 @@ on:
   pull_request:
 
 jobs:
-  # The fast layer: everything that needs no fixture, no services, and no
-  # extension runtime. `tests/run.sh` runs these same checks locally.
-  static:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: install shellcheck
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-
-      - name: bash syntax
-        run: |
-          failed=0
-          bash -n install.sh || { echo "syntax: install.sh"; failed=1; }
-          bash -n install-rs.sh || { echo "syntax: install-rs.sh"; failed=1; }
-          for f in bin/* tests/*.sh; do
-            head -1 "$f" | grep -q bash || continue
-            bash -n "$f" || { echo "syntax: $f"; failed=1; }
-          done
-          [ "$failed" = 0 ]
-
-      - name: python syntax
-        run: |
-          failed=0
-          for f in bin/*; do
-            head -1 "$f" | grep -q python || continue
-            python3 -c "import sys; compile(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1], 'exec')" "$f" \
-              || { echo "syntax: $f"; failed=1; }
-          done
-          python3 -c "compile(open('tests/cases.py', encoding='utf-8').read(), 'tests/cases.py', 'exec')" || failed=1
-          [ "$failed" = 0 ]
-
-      - name: shellcheck
-        run: |
-          files="install.sh install-rs.sh"
-          for f in bin/* tests/*.sh; do
-            head -1 "$f" | grep -q bash && files="$files $f"
-          done
-          shellcheck -S error -x $files
-
-      - name: executable bits
-        run: |
-          # Scripts are exec'd by name; a lost +x is a broken keyword.
-          git ls-files -s bin install.sh install-rs.sh tests/*.sh tests/cases.py \
-            | awk '$1 != "100755" { print $4; bad=1 } END { exit bad }'
-
-      - name: extension JSON and case shape
-        run: |
-          python3 - <<'PY'
-          import glob, json, sys
-          bad = []
-          CASE_KEYS = {"why": str, "query": str, "minRows": int, "maxRows": int,
-                       "row": int, "view": str, "fields": list, "absent": list,
-                       "atMost": dict, "matches": dict}
-          seen_ids, seen_kw = {}, {}
-          for path in sorted(glob.glob("config/**/*.json", recursive=True)):
-              try:
-                  data = json.load(open(path, encoding="utf-8"))
-              except Exception as e:
-                  print(path, e)
-                  bad.append(path)
-                  continue
-              if path.endswith(".cases.json"):
-                  if not isinstance(data, list) or not data:
-                      print(path, "cases file is not a non-empty array")
-                      bad.append(path)
-                      continue
-                  for i, case in enumerate(data):
-                      if not isinstance(case, dict):
-                          print(path, f"case {i} is not an object")
-                          bad.append(path)
-                          continue
-                      for k, v in case.items():
-                          if k not in CASE_KEYS:
-                              print(path, f"case {i} uses unknown key {k!r}")
-                              bad.append(path)
-                          elif not isinstance(v, CASE_KEYS[k]):
-                              print(path, f"case {i} {k} is not {CASE_KEYS[k].__name__}")
-                              bad.append(path)
-                  continue
-              if isinstance(data, dict):
-                  eid, kw = data.get("id"), data.get("keyword")
-                  if eid:
-                      if eid in seen_ids:
-                          print(path, f"duplicate id {eid!r} (also {seen_ids[eid]})")
-                          bad.append(path)
-                      seen_ids[eid] = path
-                  if kw:
-                      if kw in seen_kw:
-                          print(path, f"duplicate keyword {kw!r} (also {seen_kw[kw]})")
-                          bad.append(path)
-                      seen_kw[kw] = path
-                  if not data.get("search") and not data.get("socket"):
-                      print(path, "has neither search nor socket")
-                      bad.append(path)
-          sys.exit(1 if bad else 0)
-          PY
-
-      # The check files themselves name the word, so the scan skips the
-      # directories that hold them.
-      - name: no legacy name remains
-        run: |
-          if grep -ri "omacast" --exclude-dir=.git --exclude-dir=.github --exclude-dir=tests .; then
-            echo "found an omacast reference" && exit 1
-          fi
-
-  # The runtime layer: the JS unit tests, the end-to-end script checks, and
-  # the shipped .cases.json fixtures against real sandboxes.
-  behavior:
+  # CI runs the same suite a push is held to locally — tests/run.sh is the
+  # contract, so the guards (case shape, file budget, model/ layering, view
+  # sync, manifest + native legs, fmt, QML balance) cannot drift out of sync
+  # with a second copy here.
+  check:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: install test dependencies
+      - name: install check dependencies
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y -qq fd-find jq git curl bsdextrautils qalc
+          sudo apt-get install -y -qq shellcheck fd-find jq git curl bsdextrautils qalc
           # the scripts call `fd`; Debian names the binary fdfind
           sudo ln -sf "$(command -v fdfind)" /usr/local/bin/fd
+          # clippy ships with the toolchain; rustfmt is a separate component
+          rustup component add rustfmt clippy
 
-      - name: logic tests
-        run: node --test tests/logic.test.mjs
-
-      - name: behavior tests
-        run: bash tests/behavior.test.sh
-
-      # Runs the shipped .cases.json fixtures in a sandbox HOME. Extensions
-      # without their tools (omarchy, bo) skip; `gh` and the dictionary are
-      # reachable here so their cases run for real.
-      - name: extension cases
-        run: python3 tests/cases.py
-
-  # The Rust core — the daemon, the engine and the CLI. Same checks the branch
-  # is held to locally: the whole workspace, tests included.
-  rust:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: core
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: cargo check
-        run: cargo check --workspace
-
-      - name: cargo test
-        run: cargo test --workspace
-
-      - name: cargo clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: run.sh
+        run: bash tests/run.sh

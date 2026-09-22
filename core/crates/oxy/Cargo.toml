@@ -1,6 +1,9 @@
 [package]
 name = "oxy"
 description = "Oxy CLI: query the core without a frontend, run extension cases, inspect the registry."
+# `cargo run -p oxy` means the CLI — the crate also ships the oxy-agent
+# daemon binary, which is never what a bare `cargo run` wants.
+default-run = "oxy"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

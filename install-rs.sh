@@ -224,7 +224,7 @@ if ((UNINSTALL)); then
       rmdir "$PLUGIN_DIR" 2>/dev/null && ok "$PLUGIN_ID removed" || true
     fi
 
-    for bin in oxyd oxy; do
+    for bin in oxyd oxy oxy-agent; do
       unlink_path "$src_dir/core/target/release/$bin" "$BIN_DIR/$bin" && ok "$bin unlinked"
     done
 
@@ -506,7 +506,12 @@ install_body() {
   step "Linking the binaries"
   link_path "$INSTALL_DIR/core/target/release/oxyd" "$BIN_DIR/oxyd" || die "could not link oxyd"
   link_path "$INSTALL_DIR/core/target/release/oxy" "$BIN_DIR/oxy" || die "could not link oxy"
-  ok "oxyd, oxy -> $BIN_DIR"
+  # oxy-agent is the native sibling of the bin/oxy-agent script — same socket,
+  # same verbs — so this install claims the name. A stable install.sh run
+  # force-links its script back; the last installer wins, same as oxy/oxyd.
+  link_path "$INSTALL_DIR/core/target/release/oxy-agent" "$BIN_DIR/oxy-agent" ||
+    die "could not link oxy-agent"
+  ok "oxyd, oxy, oxy-agent -> $BIN_DIR"
   case :$PATH: in
   *":$BIN_DIR:"*) ;;
   *)

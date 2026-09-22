@@ -15,11 +15,11 @@
     "matches": { "exec": "^omarchy theme set ", "total": "^[0-9]+$", "shown": "^[0-9]+$" } },
 
   { "why": "theme:light is the other half of the same question — a box may ship none",
-    "query": "light", "view": "themes",
+    "query": "light", "minRows": 1, "view": "themes",
     "fields": ["title", "exec", "previewExec"] },
 
   { "why": "a name filter draws the same card — catppuccin where the box has it",
-    "query": "catppuccin", "view": "themes",
+    "query": "catppuccin", "minRows": 1, "view": "themes",
     "fields": ["title", "swatches", "previewExec", "revertExec", "exec", "total", "shown"],
     "matches": { "title": "[Cc]atppuccin", "exec": "^omarchy theme set " } }
 ]

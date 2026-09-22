@@ -1,7 +1,7 @@
 [
   { "why": "a vault row is a name in a folder plus the store that answered — the whole of what a row is allowed to know",
     "requires": "command -v pass || { command -v op >/dev/null && test -n \"$(op account list 2>/dev/null)\"; }",
-    "query": "",
+    "query": "", "minRows": 1,
     "fields": ["title", "name", "subtitle", "tool", "store", "clearSeconds", "exec", "actions"],
     "matches": { "tool": "^(pass|op)$", "store": "^(Password Store|1Password)$",
                  "clearSeconds": "^45$" } },
@@ -13,14 +13,14 @@
 
   { "why": "enter still runs the script's own copy leg — the pipe that clears the clipboard only if it still holds the secret",
     "requires": "command -v pass || { command -v op >/dev/null && test -n \"$(op account list 2>/dev/null)\"; }",
-    "query": "",
+    "query": "", "minRows": 1,
     "atMost": { "actions": 2 },
     "matches": { "exec": "^oxy-pass copy (pass|op) ",
                  "actions": "'title': 'Copy Password'.*'title': 'Copy Entry Name'" } },
 
   { "why": "1Password's reference is vault/item/password — the one form `op read` never resolves twice",
     "requires": "command -v op >/dev/null && test -n \"$(op account list 2>/dev/null)\" && ! { command -v pass >/dev/null && test -d \"${PASSWORD_STORE_DIR:-$HOME/.password-store}\"; }",
-    "query": "",
+    "query": "", "minRows": 1,
     "matches": { "id": "/password$", "store": "^1Password$", "tool": "^op$" } },
 
   { "why": "a name nothing is filed under is an empty card, not an error row",

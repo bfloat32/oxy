@@ -33,8 +33,9 @@ client id of your own. Making one takes about a minute and costs nothing.
 
 ## Setup
 
+The extension ships with Oxy — the only step is the OAuth handshake:
+
 ```bash
-bo add spotify
 oxy-spotify-auth
 ```
 
@@ -80,8 +81,8 @@ before you press anything.
 
 ## Bits worth knowing
 
-`bo doctor` checks for `curl` and `jq`. Setup also needs `python3`, which is on
-every Omarchy install, for the PKCE hashing and the redirect listener.
+The scripts need `curl` and `jq` on PATH. Setup also needs `python3`, which is
+on every Omarchy install, for the PKCE hashing and the redirect listener.
 
 No access token is ever passed as a command line argument. Both scripts hand
 curl its options on stdin with `-K -`, because anything in argv is readable

@@ -8,8 +8,8 @@
     "atMost": { "actions": 4 } },
 
   { "why": "a name query narrows the same rows rather than changing their shape",
-    "requires": "command -v fd jq >/dev/null",
-    "query": "a",
+    "requires": "command -v fd jq numfmt >/dev/null && find \"$HOME/Pictures\" \"$HOME/Downloads\" \"$HOME/Desktop\" \"$HOME/Documents\" -type f \\( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.gif' -o -iname '*.webp' -o -iname '*.avif' -o -iname '*.bmp' -o -iname '*.svg' -o -iname '*.tiff' -o -iname '*.heic' \\) -print -quit 2>/dev/null | grep -q .",
+    "query": "a", "minRows": 1,
     "fields": ["title", "subtitle", "art", "exec"],
     "atMost": { "actions": 4 } },
 

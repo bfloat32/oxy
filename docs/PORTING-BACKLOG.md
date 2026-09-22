@@ -829,9 +829,11 @@ Two things about the suite as it stands, both found by running it:
 
 ### 4.8 Dead wire fields (drop them in a port, they have no reader)
 
-- `dayline` on every `tz` row — the port kept emitting it verbatim and still
-  nothing reads it (the tz cases do not assert it either); harmless, listed
-  here so the next reader does not re-derive it.
+- ~~`dayline` on every `tz` row~~ — the tz port kept it, on purpose: the field
+  is part of the row shape the script defined, so dropping it would silently
+  change the wire for any consumer that is not our QML. It is still unread in
+  the frontend and now unit-asserted (`tz/zones.rs`), which makes it parity,
+  not debris.
 - On `win` rows the intermediates (`wsRaw`, `focusOrder`, `address`, `w`/`h`/
   `x`/`y`) never reach the wire at all — they are jq-local, and the row carries
   `id`, `wsName`, `focused`, `width`/`height` instead. Of those, `width` and

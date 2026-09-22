@@ -14,7 +14,7 @@
     "query": "", "minRows": 1, "maxRows": 2, "fields": [] },
 
   { "why": "the second row, where wpctl answers, is the input slider",
-    "query": "", "row": 1, "view": "slider",
+    "query": "", "minRows": 2, "row": 1, "view": "slider",
     "matches": { "id": "^input$", "title": "^Input Volume$",
                  "subtitle": "^Microphone$",
                  "setExec": "^oxy-volume set input \\{value\\}$",
@@ -35,7 +35,7 @@
     "matches": { "id": "^output$" } },
 
   { "why": "and so does the input row behind it",
-    "query": "mute", "row": 1,
+    "query": "mute", "minRows": 2, "row": 1,
     "matches": { "id": "^input$" } },
 
   { "why": "a word in neither list is silence",

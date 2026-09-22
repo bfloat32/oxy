@@ -15,7 +15,8 @@
     "matches": { "actions": "'title': 'Focus'.*'title': 'Close Window'" } },
 
   { "why": "a special-workspace window is an offer too — checked only when the box has one",
-    "query": "special",
+    "requires": "command -v hyprctl jq >/dev/null && hyprctl -j clients 2>/dev/null | grep -q special",
+    "query": "special", "minRows": 1,
     "fields": ["wsName", "special"] },
 
   { "why": "a query that matches nothing is silence, not an error row",

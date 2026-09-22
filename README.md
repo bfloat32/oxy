@@ -669,9 +669,11 @@ A few design decisions worth knowing because they are easy to break:
 
 ## Writing your own extension
 
-`bo new extension weather` writes a unit that already answers. Add it, type
-`weather:hello`, and the row comes back with hello in it. Then replace the body
-of the script and keep the shape.
+A working extension is two files: the JSON below in
+`~/.config/omarchy/oxy/extensions/`, and a `my-weather-lookup` on PATH that
+prints a row — a shell one-liner is enough to see it answer. Write both, type
+`wx:hello`, and the row comes back with hello in it. Then replace the body of
+the script and keep the shape.
 
 An extension is a JSON file in `~/.config/omarchy/oxy/extensions/` naming a
 keyword and a command:
@@ -726,8 +728,8 @@ docs/            EXTENSIONS.md, SPOTIFY-LIBRARY.md, LLM-INTEGRATION.md
 ```
 
 A `<name>.cases.json` sits beside `<name>.json` in the same directory and holds
-the assertions `bo test` — and this repo's own `tests/cases.py` — run against
-that keyword. Seventeen keywords ship one. The launcher globs the whole
+the assertions `oxy test --cases` — and this repo's own `tests/cases.py` — run
+against that keyword. Thirty keywords ship one. The launcher globs the whole
 directory and a cases file survives only because it is an array rather than an
 object, so keep the two names in step.
 

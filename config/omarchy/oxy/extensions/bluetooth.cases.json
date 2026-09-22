@@ -5,12 +5,12 @@
     "matches": { "radioLabel": "^Bluetooth$", "kind": "^(radio|device)$" } },
 
   { "why": "asking for the radio by name still lands in the same view",
-    "query": "bluetooth", "view": "radios",
+    "query": "bluetooth", "minRows": 1, "view": "radios",
     "fields": ["title"],
     "matches": { "radioLabel": "^Bluetooth$" } },
 
   { "why": "the top row always has something real to run — the radio's power call or a device verb",
-    "query": "", "view": "radios",
+    "query": "", "minRows": 1, "view": "radios",
     "fields": ["title", "exec"],
     "matches": { "exec": "^omarchy-bluetooth-(power|device) " } }
 ]

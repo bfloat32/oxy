@@ -15,7 +15,7 @@
   },
   {
     "why": "the zones under the hero carry their own clocks, not just names",
-    "query": "tokyo",
+    "query": "tokyo", "minRows": 2,
     "row": 1,
     "fields": [
       "clock",
@@ -59,7 +59,7 @@
   },
   {
     "why": "me: puts you in the grid",
-    "query": "me: john:tokyo",
+    "query": "me: john:tokyo", "minRows": 1,
     "view": "timegrid",
     "fields": [
       "people"
@@ -67,7 +67,7 @@
   },
   {
     "why": "a country resolves to the city people in it mean",
-    "query": "spain",
+    "query": "spain", "minRows": 1,
     "row": 0,
     "matches": {
       "detail": "Madrid"
@@ -75,7 +75,7 @@
   },
   {
     "why": "accents and spacing do not change what a place is",
-    "query": "sao paulo",
+    "query": "sao paulo", "minRows": 1,
     "row": 0,
     "matches": {
       "detail": "Sao_Paulo"
@@ -111,7 +111,7 @@
   },
   {
     "why": "one person somewhere else is compared against you, so you are a row",
-    "query": "maria:tokyo",
+    "query": "maria:tokyo", "minRows": 1,
     "view": "timegrid",
     "matches": {
       "people": "'name': 'you'"
@@ -129,7 +129,7 @@
   },
   {
     "why": "typing the next name must not break the grid: 'john:tokyo m' flashed an error mid-sentence",
-    "query": "john:tokyo m",
+    "query": "john:tokyo m", "minRows": 1,
     "view": "timegrid",
     "fields": [
       "people"
@@ -137,7 +137,7 @@
   },
   {
     "why": "a place with a space survives a half-typed word after it",
-    "query": "john:new york m",
+    "query": "john:new york m", "minRows": 1,
     "view": "timegrid",
     "matches": {
       "people": "New York"

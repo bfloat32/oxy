@@ -69,8 +69,9 @@ var DEFAULTS = {
   ],
 
   // Which built-in extensions answer. They ship with the launcher because none
-  // of them works without it, so turning one off belongs here rather than in
-  // `bo`: `bo remove files` would have meant uninstalling half a launcher.
+  // of them works without it, so turning one off belongs here rather than as
+  // a separate installed unit: uninstalling `files` would have meant
+  // uninstalling half a launcher.
   //
   // Absent means on. Name one false to silence it.
   //

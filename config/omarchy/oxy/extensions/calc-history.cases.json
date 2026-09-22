@@ -1,0 +1,29 @@
+[
+  { "why": "every kept answer is a row: the result on top, the question beneath, its age beside — Enter copies the answer back",
+    "setup": "d=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy\" && mkdir -p \"$d\" && printf '[{\"expression\":\"2+2\",\"answer\":\"4\",\"at\":%s},{\"expression\":\"usd to jpy\",\"answer\":\"160\",\"at\":1700000000}]\\n' \"$(date +%s)\" > \"$d/oxy-calc-history.json\"",
+    "requires": "test -s \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/oxy-calc-history.json\"",
+    "query": "", "minRows": 2, "row": 0,
+    "fields": ["title", "subtitle", "accessory", "group", "exec", "actions", "score"],
+    "matches": { "id": "^2\\+2$", "title": "^4$", "subtitle": "^2\\+2$",
+                 "accessory": "^now$", "group": "^Calculator History$",
+                 "exec": "^printf %s '?4'? \\| wl-copy$", "score": "^90000$" },
+    "atMost": { "actions": 4 } },
+
+  { "why": "the actions are the three copies and the slate wipe — Ask Again reopens the sum in the calculator rather than closing on a copy",
+    "setup": "d=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy\" && mkdir -p \"$d\" && printf '[{\"expression\":\"2+2\",\"answer\":\"4\",\"at\":%s},{\"expression\":\"usd to jpy\",\"answer\":\"160\",\"at\":1700000000}]\\n' \"$(date +%s)\" > \"$d/oxy-calc-history.json\"",
+    "requires": "test -s \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/oxy-calc-history.json\"",
+    "query": "", "minRows": 1, "row": 0,
+    "matches": { "actions": "'title': 'Copy Result'.*'title': 'Copy Expression'.*'title': 'Ask Again', 'query': '=2\\+2'.*'title': 'Clear History'" } },
+
+  { "why": "a query narrows by expression or answer, and an old stamp reads as months not 'now'",
+    "setup": "d=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy\" && mkdir -p \"$d\" && printf '[{\"expression\":\"2+2\",\"answer\":\"4\",\"at\":%s},{\"expression\":\"usd to jpy\",\"answer\":\"160\",\"at\":1700000000}]\\n' \"$(date +%s)\" > \"$d/oxy-calc-history.json\"",
+    "requires": "test -s \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/oxy-calc-history.json\"",
+    "query": "usd", "minRows": 1, "maxRows": 1,
+    "matches": { "title": "^160$", "subtitle": "^usd to jpy$", "accessory": "^[0-9]+mo$",
+                 "score": "^90000$" } },
+
+  { "why": "a sum nobody kept is silence, not an error row",
+    "setup": "d=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy\" && mkdir -p \"$d\" && printf '[{\"expression\":\"2+2\",\"answer\":\"4\",\"at\":%s}]\\n' \"$(date +%s)\" > \"$d/oxy-calc-history.json\"",
+    "requires": "test -s \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/oxy-calc-history.json\"",
+    "query": "zzz-no-such-sum", "maxRows": 0, "fields": [] }
+]

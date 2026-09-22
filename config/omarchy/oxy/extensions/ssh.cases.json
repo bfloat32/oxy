@@ -1,0 +1,41 @@
+[
+  { "why": "every host block is a hosts-view row: the alias you type, user@target:port as the detail, the file it came from, and the known_hosts mark",
+    "setup": "mkdir -p \"$HOME/.ssh\" && printf 'Host prod\\n  HostName 10.9.8.7\\n  User deploy\\n  Port 2222\\n  IdentityFile ~/.ssh/prodkey\\nHost dev\\n  HostName devbox.internal\\nHost *\\n  User root\\n' > \"$HOME/.ssh/config\" && printf '[10.9.8.7]:2222 ssh-ed25519 AAAAfixture\\ndevbox.internal ssh-ed25519 AAAAfixture\\n' > \"$HOME/.ssh/known_hosts\"",
+    "requires": "test -f \"$HOME/.ssh/config\"",
+    "query": "", "minRows": 2, "maxRows": 2, "row": 0, "view": "hosts",
+    "fields": ["alias", "hostName", "user", "port", "sourceFile", "identity", "detail", "exec", "actions", "score"],
+    "absent": ["proxyJump"],
+    "matches": { "id": "^prod$", "title": "^prod$", "alias": "^prod$",
+                 "hostName": "^10\\.9\\.8\\.7$", "user": "^deploy$", "port": "^2222$",
+                 "detail": "^deploy@10\\.9\\.8\\.7:2222$",
+                 "sourceFile": "\\.ssh.config$", "identity": "\\.ssh.prodkey$",
+                 "known": "^True$",
+                 "exec": "^omarchy-launch-tui --app-id=org\\.omarchy\\.ssh ssh '?prod'?$",
+                 "score": "^90000$" },
+    "atMost": { "actions": 3 } },
+
+  { "why": "a default-port host reads name-only, and 'Host *' is a defaults block, not a machine — it makes no row",
+    "setup": "mkdir -p \"$HOME/.ssh\" && printf 'Host prod\\n  HostName 10.9.8.7\\n  User deploy\\n  Port 2222\\nHost dev\\n  HostName devbox.internal\\nHost *\\n  User root\\n' > \"$HOME/.ssh/config\" && printf 'devbox.internal ssh-ed25519 AAAAfixture\\n' > \"$HOME/.ssh/known_hosts\"",
+    "requires": "test -f \"$HOME/.ssh/config\"",
+    "query": "", "minRows": 2, "maxRows": 2, "row": 1, "view": "hosts",
+    "absent": ["user", "identity", "proxyJump"],
+    "matches": { "alias": "^dev$", "hostName": "^devbox\\.internal$", "port": "^22$",
+                 "detail": "^devbox\\.internal$", "known": "^True$", "score": "^89900$" } },
+
+  { "why": "a query matches the alias, the address or the user@host string",
+    "setup": "mkdir -p \"$HOME/.ssh\" && printf 'Host prod\\n  HostName 10.9.8.7\\n  User deploy\\n  Port 2222\\nHost dev\\n  HostName devbox.internal\\n' > \"$HOME/.ssh/config\"",
+    "requires": "test -f \"$HOME/.ssh/config\"",
+    "query": "deploy", "minRows": 1, "maxRows": 1,
+    "matches": { "alias": "^prod$", "detail": "^deploy@10\\.9\\.8\\.7:2222$" } },
+
+  { "why": "no known_hosts means the mark drops out rather than reading 'never connected'",
+    "setup": "mkdir -p \"$HOME/.ssh\" && printf 'Host prod\\n  HostName 10.9.8.7\\n  User deploy\\n' > \"$HOME/.ssh/config\" && rm -f \"$HOME/.ssh/known_hosts\"",
+    "requires": "test -f \"$HOME/.ssh/config\"",
+    "query": "", "minRows": 1, "maxRows": 1,
+    "absent": ["known"] },
+
+  { "why": "a name no host carries is silence, not an error row",
+    "setup": "mkdir -p \"$HOME/.ssh\" && printf 'Host prod\\n  HostName 10.9.8.7\\n' > \"$HOME/.ssh/config\"",
+    "requires": "test -f \"$HOME/.ssh/config\"",
+    "query": "zzz-no-such-host", "maxRows": 0, "fields": [] }
+]

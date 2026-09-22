@@ -1,0 +1,34 @@
+[
+  { "why": "the bare ask answers what is true here: uptime, memory, disk, address, kernel, host — each a tile only when it has something to say, so two is the floor anywhere",
+    "query": "", "minRows": 2, "row": 0,
+    "fields": ["id", "title", "subtitle", "exec", "score"],
+    "matches": { "exec": "^printf %s .+ \\| wl-copy$" } },
+
+  { "why": "kernel and host share one word list — asking for either answers both, kernel first on score",
+    "query": "kernel", "minRows": 2, "maxRows": 2, "row": 0,
+    "matches": { "id": "^kernel$", "subtitle": "^Kernel$",
+                 "exec": "^printf %s .+ \\| wl-copy$", "score": "^89000$" } },
+
+  { "why": "the host tile follows the kernel's — name on the title, nothing else it needs to say",
+    "query": "kernel", "minRows": 2, "maxRows": 2, "row": 1,
+    "absent": ["detail", "accessory", "progress"],
+    "matches": { "id": "^host$", "subtitle": "^Host$",
+                 "exec": "^printf %s .+ \\| wl-copy$", "score": "^88000$" } },
+
+  { "why": "memory is a proportion so its tile carries a progress bar — checked only where the box can read it, the way the script needs free",
+    "requires": "command -v free >/dev/null",
+    "query": "memory", "minRows": 1, "maxRows": 1,
+    "fields": ["title", "subtitle", "detail", "exec", "progress"],
+    "matches": { "id": "^memory$", "subtitle": "^Memory$", "title": " of ",
+                 "detail": "^[0-9]+% used$", "score": "^93000$" } },
+
+  { "why": "a battery tile exists only where a battery does — checked only when the box has one",
+    "requires": "compgen -G '/sys/class/power_supply/BAT*/capacity' >/dev/null",
+    "query": "battery", "minRows": 1,
+    "fields": ["title", "subtitle", "exec", "progress"],
+    "matches": { "id": "^battery$", "subtitle": "^Battery$", "title": "^[0-9]+%$",
+                 "score": "^95000$" } },
+
+  { "why": "a word none of the readings carries is silence, not an error tile",
+    "query": "zzz-no-such-reading", "maxRows": 0, "fields": [] }
+]

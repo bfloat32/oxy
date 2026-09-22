@@ -1,0 +1,34 @@
+[
+  { "why": "the newest copy leads; an image entry is named by its file and drawn from it rather than previewed as text",
+    "setup": "d=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy\" && mkdir -p \"$d\" \"$HOME/.local/state/omarchy\" && printf '[{\"text\":\"\",\"path\":\"/tmp/oxy-ch-clip9d3f1.png\",\"mime\":\"image/png\"},{\"text\":\"needle-clip-9d3f1 the second copy\",\"mime\":\"text/plain\"}]\\n' | tee \"$d/clipboard-history.json\" > \"$HOME/.local/state/omarchy/clipboard-history.json\"",
+    "requires": "test -f \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/clipboard-history.json\"",
+    "query": "", "minRows": 2, "row": 0,
+    "fields": ["title", "art", "exec", "score"],
+    "absent": ["preview"],
+    "matches": { "title": "^Image  ·  oxy-ch-clip9d3f1\\.png$",
+                 "art": "^file://",
+                 "exec": "^omarchy-clipboard-paste-file --copy-only ",
+                 "score": "^95000$" } },
+
+  { "why": "a text entry carries its whole body as the preview and a printf | wl-copy as its Enter",
+    "setup": "d=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy\" && mkdir -p \"$d\" \"$HOME/.local/state/omarchy\" && printf '[{\"text\":\"\",\"path\":\"/tmp/oxy-ch-clip9d3f1.png\",\"mime\":\"image/png\"},{\"text\":\"needle-clip-9d3f1 the second copy\",\"mime\":\"text/plain\"}]\\n' | tee \"$d/clipboard-history.json\" > \"$HOME/.local/state/omarchy/clipboard-history.json\"",
+    "requires": "test -f \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/clipboard-history.json\"",
+    "query": "", "minRows": 2, "row": 1,
+    "fields": ["title", "preview", "exec", "score"],
+    "absent": ["art"],
+    "matches": { "title": "^needle-clip-9d3f1 the second copy$",
+                 "preview": "needle-clip-9d3f1 the second copy",
+                 "exec": "^printf %s 'needle-clip-9d3f1 the second copy' \\| wl-copy$",
+                 "score": "^94900$" } },
+
+  { "why": "a query narrows to the entries containing it — the image has no text, so it drops out",
+    "setup": "d=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy\" && mkdir -p \"$d\" \"$HOME/.local/state/omarchy\" && printf '[{\"text\":\"\",\"path\":\"/tmp/oxy-ch-clip9d3f1.png\",\"mime\":\"image/png\"},{\"text\":\"needle-clip-9d3f1 the second copy\",\"mime\":\"text/plain\"}]\\n' | tee \"$d/clipboard-history.json\" > \"$HOME/.local/state/omarchy/clipboard-history.json\"",
+    "requires": "test -f \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/clipboard-history.json\"",
+    "query": "needle-clip", "minRows": 1, "maxRows": 1,
+    "matches": { "title": "^needle-clip-9d3f1 the second copy$" } },
+
+  { "why": "a token nobody copied is silence, not an error row",
+    "setup": "d=\"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy\" && mkdir -p \"$d\" \"$HOME/.local/state/omarchy\" && printf '[{\"text\":\"needle-clip-9d3f1 the second copy\",\"mime\":\"text/plain\"}]\\n' | tee \"$d/clipboard-history.json\" > \"$HOME/.local/state/omarchy/clipboard-history.json\"",
+    "requires": "test -f \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/clipboard-history.json\"",
+    "query": "zzz-not-in-any-copy", "maxRows": 0, "fields": [] }
+]

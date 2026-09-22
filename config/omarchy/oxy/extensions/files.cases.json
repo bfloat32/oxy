@@ -1,0 +1,23 @@
+[
+  { "why": "a name match under ~ answers as a file row: type mark, size, age, folder, Enter opens it — fd and jq are the script leg's readers, so the contract is checked only where they exist",
+    "requires": "command -v fd jq >/dev/null",
+    "setup": "mkdir -p \"$HOME/oxycase-dir-9d3f1\" && printf 'fixture\\n' > \"$HOME/oxycase-dir-9d3f1/oxycaseneedle-9d3f1.txt\"",
+    "query": "oxycaseneedle-9d3f1", "minRows": 1,
+    "fields": ["title", "dir", "ext", "kind", "size", "age", "copyText", "subtitle", "accessory", "exec", "actions", "score"],
+    "matches": { "id": "oxycaseneedle-9d3f1\\.txt$", "title": "oxycaseneedle-9d3f1\\.txt$",
+                 "ext": "^TXT$", "kind": "^doc$", "size": "^8B$", "age": "^now$",
+                 "accessory": "^8B$", "dir": "oxycase-dir-9d3f1",
+                 "exec": "^xdg-open ", "score": "^[0-9]+$" },
+    "absent": ["art"],
+    "atMost": { "actions": 4 } },
+
+  { "why": "a picture carries its thumbnail URL; anything else wears its type mark instead",
+    "requires": "command -v fd jq >/dev/null",
+    "setup": "mkdir -p \"$HOME/oxycase-dir-9d3f1\" && printf 'PNG\\n' > \"$HOME/oxycase-dir-9d3f1/oxycaseimg-9d3f1.png\"",
+    "query": "oxycaseimg-9d3f1", "minRows": 1,
+    "fields": ["title", "art", "kind", "exec"],
+    "matches": { "ext": "^PNG$", "kind": "^image$", "art": "^file://" } },
+
+  { "why": "a name nothing carries is an empty answer, not an error row",
+    "query": "zzz-no-file-named-this-9d3f1", "maxRows": 0, "fields": [] }
+]

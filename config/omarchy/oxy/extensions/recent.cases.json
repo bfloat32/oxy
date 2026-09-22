@@ -1,0 +1,32 @@
+[
+  { "why": "a recently-opened file is a files-view row: type mark, size, folder, and how long since you opened it — seeded so the contract is checked wherever the xbel file exists",
+    "setup": "d=\"${XDG_DATA_HOME:-$HOME/.local/share}\" && mkdir -p \"$d\" \"$HOME/.local/share\" \"$HOME/oxyrec-9d3f1\" && printf 'recent fixture\\n' > \"$HOME/oxyrec-9d3f1/needle-recent-9d3f1.txt\" && u=\"$HOME/oxyrec-9d3f1/needle-recent-9d3f1.txt\" && { command -v cygpath >/dev/null && u=\"$(cygpath -m \"$u\")\"; true; } && printf '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<xbel version=\"1.0\" xmlns:bookmark=\"http://www.freedesktop.org/standards/desktop-bookmarks\">\\n<bookmark href=\"file://%s\" added=\"2020-01-01T00:00:00Z\" modified=\"2020-01-01T00:00:00Z\" visited=\"2020-01-01T00:00:00Z\"/>\\n</xbel>\\n' \"$u\" | tee \"$d/recently-used.xbel\" > \"$HOME/.local/share/recently-used.xbel\"",
+    "requires": "test -f \"$HOME/.local/share/recently-used.xbel\"",
+    "query": "", "minRows": 1, "row": 0,
+    "fields": ["title", "dir", "ext", "kind", "size", "age", "subtitle", "accessory", "exec", "actions", "score"],
+    "matches": { "id": "needle-recent-9d3f1\\.txt$", "title": "^needle-recent-9d3f1\\.txt$",
+                 "ext": "^TXT$", "kind": "^doc$", "size": "^15B$",
+                 "age": "^[0-9]+y$", "accessory": "^[0-9]+ years ago$",
+                 "dir": "oxyrec-9d3f1", "exec": "^xdg-open ", "score": "^90000$" },
+    "absent": ["art"],
+    "atMost": { "actions": 4 } },
+
+  { "why": "a bookmarked folder is a folder — no size, no type mark, still an open",
+    "setup": "d=\"${XDG_DATA_HOME:-$HOME/.local/share}\" && mkdir -p \"$d\" \"$HOME/.local/share\" \"$HOME/oxyrec-dir-9d3f1\" && u=\"$HOME/oxyrec-dir-9d3f1\" && { command -v cygpath >/dev/null && u=\"$(cygpath -m \"$u\")\"; true; } && printf '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<xbel version=\"1.0\">\\n<bookmark href=\"file://%s\" added=\"2020-01-01T00:00:00Z\" modified=\"2020-01-01T00:00:00Z\" visited=\"2020-01-01T00:00:00Z\"/>\\n</xbel>\\n' \"$u\" | tee \"$d/recently-used.xbel\" > \"$HOME/.local/share/recently-used.xbel\"",
+    "requires": "test -f \"$HOME/.local/share/recently-used.xbel\"",
+    "query": "", "minRows": 1, "row": 0,
+    "fields": ["title", "kind", "dir", "exec"],
+    "absent": ["ext", "size", "art"],
+    "matches": { "title": "^oxyrec-dir-9d3f1$", "kind": "^folder$" } },
+
+  { "why": "a name query narrows the list by path",
+    "setup": "d=\"${XDG_DATA_HOME:-$HOME/.local/share}\" && mkdir -p \"$d\" \"$HOME/.local/share\" \"$HOME/oxyrec-9d3f1\" && printf 'recent fixture\\n' > \"$HOME/oxyrec-9d3f1/needle-recent-9d3f1.txt\" && printf 'other\\n' > \"$HOME/oxyrec-9d3f1/plain.txt\" && u=\"$HOME/oxyrec-9d3f1/needle-recent-9d3f1.txt\" && v=\"$HOME/oxyrec-9d3f1/plain.txt\" && { command -v cygpath >/dev/null && u=\"$(cygpath -m \"$u\")\" && v=\"$(cygpath -m \"$v\")\"; true; } && printf '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<xbel version=\"1.0\">\\n<bookmark href=\"file://%s\" added=\"2020-01-01T00:00:00Z\" modified=\"2020-01-01T00:00:00Z\" visited=\"2020-01-01T00:00:00Z\"/>\\n<bookmark href=\"file://%s\" added=\"2020-01-02T00:00:00Z\" modified=\"2020-01-02T00:00:00Z\" visited=\"2020-01-02T00:00:00Z\"/>\\n</xbel>\\n' \"$u\" \"$v\" | tee \"$d/recently-used.xbel\" > \"$HOME/.local/share/recently-used.xbel\"",
+    "requires": "test -f \"$HOME/.local/share/recently-used.xbel\"",
+    "query": "needle-recent", "minRows": 1, "maxRows": 1,
+    "matches": { "title": "^needle-recent-9d3f1\\.txt$" } },
+
+  { "why": "a name nothing in the list carries is silence, not an error row",
+    "setup": "d=\"${XDG_DATA_HOME:-$HOME/.local/share}\" && mkdir -p \"$d\" \"$HOME/.local/share\" && printf '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n<xbel version=\"1.0\">\\n</xbel>\\n' | tee \"$d/recently-used.xbel\" > \"$HOME/.local/share/recently-used.xbel\"",
+    "requires": "test -f \"$HOME/.local/share/recently-used.xbel\"",
+    "query": "zzz-no-recent-file", "maxRows": 0, "fields": [] }
+]

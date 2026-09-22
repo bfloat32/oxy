@@ -1,0 +1,24 @@
+[
+  { "why": "a queried row is the family leader: its name, its cost, and the endings the actions offer — the contract is read through `ps`, so it is checked only where ps lists processes",
+    "setup": "(bash -c 'exec -a killcaseneedle sleep 2975' >/dev/null 2>&1 &) ; sleep 0.5 ; exit 0",
+    "requires": "ps -eo pid=,ppid=,uid=,pcpu=,rss=,etimes=,stat=,args= 2>/dev/null | grep -q '[0-9]'",
+    "query": "killcaseneedle", "minRows": 1, "row": 0, "view": "processes",
+    "fields": ["title", "subtitle", "pid", "user", "own", "cpu", "mem", "memShare", "age", "count", "stopped", "windowed", "cmd", "exec", "actions", "machine", "score"],
+    "matches": { "title": "^sleep", "cmd": "killcaseneedle",
+                 "exec": "^kill -TERM [0-9]+$", "pid": "^[0-9]+$",
+                 "own": "^True$", "windowed": "^False$", "stopped": "^False$",
+                 "machine": "'bare': False",
+                 "actions": "'title': 'Terminate'.*'title': 'Force Kill'.*'title': 'Copy PID'" },
+    "atMost": { "actions": 3 } },
+
+  { "why": "the bare list is your own processes dearest-first, and the machine totals ride on the first row — the sentinel the setup just spawned is guaranteed one of them",
+    "setup": "(bash -c 'exec -a killcaseneedle sleep 2975' >/dev/null 2>&1 &) ; sleep 0.5 ; exit 0",
+    "requires": "ps -eo pid=,ppid=,uid=,pcpu=,rss=,etimes=,stat=,args= 2>/dev/null | grep -q '[0-9]'",
+    "query": "", "minRows": 1, "maxRows": 20, "row": 0, "view": "processes",
+    "fields": ["title", "subtitle", "pid", "user", "own", "cpu", "mem", "exec", "actions", "machine"],
+    "matches": { "exec": "^kill -TERM [0-9]+$", "own": "^True$",
+                 "machine": "'bare': True" } },
+
+  { "why": "a name nothing runs is silence, not an error row — the runner's own tree is never a row either way",
+    "query": "zzz-no-process-named-this-9d3f1", "maxRows": 0, "fields": [] }
+]

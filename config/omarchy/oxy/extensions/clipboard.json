@@ -11,7 +11,7 @@
   "glyph": "",
   "native": "ch",
   "search": "oxy-clipboard-history {query}",
-  "when": "test -f \"$HOME/.local/state/omarchy/clipboard-history.json\"",
+  "when": "test -f \"${XDG_STATE_HOME:-$HOME/.local/state}/omarchy/clipboard-history.json\"",
   "minChars": 0,
   "debounceMs": 60,
   "maxRows": 40,

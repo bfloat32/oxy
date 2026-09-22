@@ -65,17 +65,21 @@ pub(crate) async fn run(only: Option<String>, json: bool) -> i32 {
             }
         };
 
-        // The same "cannot answer here is a skip, not a failure" gates
-        // cases.py applies — for the script leg. A native provider answers
-        // in-process whatever `when` and `search` say, so those cases still
-        // run; ones needing the fallback report honestly when the machine
-        // lacks the script.
+        // The same "cannot answer here is a skip, not a failure" gate
+        // cases.py applies, and it applies to a native extension too: a
+        // provider re-checks its manifest's `when` itself (that is what
+        // `util::on_path` is for) and returns `Fallback` when it fails, so a
+        // case that needs `pactl` cannot pass on a machine without it — it
+        // would only *look* like a broken port, which is how 98 of them were
+        // reported before this gate was shared.
+        if !ext.when.is_empty() && !oxy_core::provider::process::check(&ext.when).await {
+            lines.push(format!("skip {} cases (when fails here)", ext.id));
+            skipped += 1;
+            continue;
+        }
+        // The script leg's own command has to exist for a native that may
+        // decline to it; a native whose `when` passed answers by itself.
         if ext.native.is_empty() {
-            if !ext.when.is_empty() && !oxy_core::provider::process::check(&ext.when).await {
-                lines.push(format!("skip {} cases (when fails here)", ext.id));
-                skipped += 1;
-                continue;
-            }
             let cmd = ext.search.split_whitespace().next().unwrap_or("");
             if cmd.is_empty()
                 || !oxy_core::provider::process::check(&format!("command -v {cmd}")).await

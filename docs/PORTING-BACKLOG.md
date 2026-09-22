@@ -796,6 +796,22 @@ through the frontend's app library. Decide whether that stays the contract
 `quicklinks` case would have caught the routing bug; a `/clear-all` case the
 confirm bug.
 
+Two things about the suite as it stands, both found by running it:
+
+- **`tests/run.sh` now gates the native legs** (`oxy test --cases` for the
+  four extensions whose cases need no fixture and no network) — `cases.py`
+  only ever runs the *script*, so that is the only check that a port returns
+  what the cases describe. It earned its keep immediately: 98 cases were
+  "failing" only because the runner's `when` gate did not apply to native
+  extensions, and the notes suite was order-dependent (see `setup` in
+  `docs/EXTENSIONS.md`).
+- **The Rust runner still has no fixture builder.** `cases.py` builds
+  throwaway git repos and a stubbed `claude` for the git family and `agent`,
+  and `def` needs the dictionary API — so those families cannot run through
+  `oxy test --cases` yet. Giving the runner the same fixtures is a real piece
+  of work, and it is what would let the native legs of *those* ports be gated
+  too.
+
 ### 4.8 Dead wire fields (drop them in a port, they have no reader)
 
 - `dayline` on every `tz` row (no QML reads it; the tz cases do not assert it).

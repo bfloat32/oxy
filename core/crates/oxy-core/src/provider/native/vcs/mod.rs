@@ -5,5 +5,9 @@
 pub mod branch;
 pub mod git;
 pub mod repo;
+// `dead_code`: the shared layer lands ahead of its four callers — the ports
+// consume it together, and until then nothing calls it.
+#[allow(dead_code)]
+pub(crate) mod repos;
 mod run;
 pub mod stash;

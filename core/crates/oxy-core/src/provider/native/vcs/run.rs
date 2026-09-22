@@ -24,3 +24,10 @@ pub(crate) async fn git(args: &str, timeout: Duration) -> Option<Finished> {
 pub(crate) async fn git_in(repo: &str, args: &str, timeout: Duration) -> Option<Finished> {
     git(&format!("-C {} {args}", quote(repo)), timeout).await
 }
+
+/// Scoped by gitdir instead of worktree — `git --git-dir=<dir>`, which the
+/// stash picker uses to ask about a repo without a checkout around it.
+#[allow(dead_code)]
+pub(crate) async fn git_at(gitdir: &str, args: &str, timeout: Duration) -> Option<Finished> {
+    git(&format!("--git-dir={} {args}", quote(gitdir)), timeout).await
+}

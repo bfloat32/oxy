@@ -82,6 +82,7 @@ fn build(sandbox: &Path) -> std::io::Result<()> {
         build_repos(&repos)?;
     }
     stub_bin(sandbox)?;
+    omarchy_fixture(sandbox)?;
     write_config(sandbox, &repos)
 }
 
@@ -191,6 +192,42 @@ fn stub_bin(sandbox: &Path) -> std::io::Result<()> {
     }
     Ok(())
 }
+
+// --- omarchy -------------------------------------------------------------
+// `omarchy:` never invokes the `omarchy` CLI — its rows are read from the
+// menu definition files, `/usr/share/omarchy/.../omarchy-menu.jsonc` (absent
+// here) and `~/.config/omarchy/extensions/omarchy-menu.jsonc`, which the
+// sandboxed HOME covers. The fakebin stub exists only for the manifest's
+// `command -v omarchy` gate. The seeded menu is a small deterministic tree:
+// a root carrying an action leaf, a bare submenu, a link leaf with a
+// verbatim `run`, and a `when`-hidden node.
+fn omarchy_fixture(sandbox: &Path) -> std::io::Result<()> {
+    let fakebin = sandbox.join("fakebin");
+    for suffix in ["", ".cmd"] {
+        let p = fakebin.join(format!("omarchy{suffix}"));
+        std::fs::write(&p, "#!/usr/bin/env bash\nexit 0\n")?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755))?;
+        }
+    }
+    let dir = sandbox.join(".config/omarchy/extensions");
+    std::fs::create_dir_all(&dir)?;
+    std::fs::write(dir.join("omarchy-menu.jsonc"), OMARCHY_MENU)
+}
+
+const OMARCHY_MENU: &str = r#"{
+  // The comment and the trailing comma are the point: the loader strips both.
+  "oxyfix": {"icon":"F","label":"Oxyfix"},
+  "oxyfix.theme": {"icon":"T","label":"Fixture Theme","aliases":["fixtheme"],"action":"echo theme"},
+  "oxyfix.font": {"icon":"N","label":"Fixture Font","description":"Pick a font","action":"echo font"},
+  "oxyfix.deep": {"label":"Deep"},
+  "oxyfix.deep.leaf": {"label":"Leaf","target":"https://example.com","run":"xdg-open https://example.com"},
+  "oxyfix.hidden": {"label":"Oxyfix Concealed","action":"echo h","when":"false"},
+  "zzzlast": {"label":"Zzzlast","action":"echo z",},
+}
+"#;
 
 /// The sandbox's config dir: the outer registry copied in (so the inner
 /// run tests the same extensions the outer would have), and an `oxy.json`

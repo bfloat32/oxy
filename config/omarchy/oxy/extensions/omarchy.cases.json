@@ -1,0 +1,40 @@
+[
+  { "why": "a bare omarchy: is browsing — the menu's root as tiles, in file order, not a ranked list",
+    "query": "", "minRows": 1, "view": "menutree",
+    "fields": ["title", "mode", "node", "depth", "children", "kind", "exec", "glyph", "actions"],
+    "matches": { "mode": "^browse$", "depth": "^1$",
+                 "exec": "^omarchy menu summon ",
+                 "actions": "^\\[\\{'title': 'Open', 'shortcut': '↵', 'exec': '" } },
+
+  { "why": "a query flattens the tree — the path rides along as trail and Enter summons the route",
+    "query": "oxyfix theme", "minRows": 1, "row": 0,
+    "matches": { "mode": "^search$", "id": "^omarchy-oxyfix\\.theme$",
+                 "title": "^Fixture Theme$", "subtitle": "^Oxyfix$",
+                 "node": "^oxyfix\\.theme$", "kind": "^action$", "depth": "^2$",
+                 "children": "^0$", "trail": "^\\['Oxyfix'\\]$",
+                 "exec": "^omarchy menu summon oxyfix\\.theme$",
+                 "score": "^94900$" } },
+
+  { "why": "a menu row says what Enter does — opens a submenu — and counts what sits behind it",
+    "query": "oxyfix deep", "minRows": 1, "row": 0,
+    "matches": { "node": "^oxyfix\\.deep$", "kind": "^menu$", "children": "^1$",
+                 "subtitle": "opens a submenu$",
+                 "exec": "^omarchy menu summon oxyfix\\.deep$" } },
+
+  { "why": "a link leaf runs its own command verbatim — `run` is the exec, not a summon",
+    "query": "oxyfix leaf", "minRows": 1, "row": 0,
+    "matches": { "node": "^oxyfix\\.deep\\.leaf$", "title": "^Leaf$", "kind": "^link$",
+                 "depth": "^3$", "trail": "^\\['Oxyfix', 'Deep'\\]$",
+                 "exec": "^xdg-open https://example\\.com$",
+                 "actions": "Copy the Route.*printf %s.*wl-copy" } },
+
+  { "why": "the bar panels are ours, not menu routes — their exec is the shell summon",
+    "query": "panel.network", "minRows": 1, "row": 0,
+    "fields": ["glyph"],
+    "matches": { "node": "^panel\\.network$", "title": "^Wi-Fi$", "kind": "^action$",
+                 "exec": "^omarchy-shell shell summon omarchy\\.network$",
+                 "trail": "^\\['Panel'\\]$" } },
+
+  { "why": "a `when` the menu would hide stays hidden — the condition runs only after the text match",
+    "query": "concealed", "maxRows": 0 }
+]

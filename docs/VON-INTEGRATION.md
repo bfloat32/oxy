@@ -1,7 +1,7 @@
 # Von in Oxy — a System One classifier, analysed and designed
 
 Everything in §0–§1 was verified against the model's own repository, HuggingFace
-files and model card on 2026-09-24. Everything in §2–§7 is grounded in this
+files and model card on 2026-09-24. Everything in §2–§8 is grounded in this
 tree: every integration point named below exists, and the numbers come from the
 benchmark and the suite.
 
@@ -240,7 +240,143 @@ the threshold, and the *script* build is untouched.
 
 ---
 
-## 7. What I would decide, and what I would not
+## 7. Option C in detail — how the distillation would actually work
+
+The point of C is not "a smaller Von". It is: **keep Von as the label
+machine, and build a student whose shape is chosen for our runtime** — because
+the student's architecture is free, only its *answers* have to match.
+
+### 7.1 The shape: split the options from the premise
+
+Von packs the premise and every option into one sequence and scores each
+option's `[MASK]` marker in a single pass. That is what makes it fast *for its
+size*, but it also means the whole sequence is re-encoded for every query.
+
+Our options are **static**: the 45 keywords' titles and aliases (tier 1), or a
+handful of intent labels (tier 2). So the student is a two-tower scorer:
+
+```
+   option table (static)                 premise (per query)
+   +-------------------+                 +----------------+
+   | "bt: Bluetooth..."|                 | "my bluetooth  |
+   | "wifi: Networks..."|  encode ONCE   |  mouse isn't   |  encode per query
+   | ...45 entries     | --------------->|  tracking"     | --------------->
+   +-------------------+   at startup    +----------------+   ~10-30 tokens
+            | cached states (45 x d)              | state (d)
+            +--------------+----------------------+
+                           v
+                 cross-attention scorer (2-4 heads, one layer)
+                           v
+              softmax over options -> calibrated probabilities
+```
+
+Three consequences, all good:
+
+- **Warm latency is a premise encode, not a table encode.** ~10-30 tokens
+  through a 20-40 M encoder is **~1-3 ms** on CPU, and the option side is
+  already in memory. That is the "sub-15 ms" claim made true — in-process, no
+  Python, no HTTP.
+- **Order-invariance becomes structural.** Each option is scored against the
+  premise *alone*; nothing an option does can affect another's score. Von 1.2
+  had to engineer that guarantee (per-option attention, position restarts);
+  the two-tower student has it for free, and the shuffle diagnostic becomes a
+  regression test rather than a hope.
+- **The option table can be baked into the artifact.** Encode the 45 keyword
+  descriptions once, at training time, and ship the resulting matrix inside
+  the model file — the daemon then loads a premise encoder plus a table, and
+  startup costs nothing.
+
+### 7.2 Where the labels come from
+
+Two sources, deliberately mixed:
+
+| source | what it is | weight |
+|---|---|---|
+| **Von, as teacher** | `choice` over the option table, `system_one` for a batch of use cases. The card says its probabilities are *calibrated*, which is exactly what makes them good **soft targets** — a distribution transfers more than an argmax | the bulk of the data |
+| **the event log** | `oxy-log.jsonl`: what was typed (`open`), what answered (`prov.done`), what was chosen (`act`). Real queries, real choices — the only ground truth that matters | weighted up; it is the tie-breaker where teacher and user disagree |
+
+Plus **synthetic queries** for coverage, generated with our own `ask:` endpoint
+("write 200 ways someone asks to connect to wifi, and 200 that are *not*
+that"), seeded from the manifests' own titles and aliases, with the other
+keywords' descriptions as hard negatives. A few hundred to a few thousand
+examples per use case is enough for a small encoder with soft targets —
+**10-30 k total**, which is a laptop-sized fine-tuning job, not a cluster one.
+
+### 7.3 The training recipe
+
+- **Base**: a pretrained small encoder, so the student starts with language and
+  needs only the decision head — `bert-small`/`distilbert` (~14-22 M),
+  `deberta-v2-xsmall` (~22 M). All three have a pure-Rust path (below).
+- **Loss**: `KL(student || teacher)` on the option distribution (the soft
+  signal) + `lambda * CE(real label)` from the log (the true signal) + a
+  **Brier term**, which is Von's own RLCD idea — cross-entropy alone produces
+  the overconfident, badly calibrated probabilities we would then have to
+  threshold against.
+- **Shuffle augmentation**: permute the options every step. With the two-tower
+  shape this is belt-and-braces, but it costs nothing and it is how a
+  *future* architecture change would keep the property.
+- **Calibration last**: fit a temperature map on a held-out split of *our* data
+  with their `benchmarks/fit_calibration.py`, and record the ECE next to the
+  accuracy. A threshold is only meaningful on a calibrated score.
+- **Their `training/` directory is the reference implementation** for the
+  pipeline shape; our script is a fork of it with our data and our head.
+
+### 7.4 The Rust side
+
+- **Runtime: `candle`** — HuggingFace's pure-Rust engine. It already has
+  `modernbert`, `bert`, `distilbert` and `debertav2` implementations, and
+  loads `safetensors` directly, so the student needs **no ONNX export and no
+  C++ runtime**: a new `oxy-core/src/provider/system_one/` module with
+  `runtime.rs` (load + forward), `pack.rs` (the option table and the premise
+  template), `calib.rs` (the temperature map), and `mod.rs` exposing the same
+  three primitives the teacher has (`choice`/`noul`/`score`) so call sites do
+  not care which is answering.
+- **Tokenizer: the `tokenizers` crate**, reading the same HF `tokenizer.json`
+  format — and we can reuse **Von's own tokenizer** for the student, so one
+  tokenizer covers both and there is no vocabulary drift to reason about.
+- **If candle's CPU speed disappoints**, `ort` (ONNX Runtime) is the fallback:
+  faster on CPU, at the cost of a C++ runtime dependency. That is the *only*
+  reason to export ONNX at all in this design.
+- **Artifact**: `model.safetensors` (f16 ~15-45 MB for 14-22 M), the shared
+  `tokenizer.json` (3.58 MB), our `calibration.json`, and a `manifest.json`
+  with hashes — one pinned bundle, downloaded by the installer or shipped in
+  the release, hash-checked at load, and a mismatch **disables the feature
+  rather than crashing the daemon**.
+- **Doctor**: `oxy von doctor` gains a tier that verifies the bundle's hash
+  and runs one known-answer probe, so a wrong or half-downloaded model is
+  caught at setup instead of as a strange suggestion.
+
+### 7.5 What it costs, and what could go wrong
+
+| | |
+|---|---|
+| compute | label generation: thousands of teacher calls x 20-80 ms = minutes. Training: one GPU-hour-class run per revision, re-runnable from a pinned script and dataset |
+| memory | ~30-60 MB in-process (f16 weights + the option table) on top of the daemon's 11.1 MB — the whole point of C over A/B |
+| latency | ~1-3 ms warm per query; the option table is encoded once (or shipped precomputed) |
+| the honest ceiling | **a student cannot beat its teacher on the teacher's labels.** Von's hard tier is 36.9 %, so the student inherits that weakness — which is why the log's real labels are weighted up, and why the domain choice matters: our use cases are the "short, well-posed" kind the card says the model is strongest at |
+| distribution shift | synthetic queries are not real ones. Mitigation: shadow mode on real traffic before anything is enabled, and the real-log share grows as it accumulates |
+| overfitting the golden set | keep a held-out split the training script never sees, and report accuracy *and* ECE on it every run |
+| licence | teacher Apache-2.0, student ours; cite Von per its card |
+| language | English only, inherited — never the only path to a function |
+
+### 7.6 The order it lands in
+
+- **C0 — data.** Sidecar + shadow mode (phase 1). Every open logs
+  `von.pred` beside the eventual `act`. This is the label set, and it needs no
+  ML work at all.
+- **C1 — offline.** Train the student on the log plus synthetic data; measure
+  accuracy, ECE and the shuffle diagnostic on a held-out split. Nothing ships;
+  if the numbers are bad, C stops here and we have lost a weekend, not a
+  quarter.
+- **C2 — ship one use case.** The `system_one` module, the doctor, the pinned
+  bundle, and *one* suggestion row (tier 1, use case #1) behind its setting.
+- **C3 — grow.** Each further use case is enabled only once its own accuracy
+  clears its own threshold on the held-out set, and the model is retrained when
+  a new use case changes the option table.
+
+---
+
+## 8. What I would decide, and what I would not
 
 **Would:** start with the sidecar and shadow mode, because it costs no ML
 engineering, reuses machinery we already trust (the ask client, the doctor, the

@@ -4,10 +4,9 @@
 #   git clone https://github.com/bfloat32/oxy.git ~/.local/share/oxy
 #   ~/.local/share/oxy/install.sh
 #
-# or, while the repo is public / with a token in scope:
+# or without a checkout at all:
 #
-#   curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-#     https://raw.githubusercontent.com/bfloat32/oxy/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/bfloat32/oxy/main/install.sh | bash
 #
 # Installs the launcher on an Omarchy system: clones the repo, links the plugin,
 # the helper commands, the extensions and the keybinding into place, and enables
@@ -62,7 +61,13 @@ for arg in "$@"; do
   --purge) UNINSTALL=1; PURGE=1 ;;
   --fresh | --reinstall) FRESH=1 ;;
   -h | --help)
-    sed -n '2,32p' "$0"
+    # Piped through bash the script text is the (spent) stdin and $0 is just
+    # "bash" — fall back to a pointer instead of sed on a missing file.
+    if [[ -n ${BASH_SOURCE[0]:-} && -f ${BASH_SOURCE[0]} ]]; then
+      sed -n '2,32p' "${BASH_SOURCE[0]}"
+    else
+      printf 'install.sh [--yes] [--fresh] [--uninstall|--purge] — flags documented in the script header.\n'
+    fi
     exit 0
     ;;
   *) echo "unknown argument: $arg" >&2; exit 1 ;;
@@ -301,10 +306,10 @@ PY
   # mutations; until its reload arrives, a shell-side write would take this one
   # with it. reloadConfig closes that window.
   command -v omarchy-shell >/dev/null && {
-    omarchy-shell shell rescanPlugins >/dev/null 2>&1
-    omarchy-shell shell reloadConfig >/dev/null 2>&1
+    timeout 10 omarchy-shell shell rescanPlugins >/dev/null 2>&1 </dev/null
+    timeout 10 omarchy-shell shell reloadConfig >/dev/null 2>&1 </dev/null
   }
-  command -v hyprctl >/dev/null && hyprctl reload >/dev/null 2>&1
+  command -v hyprctl >/dev/null && timeout 5 hyprctl reload >/dev/null 2>&1 </dev/null
 
   printf '\n%s\n' "$(green 'Oxy is off.')"
 
@@ -588,7 +593,7 @@ LUA
 
   step "Turning it on"
   command -v omarchy-shell >/dev/null && {
-    omarchy-shell shell rescanPlugins >/dev/null 2>&1
+    timeout 10 omarchy-shell shell rescanPlugins >/dev/null 2>&1 </dev/null
     sleep 1
   }
 
@@ -677,10 +682,10 @@ in_plugins = any(name(e) == sys.argv[1] for e in plugins)
 sys.exit(0 if (in_layout and in_plugins) else 1)
 PY
     then
-      omarchy-shell shell reloadConfig >/dev/null 2>&1
+      timeout 10 omarchy-shell shell reloadConfig >/dev/null 2>&1 </dev/null
       ok "kept its position in the shell"
     else
-      omarchy plugin enable "$PLUGIN_ID" >/dev/null 2>&1 &&
+      timeout 15 omarchy plugin enable "$PLUGIN_ID" </dev/null >/dev/null 2>&1 &&
         ok "enabled" ||
         warn "could not enable it — run: omarchy plugin enable $PLUGIN_ID"
     fi
@@ -699,13 +704,16 @@ PY
   [[ -f $CONFIG_HOME/omarchy/oxy/extensions/emoji.json ]] ||
     { warn "extension links missing under $CONFIG_HOME/omarchy/oxy"; ((++problems)); }
   # The shell's own validator is the strongest check there is — it is what
-  # decides whether the plugin loads at all.
+  # decides whether the plugin loads at all. Both guards matter when this
+  # script runs through a curl pipe: </dev/null so a stdin read does not
+  # swallow the rest of the installer, and a timeout so a wedged shell call
+  # cannot park the last step forever.
   if command -v omarchy >/dev/null; then
-    if omarchy plugin validate "$INSTALL_DIR/plugin" >/dev/null 2>&1; then
+    if timeout 15 omarchy plugin validate "$INSTALL_DIR/plugin" </dev/null >/dev/null 2>&1; then
       ok "omarchy plugin validate passed"
     else
-      warn "omarchy plugin validate failed:"
-      omarchy plugin validate "$INSTALL_DIR/plugin" 2>&1 | sed 's/^/     /'
+      warn "omarchy plugin validate failed or timed out:"
+      timeout 15 omarchy plugin validate "$INSTALL_DIR/plugin" </dev/null 2>&1 | sed 's/^/     /'
       ((++problems))
     fi
   fi

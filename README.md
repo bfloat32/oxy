@@ -12,18 +12,18 @@ one long list.
 
 ## Install
 
-On an Omarchy system, two ways in — the clone works with your usual git
-credentials even when the repo is private; the pipe needs a token in scope
-(`$GH_TOKEN`) while it is:
+On an Omarchy system, one line:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bfloat32/oxy/main/install.sh | bash
+```
+
+or clone it and run the script from the checkout — the script detects it is
+running from one and installs that directly, no second clone:
 
 ```bash
 git clone --depth 1 https://github.com/bfloat32/oxy.git ~/.local/share/oxy
 ~/.local/share/oxy/install.sh
-```
-
-```bash
-curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-  https://raw.githubusercontent.com/bfloat32/oxy/main/install.sh | bash
 ```
 
 Either way it clones to `~/.local/share/oxy` — or installs the checkout it was

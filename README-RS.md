@@ -14,9 +14,14 @@ and draws what arrives.
 
 ## Install
 
-On an Omarchy system, beside the main install — they coexist. The repo is
-private, so raw URLs want a token; cloning with your usual git credentials and
-running the script from the checkout does not:
+On an Omarchy system, beside the main install — they coexist:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/bfloat32/oxy/experimental/rust-core/install-rs.sh | bash
+```
+
+or clone the branch and run the script from the checkout — it detects where it
+lives and installs that directly, no second clone:
 
 ```bash
 git clone --depth 1 -b experimental/rust-core \
@@ -24,17 +29,9 @@ git clone --depth 1 -b experimental/rust-core \
 ~/.local/share/oxy-rs/install-rs.sh
 ```
 
-The script detects it is running from the checkout and installs that directly —
-no second clone. A one-liner still works where a token is in scope:
-
-```bash
-curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-  https://raw.githubusercontent.com/bfloat32/oxy/experimental/rust-core/install-rs.sh | bash
-```
-
-That clones this branch to `~/.local/share/oxy-rs` (through your git
-credentials), builds `oxyd` and `oxy` with `cargo build --release` into
-`~/.local/bin`, registers a second plugin as `oma.oxyrs`, and binds it to
+Either way it clones this branch to `~/.local/share/oxy-rs`, builds `oxyd` and
+`oxy` with `cargo build --release` into `~/.local/bin`, registers a second
+plugin as `oma.oxyrs`, and binds it to
 `Super+R`. The stock install keeps `oma.oxy`, `Super+K`, and every `oxy-*`
 command exactly as they were.
 

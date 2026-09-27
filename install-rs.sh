@@ -4,9 +4,8 @@
 #   git clone -b experimental/rust-core https://github.com/bfloat32/oxy.git ~/.local/share/oxy-rs
 #   ~/.local/share/oxy-rs/install-rs.sh
 #
-# (The repo is private, so the curl-pipe form needs a token in scope:
-#   curl -fsSL -H "Authorization: Bearer $GH_TOKEN" \
-#     https://raw.githubusercontent.com/bfloat32/oxy/experimental/rust-core/install-rs.sh | bash)
+# or without a checkout at all:
+#   curl -fsSL https://raw.githubusercontent.com/bfloat32/oxy/experimental/rust-core/install-rs.sh | bash
 #
 # Installs the Rust-core launcher alongside the script one: a second checkout,
 # a second plugin id, its own keybinding, and the oxyd daemon both frontends
@@ -65,7 +64,13 @@ for arg in "$@"; do
   --purge) UNINSTALL=1; PURGE=1 ;;
   --fresh | --reinstall) FRESH=1 ;;
   -h | --help)
-    sed -n '2,34p' "$0"
+    # Piped through bash the script text is the (spent) stdin and $0 is just
+    # "bash" — fall back to a pointer instead of sed on a missing file.
+    if [[ -n ${BASH_SOURCE[0]:-} && -f ${BASH_SOURCE[0]} ]]; then
+      sed -n '2,34p' "${BASH_SOURCE[0]}"
+    else
+      printf 'install-rs.sh [--yes] [--fresh] [--uninstall|--purge] — flags documented in the script header.\n'
+    fi
     exit 0
     ;;
   *) echo "unknown argument: $arg" >&2; exit 1 ;;
@@ -316,10 +321,10 @@ PY
     ok "removed from the shell's plugin list"
   fi
   command -v omarchy-shell >/dev/null && {
-    omarchy-shell shell rescanPlugins >/dev/null 2>&1
-    omarchy-shell shell reloadConfig >/dev/null 2>&1
+    timeout 10 omarchy-shell shell rescanPlugins >/dev/null 2>&1 </dev/null
+    timeout 10 omarchy-shell shell reloadConfig >/dev/null 2>&1 </dev/null
   }
-  command -v hyprctl >/dev/null && hyprctl reload >/dev/null 2>&1
+  command -v hyprctl >/dev/null && timeout 5 hyprctl reload >/dev/null 2>&1 </dev/null
 
   printf '\n%s\n' "$(green 'Oxy (Rust) is off. The main install is untouched.')"
 
@@ -608,7 +613,7 @@ LUA
     link_path "$INSTALL_DIR/hypr/keys-rs.lua" "$HYPR_MODULES/oxyrs-keys.lua" ||
       warn "could not link the keybinding"
     ok "keys-rs.lua -> $HYPR_MODULES/oxyrs-keys.lua (Super+R)"
-    hyprctl reload >/dev/null 2>&1 && note "hyprland reloaded — Super+R is live"
+    timeout 5 hyprctl reload >/dev/null 2>&1 </dev/null && note "hyprland reloaded — Super+R is live"
   else
     warn "$main not found — link skipped."
     note "Source $INSTALL_DIR/hypr/keys-rs.lua from your Hyprland config by hand."
@@ -618,11 +623,11 @@ LUA
 
   step "Turning it on"
   command -v omarchy-shell >/dev/null && {
-    omarchy-shell shell rescanPlugins >/dev/null 2>&1
+    timeout 10 omarchy-shell shell rescanPlugins >/dev/null 2>&1 </dev/null
     sleep 1
   }
   if command -v omarchy >/dev/null; then
-    omarchy plugin enable "$PLUGIN_ID" >/dev/null 2>&1 &&
+    timeout 15 omarchy plugin enable "$PLUGIN_ID" </dev/null >/dev/null 2>&1 &&
       ok "enabled" ||
       warn "could not enable it — run: omarchy plugin enable $PLUGIN_ID"
   else

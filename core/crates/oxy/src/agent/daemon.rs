@@ -472,10 +472,10 @@ pub async fn serve() -> i32 {
 #[cfg(unix)]
 async fn housekeeping(d: &mut Daemon) {
     if d.busy() {
-        if let Some(run) = &mut d.run {
-            if run.check_finished() {
-                d.dirty = true;
-            }
+        if let Some(run) = &mut d.run
+            && run.check_finished()
+        {
+            d.dirty = true;
         }
         // Nobody is watching. Escape has its own command and does not wait
         // for this; this is the launcher being closed or killed while a run

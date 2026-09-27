@@ -69,10 +69,11 @@ fn kind_of(ext: &str) -> &'static str {
 /// characters that make a URL mean something else are percent-encoded, so
 /// `report #2 (final)?.txt` draws its thumbnail.
 pub(crate) fn file_url(path: &str) -> String {
-    #[cfg(windows)]
-    let path = &path.replace('\\', "/");
-    #[cfg(not(windows))]
-    let path = path;
+    let path: std::borrow::Cow<'_, str> = if cfg!(windows) {
+        path.replace('\\', "/").into()
+    } else {
+        path.into()
+    };
     let mut out = String::with_capacity(path.len() + 9);
     out.push_str(if path.starts_with('/') {
         "file://"

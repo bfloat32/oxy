@@ -75,15 +75,15 @@ pub fn usage_file() -> PathBuf {
 pub fn socket_name() -> String {
     #[cfg(unix)]
     {
-        if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR") {
-            if !dir.is_empty() {
-                return format!("{dir}/oxyd.sock");
-            }
+        if let Ok(dir) = std::env::var("XDG_RUNTIME_DIR")
+            && !dir.is_empty()
+        {
+            return format!("{dir}/oxyd.sock");
         }
-        return state_home()
+        state_home()
             .join("omarchy/oxyd.sock")
             .to_string_lossy()
-            .into_owned();
+            .into_owned()
     }
     #[cfg(windows)]
     {

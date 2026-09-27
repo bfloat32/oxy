@@ -118,10 +118,17 @@ async fn mpv_ipc(commands: &[Vec<Value>]) -> Option<Vec<Value>> {
         wr.flush().await.ok()?;
 
         let mut rd = BufReader::new(rd);
+        let mut buf = Vec::new();
         let mut got: Vec<Option<Value>> = vec![None; commands.len()];
         let mut have = 0usize;
         while have < commands.len() {
-            let line = match crate::support::lines::next(&mut rd).await {
+            let line = match crate::support::lines::next(
+                &mut rd,
+                &mut buf,
+                crate::support::lines::MAX_LINE,
+            )
+            .await
+            {
                 Ok(Some(line)) => line,
                 _ => break,
             };
